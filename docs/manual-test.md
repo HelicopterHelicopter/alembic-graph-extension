@@ -88,3 +88,42 @@ against the fixture produces.
    Graph** again: a fresh panel opens correctly (closing doesn't wedge the singleton).
 10. Repeat steps 1–5 with the **Run Extension (healthy fixture)** launch config: expect
     `layout.nodes` length of 11, no ghost/broken entries.
+
+## Task 9: full graph rendering (theme-aware design port)
+
+Before F5: `node scripts/dump-state.mjs` + opening `harness/graph.html` (served over http, not
+`file://` — see the file's header comment) is the fast iteration loop used to build this; the
+steps below are the F5-only checks that harness can't cover (real VS Code chrome/theme, live file
+watch, real host round-trip for the toolbar toggles).
+
+1. Press F5, select **Run Extension (broken fixture)**, then **Alembic Graph: Open Migration
+   Graph**.
+2. Visual match against `design/Alembic Graph.dc.html` (open it side by side if useful, though its
+   `support.js` preview runtime isn't checked into this repo so it won't run standalone — the
+   comparison is against the literal styles/measurements in that file): dark toolbar (42px) with
+   project label, `● N heads` chip in warm yellow, `N revisions`, right-aligned Order/Comfortable
+   toggles; dot-grid canvas background; rounded revision cards with a 4px lane-colored left stripe,
+   mono hash, bold message, dim `author · date` meta row; dashed red ghost card
+   (`⚠ missing revision`); dashed red bezier edge into it plus a pulsing
+   `⚠ down_revision missing — drag onto a parent to re-point` hint under the broken card; a pulsing
+   green `drag one head onto the other to merge ⇄` box (3 heads on this fixture); badges HEAD
+   (green, ×3), MERGE (purple, ×1), BROKEN (red, ×1) in the card header.
+3. Click a revision card: it gets the blue selected ring/background (`#1c8fd6` / `#093251`); click
+   a different card, selection moves; nothing else re-renders/flickers.
+4. Click **Newest ↑** / **Newest ↓**: the whole card stack mirrors vertically (newest at top vs.
+   bottom); click **Compact**: cards shrink (92px → 76px tall, tighter row spacing) without losing
+   selection or scroll position.
+5. With the panel open and scrolled away from the top-left, touch a file under
+   `fixtures/broken-project/alembic/versions/*.py` (edit + save). Within ~300ms the canvas
+   re-renders with the new data and the canvas scroll position is unchanged (doesn't jump back to
+   the top-left).
+6. Collapse/expand on the **healthy fixture** (2 heads, no broken link, same root-end linear run as
+   the broken fixture minus the broken branch): open **Preferences: Open Workspace Settings**, set
+   **Alembic Graph › Collapse Threshold** to `3`, run **Alembic Graph: Refresh**. A dashed
+   `⋮   2 earlier revisions` collapse card replaces the two oldest root-end revisions. Click it:
+   it posts `expandCollapse` and the two collapsed cards reappear in its place (collapse card
+   gone). Set the threshold back to its default (or remove the override) afterward.
+7. Open webview DevTools (**Developer: Open Webview Developer Tools**) and confirm the Console has
+   no errors and no CSP violations.
+8. Repeat steps 1–4 with the **Run Extension (healthy fixture)** launch config: 2 heads (merge
+   hint still shows), no ghost card, no BROKEN badge, no broken hint.

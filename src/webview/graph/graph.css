@@ -1,15 +1,475 @@
+/**
+ * Theme token layer (Task 9's one sanctioned improvement over the design source): every neutral
+ * chrome color is a --alx-* custom property, `var(--vscode-*, <design hex>)` — same pixels as the
+ * design under VS Code's default dark theme, but it repaints under light/high-contrast themes too.
+ * Semantic/"product identity" colors (badge palette, applied teal, broken red, head green,
+ * heads-yellow) and lane colors (state.laneColors, applied inline per node) stay literal hex, per
+ * the design and the brief — they are not chrome.
+ */
+:root {
+  --alx-bg: var(--vscode-editor-background, #1e1e1e);
+  --alx-panel: var(--vscode-sideBar-background, #252526);
+  --alx-border: var(--vscode-panel-border, #2b2b2b);
+  --alx-divider: var(--vscode-widget-border, #3a3a3a);
+  --alx-card-bg: var(--vscode-editorWidget-background, #2b2d2e);
+  --alx-card-border: var(--vscode-editorWidget-border, #3a3d41);
+  --alx-fg: var(--vscode-foreground, #cccccc);
+  --alx-dim: var(--vscode-descriptionForeground, #8a8a8a);
+  --alx-accent: var(--vscode-focusBorder, #1c8fd6);
+  --alx-sel-bg: var(--vscode-list-activeSelectionBackground, #093251);
+  --alx-btn: var(--vscode-button-background, #0e639c);
+  --alx-dot-grid: var(--vscode-editorIndentGuide-background, #2a2a2a);
+  --alx-mono: var(--vscode-editor-font-family, ui-monospace, Menlo, Consolas, monospace);
+
+  /* Additional neutral shades the design uses beyond the starter set above. */
+  --alx-hash-applied: var(--vscode-editor-foreground, #d7d7d7);
+  --alx-hash-dim: var(--vscode-disabledForeground, #9a9a9a);
+  --alx-msg-applied: var(--vscode-foreground, #eaeaea);
+  --alx-msg-dim: var(--vscode-disabledForeground, #bdbdbd);
+  --alx-dot-hollow: var(--vscode-icon-foreground, #6d6d6d);
+  --alx-collapse-border: var(--vscode-editorWidget-border, #4a4a4a);
+  --alx-toggle-bg: var(--vscode-button-secondaryBackground, #2a2d2e);
+  --alx-toggle-border: var(--vscode-editorWidget-border, #3a3d41);
+  --alx-toggle-fg: var(--vscode-descriptionForeground, #bbbbbb);
+  --alx-toggle-active-bg: var(--vscode-button-background, #094771);
+  --alx-toast-bg: var(--vscode-editorWidget-background, #252526);
+  --alx-toast-border: var(--vscode-editorWidget-border, #3a3d41);
+  --alx-toast-fg: var(--vscode-foreground, #e0e0e0);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
 body {
-  font-family: var(--vscode-font-family, sans-serif);
   margin: 0;
-  padding: 8px;
+  padding: 0;
+  background: var(--alx-bg);
 }
 
-.toolbar {
-  margin-bottom: 8px;
+body {
+  color: var(--alx-fg);
+  font-family: var(--vscode-font-family, "Segoe UI", system-ui, -apple-system, sans-serif);
+  font-size: 13px;
+  overflow: hidden;
 }
 
-pre {
-  font-family: var(--vscode-editor-font-family, monospace);
-  white-space: pre-wrap;
-  word-break: break-word;
+::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+::-webkit-scrollbar-corner {
+  background: var(--alx-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--alx-toggle-bg);
+  border: 4px solid var(--alx-bg);
+  border-radius: 8px;
+}
+
+@keyframes alxpulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes alxtoast {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.alx-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 320px;
+}
+
+.alx-empty {
+  padding: 24px;
+  color: var(--alx-dim);
+  font-size: 13px;
+}
+
+/* ---------- toolbar ---------- */
+.alx-toolbar {
+  height: 42px;
+  flex: none;
+  background: var(--alx-bg);
+  border-bottom: 1px solid var(--alx-border);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  gap: 12px;
+  user-select: none;
+}
+
+.alx-project-label {
+  font-size: 12px;
+  color: var(--alx-fg);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.alx-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--alx-divider);
+  flex: none;
+}
+
+.alx-heads-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: #e2c08d;
+  white-space: nowrap;
+}
+.alx-heads-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #cca700;
+  flex: none;
+}
+
+.alx-rev-count {
+  font-size: 11.5px;
+  color: var(--alx-dim);
+  white-space: nowrap;
+}
+
+.alx-spacer {
+  flex: 1;
+}
+
+.alx-order-label {
+  font-size: 11px;
+  color: var(--alx-dim);
+  white-space: nowrap;
+}
+
+.alx-toggle-group {
+  display: flex;
+  gap: 4px;
+}
+.alx-toggle-group + .alx-toggle-group {
+  margin-left: 6px;
+}
+
+.alx-toggle {
+  padding: 4px 9px;
+  font-size: 11px;
+  border-radius: 5px;
+  border: 1px solid var(--alx-toggle-border);
+  background: var(--alx-toggle-bg);
+  color: var(--alx-toggle-fg);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+.alx-toggle--active {
+  border-color: var(--alx-btn);
+  background: var(--alx-toggle-active-bg);
+  color: #ffffff;
+}
+
+/* ---------- canvas ---------- */
+.alx-canvas-viewport {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+}
+
+.alx-canvas {
+  position: relative;
+  min-width: 100%;
+  min-height: 100%;
+  background-image: radial-gradient(circle, var(--alx-dot-grid) 1px, transparent 1px);
+  background-size: 23px 23px;
+  background-position: 14px 14px;
+}
+
+.alx-edges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.alx-edge {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: none;
+  opacity: 0.95;
+}
+.alx-edge--dim {
+  opacity: 0.68;
+}
+.alx-edge--broken {
+  stroke: #f14c4c;
+  stroke-dasharray: 5 4;
+}
+.alx-edge--collapse {
+  stroke: #555555;
+  stroke-dasharray: 3 5;
+}
+
+/* ---------- node cards ---------- */
+.alx-node {
+  position: absolute;
+  overflow: visible;
+}
+
+.alx-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px 10px 16px;
+  background: var(--alx-card-bg);
+  border: 1px solid var(--alx-card-border);
+  border-radius: 7px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  overflow: hidden;
+}
+.alx-card--compact {
+  padding: 8px 11px 8px 14px;
+}
+.alx-card--selected {
+  background: var(--alx-sel-bg);
+  border-color: var(--alx-accent);
+  box-shadow: 0 0 0 1px var(--alx-accent);
+}
+
+.alx-stripe {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: 7px 0 0 7px;
+  opacity: 1;
+}
+.alx-stripe--dim {
+  opacity: 0.32;
+}
+
+.alx-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.alx-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  border: 1.5px solid var(--alx-dot-hollow);
+  background: transparent;
+}
+.alx-dot--applied {
+  background: #4ec9b0;
+  border-color: #4ec9b0;
+}
+.alx-dot--current {
+  box-shadow: 0 0 0 3px rgba(28, 143, 214, 0.35);
+}
+
+.alx-hash {
+  font-family: var(--alx-mono);
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  color: var(--alx-hash-dim);
+}
+.alx-hash--applied {
+  color: var(--alx-hash-applied);
+}
+
+.alx-badges {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+
+.alx-badge {
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  line-height: 1;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  flex: none;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.alx-badge--current {
+  color: #ffffff;
+  background: #0e639c;
+  border-color: #1c8fd6;
+}
+.alx-badge--head {
+  color: #0c2a16;
+  background: #89d185;
+  border-color: #89d185;
+}
+.alx-badge--merge {
+  color: #efe0ff;
+  background: #5a3a80;
+  border-color: #8a5cc0;
+}
+.alx-badge--broken {
+  color: #ffffff;
+  background: #b23838;
+  border-color: #f14c4c;
+}
+.alx-badge--tag {
+  background: transparent;
+}
+
+.alx-message {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--alx-msg-dim);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.alx-message--applied {
+  color: var(--alx-msg-applied);
+}
+.alx-message--compact {
+  font-size: 12px;
+}
+
+.alx-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.alx-meta {
+  font-size: 10.5px;
+  color: var(--alx-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.alx-broken-hint {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  width: 100%;
+  font-size: 10px;
+  color: #f0a0a0;
+  line-height: 1.3;
+  animation: alxpulse 1.8s ease-in-out infinite;
+}
+
+/* ---------- ghost / collapse ---------- */
+.alx-ghost {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 14px;
+  border: 1.5px dashed #f14c4c;
+  border-radius: 7px;
+  background: rgba(241, 76, 76, 0.08);
+  cursor: default;
+}
+.alx-ghost-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #f0a0a0;
+  font-weight: 600;
+}
+.alx-ghost-hash {
+  font-family: var(--alx-mono);
+  font-size: 11px;
+  color: #cf9b9b;
+}
+
+.alx-collapse {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--alx-collapse-border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--alx-dim);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+/* ---------- merge hint ---------- */
+.alx-merge-hint {
+  position: absolute;
+  width: 250px;
+  text-align: center;
+  font-size: 11px;
+  color: #89d185;
+  background: rgba(137, 209, 133, 0.1);
+  border: 1px dashed rgba(137, 209, 133, 0.5);
+  border-radius: 6px;
+  padding: 4px 8px;
+  pointer-events: none;
+  animation: alxpulse 2s ease-in-out infinite;
+  z-index: 2;
+}
+
+/* ---------- toast ---------- */
+.alx-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  max-width: 360px;
+  background: var(--alx-toast-bg);
+  border: 1px solid var(--alx-toast-border);
+  border-left: 3px solid #89d185;
+  border-radius: 6px;
+  padding: 11px 14px;
+  font-size: 12px;
+  color: var(--alx-toast-fg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  animation: alxtoast 0.18s ease-out;
+  z-index: 80;
+  line-height: 1.4;
+  display: none;
+}
+.alx-toast--visible {
+  display: block;
+}
+.alx-toast--info {
+  border-left-color: #0e639c;
+}
+.alx-toast--error {
+  border-left-color: #f14c4c;
 }

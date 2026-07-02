@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<!--
+  Dev harness for the graph webview — lets you render the real, BUILT dist/webview/graph.{js,css}
+  in a plain browser (Playwright, or just double-click this file) without launching VS Code.
+
+  Usage:
+    1. npm run build                 # (re)builds dist/webview/graph.{js,css}
+    2. node scripts/dump-state.mjs   # (re)generates state.json from the broken-project fixture
+    3. open this file directly (file://.../harness/graph.html), or serve harness/ over http(s)
+
+  How it works: main.ts calls `acquireVsCodeApi()` once at module scope and talks to the host
+  only via `postMessage`/`window.addEventListener("message")`. This page stubs
+  `acquireVsCodeApi()` (postMessage -> console.log, so toolbar/click actions are inspectable) and
+  dispatches a single `message` event carrying `{ type: "state", state: <captured AppState> }`
+  loaded from ./state.json — the exact shape the extension host would post over the real
+  webview bridge. Re-run step 2 after any change to core/parser|graph|layout.ts or the
+  broken-project fixture; re-run step 1 after any change to src/webview/graph/*.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="../dist/webview/graph.css">
+<title>Alembic Graph — dev harness</title>
+<script>
+  // Stub of the VS Code webview bridge (see src/webview/vscode-webview.d.ts / shared/vscodeApi.ts).
+  // acquireVsCodeApi() must exist before main.ts's module-scope call runs, and can only be called
+  // once per real webview — this stub is fine to call more than once (unlike the real API) since
+  // there's no host on the other end to complain, but main.ts still only calls it once.
+  let vsState;
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => {
+      console.log("[harness] postMessage from webview:", message);
+    },
+    getState: () => vsState,
+    setState: (state) => {
+      vsState = state;
+    },
+  });
+</script>
+</head>
+<body>
+<div id="app"></div>
+<script nonce="harness" src="../dist/webview/graph.js"></script>
+<script>
+  // Deliver the captured AppState the same way GraphPanelManager does: a "state" message posted
+  // to the webview's window. Fetch (not a bare <script src> global) so this also works when the
+  // page is opened as a plain file:// URL in browsers that allow file-relative fetch (Chromium).
+  fetch("./state.json")
+    .then((r) => r.json())
+    .then((state) => {
+      window.postMessage({ type: "state", state }, "*");
+    })
+    .catch((err) => {
+      console.error("[harness] failed to load state.json — run `node scripts/dump-state.mjs` first", err);
+    });
+</script>
+</body>
+</html>

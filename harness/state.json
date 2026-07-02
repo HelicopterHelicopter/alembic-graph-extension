@@ -1,0 +1,393 @@
+{
+  "project": {
+    "label": "broken-project / alembic",
+    "iniPath": "fixtures/broken-project/alembic.ini"
+  },
+  "layout": {
+    "nodes": [
+      {
+        "id": "5c0d13aa7d9f",
+        "kind": "revision",
+        "lane": 1,
+        "row": 0,
+        "hash": "5c0d13aa7d9f",
+        "message": "add audit log",
+        "author": null,
+        "dateLabel": "May 12",
+        "branchLabel": null,
+        "isHead": true,
+        "isMerge": false,
+        "isBroken": true,
+        "isCurrent": false,
+        "applied": null,
+        "filePath": "5c0d13aa7d9f_add_audit_log.py",
+        "downRevisions": [
+          "deadbeef0000"
+        ]
+      },
+      {
+        "id": "deadbeef0000",
+        "kind": "ghost",
+        "lane": 1,
+        "row": 1,
+        "hash": "deadbeef0000",
+        "message": "",
+        "author": null,
+        "dateLabel": null,
+        "branchLabel": null,
+        "isHead": false,
+        "isMerge": false,
+        "isBroken": false,
+        "isCurrent": false,
+        "applied": null,
+        "filePath": null,
+        "downRevisions": []
+      },
+      {
+        "id": "4bfc02996c8e",
+        "kind": "revision",
+        "lane": 0,
+        "row": 2,
+        "hash": "4bfc02996c8e",
+        "message": "search index (experimental)",
+        "author": null,
+        "dateLabel": "May 11",
+        "branchLabel": null,
+        "isHead": true,
+        "isMerge": false,
+        "isBroken": false,
+        "isCurrent": false,
+        "applied": null,
+        "filePath": "4bfc02996c8e_search_index_experimental.py",
+        "downRevisions": [
+          "29dae0774a6c"
+        ]
+      },
+      {
+        "id": "3aebf1885b7d",
+        "kind": "revision",
+        "lane": 1,
+        "row": 3,
+        "hash": "3aebf1885b7d",
+        "message": "add rate limiting",
+        "author": null,
+        "dateLabel": "May 10",
+        "branchLabel": null,
+        "isHead": true,
+        "isMerge": false,
+        "isBroken": false,
+        "isCurrent": false,
+        "applied": null,
+        "filePath": "3aebf1885b7d_add_rate_limiting.py",
+        "downRevisions": [
+          "29dae0774a6c"
+        ]
+      },
+      {
+        "id": "29dae0774a6c",
+        "kind": "revision",
+        "lane": 0,
+        "row": 4,
+        "hash": "29dae0774a6c",
+        "message": "merge oauth and billing",
+        "author": null,
+        "dateLabel": "May 09",
+        "branchLabel": null,
+        "isHead": false,
+        "isMerge": true,
+        "isBroken": false,
+        "isCurrent": false,
+        "applied": null,
+        "filePath": "29dae0774a6c_merge_oauth_and_billing.py",
+        "downRevisions": [
+          "18c9d9663f5b",
+          "07b8c8552e4a"
+        ]
+      },
+      {
+        "id": "07b8c8552e4a",
+        "kind": "revision",
+        "lane": 1,
+        "row": 5,
+        "hash": "07b8c8552e4a",
+        "message": "billing: add invoices",
+        "author": null,
+        "dateLabel": "May 08",
+        "branchLabel": null,
+        "isHead": false,
+        "isMerge": false,
+        "isBroken": false,
+        "isCurrent": false,
+        "applied": null,
+        "filePath": "07b8c8552e4a_billing_add_invoices.py",
+        "downRevisions": [
+          "f6a9b7241d3c"
+        ]
+      },
+      {
+        "id": "18c9d9663f5b",
+        "kind": "revision",
+        "lane": 0,
+        "row": 6,
+        "hash": "18c9d9663f5b",
+        "message": "add api keys table",
+        "author": null,
+        "dateLabel": "May 07",
+        "branchLabel": null,
+        "isHead": false,
+        "isMerge": false,
+        "isBroken": false,
+        "isCurrent": false,
+        "applied": null,
+        "filePath": "18c9d9663f5b_add_api_keys_table.py",
+        "downRevisions": [
+          "e5b8a600cc11"
+        ]
+      },
+      {
+        "id": "f6a9b7241d3c",
+        "kind": "revision",
+        "lane": 1,
+        "row": 7,
+        "hash": "f6a9b7241d3c",
+        "message": "billing: create plans",
+        "author": null,
+        "dateLabel": "May 06",
+        "branchLabel": "billing",
+        "isHead": false,
+        "isMerge": false,
+        "isBroken": false,
+        "isCurrent": false,
+        "applied": null,
+        "filePath": "f6a9b7241d3c_billing_create_plans.py",
+        "downRevisions": [
+          "d4c7f5309b2e"
+        ]
+      },
+      {
+        "id": "e5b8a600cc11",
+        "kind": "revision",
+        "lane": 0,
+        "row": 8,
+        "hash": "e5b8a600cc11",
+        "message": "add oauth provider fields",
+        "author": null,
+        "dateLabel": "May 05",
+        "branchLabel": null,
+        "isHead": false,
+        "isMerge": false,
+        "isBroken": false,
+        "isCurrent": false,
+        "applied": null,
+        "filePath": "e5b8a600cc11_add_oauth_provider_fields.py",
+        "downRevisions": [
+          "d4c7f5309b2e"
+        ]
+      },
+      {
+        "id": "d4c7f5309b2e",
+        "kind": "revision",
+        "lane": 0,
+        "row": 9,
+        "hash": "d4c7f5309b2e",
+        "message": "add password reset flow",
+        "author": null,
+        "dateLabel": "May 04",
+        "branchLabel": null,
+        "isHead": false,
+        "isMerge": false,
+        "isBroken": false,
+        "isCurrent": false,
+        "applied": null,
+        "filePath": "d4c7f5309b2e_add_password_reset_flow.py",
+        "downRevisions": [
+          "c3d6e4b721a8"
+        ]
+      },
+      {
+        "id": "c3d6e4b721a8",
+        "kind": "revision",
+        "lane": 0,
+        "row": 10,
+        "hash": "c3d6e4b721a8",
+        "message": "add sessions and tokens",
+        "author": null,
+        "dateLabel": "May 03",
+        "branchLabel": null,
+        "isHead": false,
+        "isMerge": false,
+        "isBroken": false,
+        "isCurrent": false,
+        "applied": null,
+        "filePath": "c3d6e4b721a8_add_sessions_and_tokens.py",
+        "downRevisions": [
+          "b2e5d3a10f66"
+        ]
+      },
+      {
+        "id": "b2e5d3a10f66",
+        "kind": "revision",
+        "lane": 0,
+        "row": 11,
+        "hash": "b2e5d3a10f66",
+        "message": "create users table",
+        "author": null,
+        "dateLabel": "May 02",
+        "branchLabel": null,
+        "isHead": false,
+        "isMerge": false,
+        "isBroken": false,
+        "isCurrent": false,
+        "applied": null,
+        "filePath": "b2e5d3a10f66_create_users_table.py",
+        "downRevisions": [
+          "8f2a1c9d4e07"
+        ]
+      },
+      {
+        "id": "8f2a1c9d4e07",
+        "kind": "revision",
+        "lane": 0,
+        "row": 12,
+        "hash": "8f2a1c9d4e07",
+        "message": "create products table",
+        "author": null,
+        "dateLabel": "May 01",
+        "branchLabel": null,
+        "isHead": false,
+        "isMerge": false,
+        "isBroken": false,
+        "isCurrent": false,
+        "applied": null,
+        "filePath": "8f2a1c9d4e07_create_products_table.py",
+        "downRevisions": []
+      }
+    ],
+    "edges": [
+      {
+        "from": "deadbeef0000",
+        "to": "5c0d13aa7d9f",
+        "kind": "broken",
+        "colorLane": 1
+      },
+      {
+        "from": "29dae0774a6c",
+        "to": "4bfc02996c8e",
+        "kind": "normal",
+        "colorLane": 0
+      },
+      {
+        "from": "29dae0774a6c",
+        "to": "3aebf1885b7d",
+        "kind": "normal",
+        "colorLane": 0
+      },
+      {
+        "from": "07b8c8552e4a",
+        "to": "29dae0774a6c",
+        "kind": "normal",
+        "colorLane": 1
+      },
+      {
+        "from": "18c9d9663f5b",
+        "to": "29dae0774a6c",
+        "kind": "normal",
+        "colorLane": 0
+      },
+      {
+        "from": "f6a9b7241d3c",
+        "to": "07b8c8552e4a",
+        "kind": "normal",
+        "colorLane": 1
+      },
+      {
+        "from": "e5b8a600cc11",
+        "to": "18c9d9663f5b",
+        "kind": "normal",
+        "colorLane": 0
+      },
+      {
+        "from": "d4c7f5309b2e",
+        "to": "f6a9b7241d3c",
+        "kind": "normal",
+        "colorLane": 0
+      },
+      {
+        "from": "d4c7f5309b2e",
+        "to": "e5b8a600cc11",
+        "kind": "normal",
+        "colorLane": 0
+      },
+      {
+        "from": "c3d6e4b721a8",
+        "to": "d4c7f5309b2e",
+        "kind": "normal",
+        "colorLane": 0
+      },
+      {
+        "from": "b2e5d3a10f66",
+        "to": "c3d6e4b721a8",
+        "kind": "normal",
+        "colorLane": 0
+      },
+      {
+        "from": "8f2a1c9d4e07",
+        "to": "b2e5d3a10f66",
+        "kind": "normal",
+        "colorLane": 0
+      }
+    ],
+    "laneCount": 2,
+    "rowCount": 13,
+    "collapsed": null
+  },
+  "heads": [
+    {
+      "id": "5c0d13aa7d9f",
+      "message": "add audit log"
+    },
+    {
+      "id": "4bfc02996c8e",
+      "message": "search index (experimental)"
+    },
+    {
+      "id": "3aebf1885b7d",
+      "message": "add rate limiting"
+    }
+  ],
+  "currentIds": [],
+  "problems": [
+    {
+      "kind": "broken-down-revision",
+      "summary": "`5c0d13aa7d9f` revises missing revision `deadbeef0000`",
+      "revisionIds": [
+        "5c0d13aa7d9f",
+        "deadbeef0000"
+      ],
+      "locations": [
+        {
+          "filePath": "5c0d13aa7d9f_add_audit_log.py",
+          "line": 13
+        }
+      ]
+    }
+  ],
+  "dbReachable": false,
+  "laneColors": [
+    "#4aa3ff",
+    "#c586c0"
+  ],
+  "counts": {
+    "revisions": 12,
+    "heads": 3,
+    "problems": 1
+  },
+  "config": {
+    "showSqlPreview": true
+  },
+  "ui": {
+    "order": "newest-bottom",
+    "density": "comfortable",
+    "expandCollapsed": false
+  }
+}
