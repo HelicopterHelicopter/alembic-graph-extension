@@ -68,6 +68,21 @@ body {
   line-height: 1.4;
 }
 
+/* Neutral "scan in progress" placeholder (renderScanning()) — centered and dim, deliberately less
+   assertive than the no-project empty state above since it isn't a diagnosis, just "not yet". */
+.alx-side-empty--centered {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.alx-side-empty-message--dim {
+  color: var(--alx-dim);
+  margin-bottom: 0;
+}
+
 /* ---------- scrollable section list ---------- */
 .alx-side-scroll {
   padding: 4px 0;

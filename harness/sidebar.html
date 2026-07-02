@@ -14,11 +14,16 @@
     3. open this file directly (file://.../harness/sidebar.html), or serve harness/ over http(s)
 
   Query params:
-    ?nostate=1  — the stub never responds to "ready", simulating the no-project host (see
-                  src/ui/sidebarView.ts: `this.service === null` means no "state" message is ever
-                  sent). Exercises render.ts's client-side renderEmpty() staying up permanently
-                  instead of being replaced by a real render().
+    ?nostate=1  — the stub responds to "ready" with a "noProject" message, simulating the
+                  no-project host (see src/ui/sidebarView.ts: `this.service === null` posts
+                  "noProject" instead of ever posting "state"). Exercises render.ts's
+                  renderNoProject() replacing the initial renderScanning() placeholder.
+    ?delay=N    — the stub waits N ms after "ready" before posting "state" (default: none),
+                  simulating a real scan still in flight. Exercises renderScanning()'s neutral
+                  "Scanning migrations…" placeholder staying up during that window, then being
+                  replaced by a real render() the moment "state" lands. Example: ?delay=500
 -->
+
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -44,22 +49,40 @@
     return new URLSearchParams(window.location.search).get("nostate") === "1";
   }
 
-  // Delivers the captured AppState the same way SidebarViewProvider's real "ready" case does
-  // (see src/ui/sidebarView.ts) — post a "state" message once. With ?nostate=1, simulates the
-  // no-project host: never responds, so the webview's client-side empty state stands forever.
+  function delayMs() {
+    const raw = new URLSearchParams(window.location.search).get("delay");
+    const n = raw ? Number.parseInt(raw, 10) : 0;
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  // Mirrors SidebarViewProvider's real "ready" handler (see src/ui/sidebarView.ts): with
+  // ?nostate=1, posts "noProject" once, simulating the no-project host (`this.service === null`).
+  // Otherwise loads the captured AppState and posts "state" — after an optional ?delay=N ms pause
+  // that simulates a real scan still in flight, so the webview's neutral "Scanning migrations…"
+  // placeholder (renderScanning()) is visible in the interim before being replaced by render().
   function respondToReady() {
     if (nostate()) {
-      console.log("[harness] ?nostate=1 — not responding to ready (simulates the no-project host)");
+      console.log("[harness] ?nostate=1 — posting noProject (simulates the no-project host)");
+      window.postMessage({ type: "noProject" }, "*");
       return;
     }
-    fetch("./state.json")
-      .then((r) => r.json())
-      .then((state) => {
-        window.postMessage({ type: "state", state }, "*");
-      })
-      .catch((err) => {
-        console.error("[harness] failed to load state.json — run `node scripts/dump-state.mjs` first", err);
-      });
+    const delay = delayMs();
+    const sendState = () => {
+      fetch("./state.json")
+        .then((r) => r.json())
+        .then((state) => {
+          window.postMessage({ type: "state", state }, "*");
+        })
+        .catch((err) => {
+          console.error("[harness] failed to load state.json — run `node scripts/dump-state.mjs` first", err);
+        });
+    };
+    if (delay > 0) {
+      console.log(`[harness] ?delay=${delay} — waiting before posting state (Scanning migrations… should be visible now)`);
+      setTimeout(sendState, delay);
+    } else {
+      sendState();
+    }
   }
 </script>
 </head>

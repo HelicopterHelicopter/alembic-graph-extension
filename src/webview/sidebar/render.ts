@@ -34,13 +34,33 @@ export function render(root: HTMLElement, state: AppState, handlers: Handlers): 
   root.replaceChildren(scroll, buildFooter(handlers));
 }
 
-/** Client-side-only placeholder rendered before any "state" message has ever arrived — covers
- * both the brief window before the first real state round trip AND the permanent no-project case
- * (the host has no AppState to send when no alembic.ini was found; see sidebarView.ts). Replaced
- * wholesale by render() the moment (if ever) a real "state" message lands. */
-export function renderEmpty(root: HTMLElement): void {
+/** Client-side-only placeholder rendered the instant the webview boots, before the host has had a
+ * chance to say anything at all — the host's initial scan is still in flight (or hasn't started),
+ * so we don't yet know whether there's a project. Neutral/dim, not a diagnosis: it must not claim
+ * "no alembic.ini" when the truth is simply "haven't heard back yet". Replaced by render() if a
+ * "state" message lands, or by renderNoProject() if the host reports "noProject" — see main.ts. */
+export function renderScanning(root: HTMLElement): void {
+  root.className = "alx-side-root";
+  root.replaceChildren(buildScanningState());
+}
+
+/** Rendered once the host explicitly reports it found no alembic.ini anywhere in the workspace
+ * (the "noProject" message — see sidebarView.ts's `ready` handler, where `service === null`). */
+export function renderNoProject(root: HTMLElement): void {
   root.className = "alx-side-root";
   root.replaceChildren(buildEmptyState());
+}
+
+function buildScanningState(): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "alx-side-empty alx-side-empty--centered";
+
+  const message = document.createElement("div");
+  message.className = "alx-side-empty-message alx-side-empty-message--dim";
+  message.textContent = "Scanning migrations…";
+
+  wrap.append(message);
+  return wrap;
 }
 
 function buildEmptyState(): HTMLElement {

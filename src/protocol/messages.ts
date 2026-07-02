@@ -59,4 +59,9 @@ export type HostToWebviewMessage =
   | { type: "detail"; forId: string | null; detail: RevisionDetail | null }
   | { type: "selectNode"; id: string }
   | { type: "toast"; level: "info" | "success" | "error"; text: string }
-  | { type: "busy"; operation: "merge" | "upgrade" | "downgrade" | "scan" | "revision" | "sql"; active: boolean };
+  | { type: "busy"; operation: "merge" | "upgrade" | "downgrade" | "scan" | "revision" | "sql"; active: boolean }
+  // sidebar only: told explicitly (rather than inferred from silence) that the host found no
+  // alembic.ini anywhere in the workspace — see src/ui/sidebarView.ts and
+  // src/webview/sidebar/main.ts for why this exists as its own message instead of just never
+  // sending "state".
+  | { type: "noProject" };

@@ -37,9 +37,12 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       this.handleMessage(webviewView, msg);
     });
 
-    // No-project mode (this.service === null): there's no AppState to push, ever — the webview's
-    // own client-side empty state (src/webview/sidebar/main.ts + render.ts's renderEmpty())
-    // covers that case without any protocol message, so this subscription is simply never made.
+    // No-project mode (this.service === null): there's no AppState to ever push — the `ready`
+    // handler below tells the webview so explicitly via "noProject" instead. When a service does
+    // exist, this subscription is made immediately here (not deferred to the `ready` handler), so
+    // it's already live during the pre-state window between "ready" and the first scan landing —
+    // the webview's neutral "Scanning migrations…" placeholder (renderScanning()) is what covers
+    // that window, replaced the moment this fires.
     const stateSub = this.service?.onDidChangeState((state) => {
       void webviewView.webview.postMessage({ type: "state", state });
     });
@@ -62,7 +65,18 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
   private handleMessage(webviewView: vscode.WebviewView, msg: WebviewToHostMessage): void {
     switch (msg.type) {
       case "ready": {
-        const state = this.service?.getState();
+        if (!this.service) {
+          // True no-project path: no alembic.ini anywhere in the workspace. Tell the webview
+          // explicitly so it can replace its neutral "Scanning migrations…" placeholder with the
+          // actual diagnosis, instead of leaving the webview to infer "no project" from silence
+          // (which was indistinguishable from "scan still running").
+          void webviewView.webview.postMessage({ type: "noProject" });
+          break;
+        }
+        const state = this.service.getState();
+        // If the scan hasn't landed yet, post nothing — the `stateSub` subscription above is
+        // already live and will deliver "state" the moment it does; the webview's own
+        // "Scanning migrations…" placeholder covers the gap in the meantime.
         if (state) void webviewView.webview.postMessage({ type: "state", state });
         break;
       }
