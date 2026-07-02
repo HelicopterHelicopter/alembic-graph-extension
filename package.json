@@ -1,0 +1,56 @@
+{
+  "name": "alembic-graph",
+  "displayName": "Alembic Graph",
+  "description": "Interactive graph of your Alembic migration history — visualize heads, merges, and broken links; drag to merge heads or repair broken down_revisions.",
+  "publisher": "jheelr",
+  "version": "0.0.1",
+  "license": "MIT",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Visualization", "Other"],
+  "main": "./dist/extension.js",
+  "activationEvents": ["workspaceContains:**/alembic.ini"],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [{ "id": "alembicGraph", "title": "Alembic Migrations", "icon": "media/alembic.svg" }]
+    },
+    "views": {
+      "alembicGraph": [{ "type": "webview", "id": "alembicGraph.sidebar", "name": "Alembic Migrations" }]
+    },
+    "commands": [
+      { "command": "alembicGraph.openGraph",    "title": "Open Migration Graph",    "category": "Alembic Graph", "icon": "$(type-hierarchy)" },
+      { "command": "alembicGraph.refresh",      "title": "Refresh",                 "category": "Alembic Graph", "icon": "$(refresh)" },
+      { "command": "alembicGraph.upgradeHead",  "title": "Upgrade to Head",         "category": "Alembic Graph" },
+      { "command": "alembicGraph.mergeHeads",   "title": "Merge Heads…",            "category": "Alembic Graph" },
+      { "command": "alembicGraph.selectProject","title": "Select Alembic Project…", "category": "Alembic Graph" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "alembicGraph.openGraph", "when": "view == alembicGraph.sidebar", "group": "navigation@1" },
+        { "command": "alembicGraph.refresh",   "when": "view == alembicGraph.sidebar", "group": "navigation@2" }
+      ]
+    },
+    "configuration": {
+      "title": "Alembic Graph",
+      "properties": {
+        "alembicGraph.laneColorA":        { "type": "string",  "default": "#4aa3ff", "description": "Color of the trunk lane (lane 0)." },
+        "alembicGraph.laneColorB":        { "type": "string",  "default": "#c586c0", "description": "Color of branch lanes." },
+        "alembicGraph.showSqlPreview":    { "type": "boolean", "default": true, "description": "Show upgrade()/downgrade() bodies in the revision detail panel." },
+        "alembicGraph.alembicCommand":    { "type": "string",  "default": "", "description": "Override the alembic executable (default: selected Python interpreter → `python -m alembic`, else `alembic` on PATH)." },
+        "alembicGraph.collapseThreshold": { "type": "number",  "default": 20, "minimum": 3, "description": "Minimum run of linear revisions at the root end to collapse." }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "check": "tsc --noEmit -p . && tsc --noEmit -p src/webview",
+    "test:unit": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/vscode": "1.90.0",
+    "esbuild": "^0.25",
+    "typescript": "^5",
+    "vitest": "^3"
+  }
+}

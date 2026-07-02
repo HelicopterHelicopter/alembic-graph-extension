@@ -1,0 +1,9 @@
+node_modules/
+dist/
+out/
+*.vsix
+.superpowers/
+.DS_Store
+fixtures/**/*.db
+__pycache__/
+.venv/

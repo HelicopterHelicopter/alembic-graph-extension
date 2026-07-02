@@ -1,0 +1,13 @@
+.vscode/**
+.superpowers/**
+src/**
+test/**
+fixtures/**
+design/**
+docs/**
+node_modules/**
+esbuild.mjs
+tsconfig.json
+vitest.config.ts
+**/*.map
+.gitignore
