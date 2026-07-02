@@ -10,11 +10,12 @@
 
   How it works: main.ts calls `acquireVsCodeApi()` once at module scope and talks to the host
   only via `postMessage`/`window.addEventListener("message")`. This page stubs
-  `acquireVsCodeApi()` (postMessage -> console.log, so toolbar/click actions are inspectable) and
-  dispatches a single `message` event carrying `{ type: "state", state: <captured AppState> }`
-  loaded from ./state.json — the exact shape the extension host would post over the real
-  webview bridge. Re-run step 2 after any change to core/parser|graph|layout.ts or the
-  broken-project fixture; re-run step 1 after any change to src/webview/graph/*.
+  `acquireVsCodeApi()` (postMessage -> console.log, so toolbar/click actions are inspectable) and,
+  on the webview's initial `{type:"ready", restored}` postMessage, dispatches a `message` event
+  carrying `{ type: "state", state: <captured AppState> }` loaded from ./state.json — the exact
+  shape the extension host would post over the real webview bridge. Re-run step 2 after any change
+  to core/parser|graph|layout.ts or the broken-project fixture; re-run step 1 after any change to
+  src/webview/graph/*.
 
   Task 10 (revision detail panel): the stub also RESPONDS to `{type:"select", id}` postMessages —
   the same round trip GraphPanelManager.handleMessage()'s "select" case does for real (see
@@ -22,6 +23,24 @@
   dump-state.mjs run, mirroring MigrationService.getDetail()) and dispatching a `detail` message
   back asynchronously. An id with no entry (unknown, or a ghost/collapse placeholder) resolves to
   `detail: null`, exactly like the real host.
+
+  Task 11 (UI prefs persistence + restore): getState()/setState() are backed by a real JS object
+  (`vsState`), matching the real `vscode.getState()`/`setState()` contract main.ts relies on. To
+  test RESTORE (not just persist), pre-seed `vsState` before main.ts's module-scope `getPersisted()`
+  call runs — either:
+    - set `window.__seedState = {...}` before this page's scripts run (e.g. Playwright's
+      `page.addInitScript`, which is guaranteed to execute before ANY page script, including this
+      inline one), or
+    - append `?seed=<encodeURIComponent(JSON.stringify({...}))>` to the URL.
+  `window.__seedState` wins if both are present. Neither present -> vsState stays undefined, i.e.
+  a fresh/never-persisted webview, exactly like a real first-ever open.
+
+  The stub also mirrors GraphPanelManager's "ready" case -> MigrationService.applyUiPrefs(): a
+  non-null `restored` is shallow-merged into state.json's `ui` before the `state` message is
+  dispatched, so a seeded order/density/expandCollapsed is actually observable in the rendered
+  canvas (card size, stacking order, collapse), not just echoed back in the `ready` postMessage
+  log line. `restored === null` dispatches state.json's `ui` unchanged, same as the real host
+  standing by its own workspaceState-backed prefs.
 -->
 <html lang="en">
 <head>
@@ -34,22 +53,81 @@
   // acquireVsCodeApi() must exist before main.ts's module-scope call runs, and can only be called
   // once per real webview — this stub is fine to call more than once (unlike the real API) since
   // there's no host on the other end to complain, but main.ts still only calls it once.
-  let vsState;
+  let vsState = seedInitialState();
   // Tracks the most recent "select" id — see respondToSelect()'s stale-response guard below.
   let pendingSelectId;
   window.acquireVsCodeApi = () => ({
     postMessage: (message) => {
       console.log("[harness] postMessage from webview:", message);
-      if (message && message.type === "select") {
+      if (message && message.type === "ready") {
+        respondToReady(message.restored);
+      } else if (message && message.type === "select") {
         pendingSelectId = message.id;
         respondToSelect(message.id);
+      } else if (message && message.type === "setOrientation") {
+        respondToUiPatch({ order: message.order });
+      } else if (message && message.type === "setDensity") {
+        respondToUiPatch({ density: message.density });
+      } else if (message && message.type === "expandCollapse") {
+        respondToUiPatch({ expandCollapsed: !currentState?.ui.expandCollapsed });
       }
     },
     getState: () => vsState,
     setState: (state) => {
+      console.log("[harness] setState:", state);
       vsState = state;
     },
   });
+
+  // Task 11: reads a pre-seeded persisted state so `getPersisted()`/restore can be exercised in a
+  // browser without a real VS Code host. See the file header comment above for the two ways to
+  // seed it. Returns undefined (not null) when unseeded, matching `vscode.getState()`'s contract
+  // for a webview that has never called `setState`.
+  function seedInitialState() {
+    if (window.__seedState !== undefined) return window.__seedState;
+    const params = new URLSearchParams(window.location.search);
+    const seedParam = params.get("seed");
+    if (seedParam) {
+      try {
+        return JSON.parse(seedParam);
+      } catch (err) {
+        console.error("[harness] invalid ?seed= JSON, ignoring:", err);
+      }
+    }
+    return undefined;
+  }
+
+  // The single "current" AppState this stub host hands out — set by respondToReady(), then
+  // mutated in place (new object, same shape) by respondToUiPatch() so toolbar toggles/collapse
+  // clicks are round-trippable in the harness, same as a real host echoing back a new "state".
+  let currentState = null;
+
+  // Delivers the captured AppState the same way GraphPanelManager's real "ready" case does:
+  // MigrationService.applyUiPrefs(restored) (Task 11) merges a non-null `restored` into the
+  // current ui and posts state; a null `restored` just posts state as-is. Fetch (not a bare
+  // <script src> global) so this also works when the page is opened as a plain file:// URL in
+  // browsers that allow file-relative fetch (Chromium).
+  function respondToReady(restored) {
+    fetch("./state.json")
+      .then((r) => r.json())
+      .then((state) => {
+        currentState = restored ? { ...state, ui: { ...state.ui, ...restored } } : state;
+        window.postMessage({ type: "state", state: currentState }, "*");
+      })
+      .catch((err) => {
+        console.error("[harness] failed to load state.json — run `node scripts/dump-state.mjs` first", err);
+      });
+  }
+
+  // Mirrors MigrationService.setOrder/setDensity/setExpandCollapsed: a client-side ui patch,
+  // applied synchronously (no re-layout — same simplification the real setOrder/setDensity make;
+  // this stub doesn't attempt to replicate expandCollapse's cache re-layout), re-emitted as a
+  // fresh "state" message. No-op before the first "ready" round trip has populated currentState.
+  function respondToUiPatch(patch) {
+    if (!currentState) return;
+    currentState = { ...currentState, ui: { ...currentState.ui, ...patch } };
+    window.postMessage({ type: "state", state: currentState }, "*");
+  }
 
   // Mirrors GraphPanelManager's "select" case -> MigrationService.getDetail(): looks `id` up in
   // details.json and posts a "detail" message back, tagged with `forId` (the id this response
@@ -80,18 +158,5 @@
 <body>
 <div id="app"></div>
 <script nonce="harness" src="../dist/webview/graph.js"></script>
-<script>
-  // Deliver the captured AppState the same way GraphPanelManager does: a "state" message posted
-  // to the webview's window. Fetch (not a bare <script src> global) so this also works when the
-  // page is opened as a plain file:// URL in browsers that allow file-relative fetch (Chromium).
-  fetch("./state.json")
-    .then((r) => r.json())
-    .then((state) => {
-      window.postMessage({ type: "state", state }, "*");
-    })
-    .catch((err) => {
-      console.error("[harness] failed to load state.json — run `node scripts/dump-state.mjs` first", err);
-    });
-</script>
 </body>
 </html>

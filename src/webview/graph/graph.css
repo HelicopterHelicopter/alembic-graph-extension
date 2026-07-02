@@ -202,6 +202,11 @@ body {
   flex: 1;
   overflow: auto;
   position: relative;
+  /* main.ts owns scrollTop/scrollLeft entirely (preserve-across-re-render + Task 11 restore) —
+     without this, Chromium's scroll-anchoring heuristic can silently override a scrollTop we just
+     set programmatically on a freshly (re)populated container, once it recalculates anchors after
+     layout settles. */
+  overflow-anchor: none;
 }
 
 .alx-canvas {

@@ -240,6 +240,73 @@ describe("MigrationService.setOrder / setDensity", () => {
   });
 });
 
+describe("MigrationService.applyUiPrefs", () => {
+  it("a. order-only change: one emit, layout reference unchanged, setUiPrefs called", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+    const layoutBefore = service.getState()!.layout;
+
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+    await service.applyUiPrefs({ order: "newest-top" });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    const newState = listener.mock.calls[0][0];
+    expect(newState.ui.order).toBe("newest-top");
+    expect(newState.layout).toBe(layoutBefore); // same reference: no re-layout
+    expect(deps.setUiPrefs).toHaveBeenCalledWith(expect.objectContaining({ order: "newest-top" }));
+    expect(deps.listVersionFiles).toHaveBeenCalledTimes(1); // no re-read
+  });
+
+  it("b. expandCollapsed change: one emit, re-layout from cache (no listVersionFiles call)", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+    const layoutBefore = service.getState()!.layout;
+
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+    await service.applyUiPrefs({ expandCollapsed: true });
+
+    expect(deps.listVersionFiles).toHaveBeenCalledTimes(1); // unchanged: re-layout from cache, not a re-read
+    expect(listener).toHaveBeenCalledTimes(1);
+    const newState = listener.mock.calls[0][0];
+    expect(newState.ui.expandCollapsed).toBe(true);
+    expect(newState.layout).not.toBe(layoutBefore); // re-laid-out
+    expect(deps.setUiPrefs).toHaveBeenCalledWith(expect.objectContaining({ expandCollapsed: true }));
+  });
+
+  it("c. identical prefs: zero emits", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+    await service.applyUiPrefs({ ...DEFAULT_UI }); // already the current prefs
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(deps.setUiPrefs).not.toHaveBeenCalled();
+  });
+
+  it("d. all three changed at once: exactly one emit with all applied", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+    await service.applyUiPrefs({ order: "newest-top", density: "compact", expandCollapsed: true });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    const newState = listener.mock.calls[0][0];
+    expect(newState.ui).toEqual({ order: "newest-top", density: "compact", expandCollapsed: true });
+    expect(deps.setUiPrefs).toHaveBeenCalledTimes(1);
+    expect(deps.setUiPrefs).toHaveBeenCalledWith({ order: "newest-top", density: "compact", expandCollapsed: true });
+  });
+});
+
 describe("MigrationService edge cases (self-review)", () => {
   it("getState() is null before the first refresh", () => {
     const service = new MigrationService(makeDeps());

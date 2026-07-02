@@ -104,9 +104,19 @@ export class GraphPanelManager {
   private handleMessage(panel: vscode.WebviewPanel, msg: WebviewToHostMessage): void {
     switch (msg.type) {
       case "ready": {
-        // `msg.restored` (persisted UI prefs) is wired up in Task 11.
-        const state = this.service.getState();
-        if (state) void panel.webview.postMessage({ type: "state", state });
+        // Task 11 convergence rule: a non-null `restored` (the webview's own vscode.setState
+        // copy) wins over whatever the host has in workspaceState — applyUiPrefs persists it and
+        // re-layouts if needed. Either way, always post state after: a duplicate/no-op render is
+        // harmless and covers the `restored === null` (host's stored prefs stand) path uniformly.
+        const postCurrentState = (): void => {
+          const state = this.service.getState();
+          if (state) void panel.webview.postMessage({ type: "state", state });
+        };
+        if (msg.restored !== null) {
+          void this.service.applyUiPrefs(msg.restored).then(postCurrentState);
+        } else {
+          postCurrentState();
+        }
         break;
       }
       case "refresh":

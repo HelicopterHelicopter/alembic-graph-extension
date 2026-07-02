@@ -191,6 +191,44 @@ export class MigrationService {
     this.emit(this.state);
   }
 
+  /**
+   * Adopts a batch of restored UI prefs (Task 11's `ready.restored` convergence: the webview's
+   * persisted copy wins over whatever the host had stored) in one shot: persists the merged
+   * result via `setUiPrefs`, re-layouts from the cached graph only if `expandCollapsed` actually
+   * changed (order/density are render-only, no re-layout needed), and emits AT MOST ONE state —
+   * zero emits (and no `setUiPrefs` call) if the merged prefs are identical to the current ones.
+   */
+  async applyUiPrefs(prefs: Partial<UiPrefs>): Promise<void> {
+    const base = this.state?.ui ?? this.deps.getUiPrefs();
+    const ui: UiPrefs = { ...base, ...prefs };
+
+    const expandChanged = ui.expandCollapsed !== base.expandCollapsed;
+    const changed = expandChanged || ui.order !== base.order || ui.density !== base.density;
+    if (!changed) return; // true no-op: nothing differs, don't even touch persisted storage
+
+    this.deps.setUiPrefs(ui);
+    if (this.state === null) return;
+
+    if (expandChanged && this.cachedGraph !== null) {
+      const config = this.deps.getConfig();
+      const layout = layoutGraph(this.cachedGraph, {
+        collapseThreshold: config.collapseThreshold,
+        expandCollapsed: ui.expandCollapsed,
+        appliedSet: null,
+        currentIds: [],
+      });
+      this.state = {
+        ...this.state,
+        layout,
+        laneColors: laneColorsFor(layout.laneCount, config.laneColorA, config.laneColorB),
+        ui,
+      };
+    } else {
+      this.state = { ...this.state, ui };
+    }
+    this.emit(this.state);
+  }
+
   /** Null before the first refresh. */
   getState(): AppState | null {
     return this.state;

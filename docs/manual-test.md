@@ -170,3 +170,42 @@ below are the F5-only checks the harness can't cover (real VS Code editor tabs, 
 10. Repeat step 2 with the **Run Extension (healthy fixture)** launch config on any card: panel
     opens the same way (no broken/merge fixture there, so just confirm the badges/kv rows/code box
     render correctly for a plain linear revision).
+
+## Task 11: UI preference persistence + restore (order/density/expandCollapse, selection, scroll)
+
+Two stores, two lifetimes: the webview's own `vscode.setState` (order, density,
+expandCollapsed, selectedId, detailOpen, scrollTop, scrollLeft — survives tab hide and
+**Developer: Reload Window** while the panel's tab still exists) and the host's `workspaceState`
+(order/density/expandCollapsed only — survives the panel being fully **closed**). `harness/graph.html`
+(after `npm run build`, served over http — see the file's header comment) covers the webview-side
+restore logic in isolation via `window.__seedState`/`?seed=`; the steps below are the F5-only
+checks that harness can't cover (a real host round trip, a real window reload, a real panel
+close/reopen).
+
+1. Press F5, select **Run Extension (broken fixture)**, then **Alembic Graph: Open Migration
+   Graph**.
+2. Click **Newest ↑** and **Compact**, click the `29dae0774a6c` **merge oauth and billing** card
+   (detail panel opens), then scroll the canvas down/right away from the top-left corner.
+3. Run **Developer: Reload Window**. After reload, the "Migration Graph" tab reopens automatically
+   (the serializer) and, once it repopulates: **Newest ↑** and **Compact** are still the active
+   toggles, the `29dae0774a6c` card still has its selected highlight and the REVISION DETAIL panel
+   for it is showing again (a fresh `select` round trip, not a cached copy — momentarily visible as
+   a re-fetch if you watch closely), and the canvas is scrolled back to the same position it was at
+   before reload (not snapped back to the top-left).
+4. Open webview DevTools (**Developer: Open Webview Developer Tools**) and confirm the Console has
+   no errors while repeating step 3.
+5. Click the detail panel's **✕**, click **Comfortable**, click **Newest ↓**, then close the panel
+   (click the tab's × or Cmd+W).
+6. Run **Alembic Graph: Open Migration Graph** again (fresh panel, not a reload — the panel was
+   fully disposed in step 5). Expect **Comfortable** and **Newest ↓** to still be the active
+   toggles (round-tripped through the host's `workspaceState`, independent of the disposed
+   webview's own state) — but no card selected and no detail panel open, and the canvas scrolled to
+   its default top-left position (the webview's `vscode.setState` — and with it selectedId/
+   detailOpen/scroll — does not survive a full close, only hide/reload; see the brief's two-store
+   split).
+7. With the panel open, click the collapse toggle if a collapse card is visible (or set **Alembic
+   Graph › Collapse Threshold** low enough via **Preferences: Open Workspace Settings** and
+   **Alembic Graph: Refresh** to produce one — see Task 9 step 6), expand it, then repeat step 3
+   (**Developer: Reload Window**): the expand/collapse state is restored along with order/density.
+8. Repeat steps 1–3 with the **Run Extension (healthy fixture)** launch config: same restore
+   behavior (order/density/scroll; no merge card there, so pick any card for the selection check).
