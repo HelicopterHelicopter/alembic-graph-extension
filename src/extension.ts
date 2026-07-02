@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { pickProject, type AlembicProject } from "./services/discovery";
 import { MigrationService, type MigrationServiceDeps } from "./services/migrationService";
 import { createStatusBar } from "./ui/statusBar";
+import { GraphPanelManager } from "./ui/graphPanel";
 import type { UiPrefs } from "./protocol/messages";
 
 const UI_PREFS_KEY = "alembicGraph.uiPrefs";
@@ -102,6 +103,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(createStatusBar(service));
 
+  const panelManager = new GraphPanelManager(context, service, (line) => outputChannel.appendLine(line));
+  context.subscriptions.push(panelManager);
+  context.subscriptions.push(panelManager.registerSerializer());
+
   const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(project.versionsDir, "*.py"));
   watcher.onDidCreate(() => service.scheduleRefresh());
   watcher.onDidChange(() => service.scheduleRefresh());
@@ -111,8 +116,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("alembicGraph.refresh", () => service.refresh()),
   );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("alembicGraph.openGraph", () => panelManager.open()),
+  );
 
-  registerRemainingStubs(context, new Set(["alembicGraph.refresh"]));
+  registerRemainingStubs(context, new Set(["alembicGraph.refresh", "alembicGraph.openGraph"]));
 
   await service.refresh();
 }

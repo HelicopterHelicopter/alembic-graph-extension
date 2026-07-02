@@ -1,3 +1,15 @@
 body {
   font-family: var(--vscode-font-family, sans-serif);
+  margin: 0;
+  padding: 8px;
+}
+
+.toolbar {
+  margin-bottom: 8px;
+}
+
+pre {
+  font-family: var(--vscode-editor-font-family, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
 }

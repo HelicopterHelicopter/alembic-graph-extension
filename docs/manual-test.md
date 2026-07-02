@@ -62,3 +62,29 @@ against the fixture produces.
 5. Repeat with **Run Extension (healthy fixture)** launch config: expect `$(type-hierarchy) 2 heads`
    with no warning background (singular check: text is `1 head` if only one head), and
    `11 revisions`.
+
+## Task 8: webview panel infrastructure
+
+1. Press F5, select **Run Extension (broken fixture)**.
+2. Run the command **Alembic Graph: Open Migration Graph** (Command Palette, or click a status
+   bar item from Task 7). A panel titled "Migration Graph" opens in editor column one with the
+   Alembic icon on its tab.
+3. Expect a toolbar with a **Refresh** button, followed by a `<pre>` block containing a
+   pretty-printed JSON dump of the full `AppState` (same shape as the Output-channel dump from
+   Task 6). Spot-check: `"layout":{"nodes":[...]}` has 13 entries (12 revisions + 1 ghost).
+4. Click **Refresh**. The dump re-renders (content unchanged, since nothing on disk changed).
+   The Output channel gets one more `scan:` + JSON pair.
+5. With the panel still open, touch a file under
+   `fixtures/broken-project/alembic/versions/*.py` (edit + save). Within ~300ms the JSON dump
+   updates live to reflect the new state, with no action needed in the webview.
+6. Run **Alembic Graph: Open Migration Graph** again (or click a status bar item) while the
+   panel is already open: it reveals the existing tab instead of opening a second one.
+7. Open the webview DevTools (Command Palette → **Developer: Open Webview Developer Tools**)
+   and check the Console: zero Content-Security-Policy violation messages.
+8. Run **Developer: Reload Window**. After reload, the "Migration Graph" tab reopens
+   automatically (the `WebviewPanelSerializer`) and re-populates with the current JSON dump
+   without needing to re-run the open command.
+9. Close the panel (click the tab's × or Cmd+W), then run **Alembic Graph: Open Migration
+   Graph** again: a fresh panel opens correctly (closing doesn't wedge the singleton).
+10. Repeat steps 1–5 with the **Run Extension (healthy fixture)** launch config: expect
+    `layout.nodes` length of 11, no ghost/broken entries.
