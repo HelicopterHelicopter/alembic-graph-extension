@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { pickProject, type AlembicProject } from "./services/discovery";
 import { MigrationService, type MigrationServiceDeps } from "./services/migrationService";
+import { createStatusBar } from "./ui/statusBar";
 import type { UiPrefs } from "./protocol/messages";
 
 const UI_PREFS_KEY = "alembicGraph.uiPrefs";
@@ -98,6 +99,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (currentService === service) currentService = undefined;
     },
   });
+
+  context.subscriptions.push(createStatusBar(service));
 
   const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(project.versionsDir, "*.py"));
   watcher.onDidCreate(() => service.scheduleRefresh());

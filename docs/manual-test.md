@@ -46,3 +46,19 @@ entries), which the JSON dump does correctly show. `migrationService.test.ts` te
 exercises the "extra file that fails to parse" case (feeding a 13th, env.py-like file into a
 fake `listVersionFiles`) — that scenario is real and tested, it just isn't what a real F5 run
 against the fixture produces.
+
+## Task 7: status bar items
+
+1. Press F5, select **Run Extension (broken fixture)**.
+2. Look at the left side of the VS Code status bar (bottom of the editor window).
+3. Expect to see three status bar items from left to right:
+   - `$(type-hierarchy) 3 heads` with a warning background (orange/yellow tint), tooltip
+     "3 migration heads — open the graph to merge"
+   - `12 revisions`, tooltip "Alembic revisions in this project"
+   - No `current:` item (since `currentIds` is empty — DB state enrichment arrives in Task 13)
+4. Click any of the visible status bar items and confirm it triggers the **Alembic Graph: Open
+   Migration Graph** command, showing an information toast "Alembic Graph: Open Migration Graph —
+   not implemented yet" (stub until Task 8).
+5. Repeat with **Run Extension (healthy fixture)** launch config: expect `$(type-hierarchy) 2 heads`
+   with no warning background (singular check: text is `1 head` if only one head), and
+   `11 revisions`.
