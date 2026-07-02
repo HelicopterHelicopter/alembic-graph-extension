@@ -152,6 +152,33 @@ describe("MigrationService.scheduleRefresh", () => {
     expect(deps.listVersionFiles).toHaveBeenCalledTimes(1);
     service.dispose();
   });
+
+  it("8. implements per-call-RESETTING debounce semantics: a second call restarts the 300ms window", async () => {
+    vi.useFakeTimers();
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+
+    // First call starts the debounce window
+    service.scheduleRefresh();
+    await vi.advanceTimersByTimeAsync(200);
+
+    // No refresh yet (window not closed)
+    expect(deps.listVersionFiles).toHaveBeenCalledTimes(0);
+
+    // Second call RESETS the window
+    service.scheduleRefresh();
+    await vi.advanceTimersByTimeAsync(200);
+
+    // Still no refresh (200ms from second call, window needs 300ms total)
+    expect(deps.listVersionFiles).toHaveBeenCalledTimes(0);
+
+    // Advance 100ms more (300ms from second call)
+    await vi.advanceTimersByTimeAsync(100);
+
+    // Now exactly one refresh fired
+    expect(deps.listVersionFiles).toHaveBeenCalledTimes(1);
+    service.dispose();
+  });
 });
 
 describe("MigrationService.setExpandCollapsed", () => {
