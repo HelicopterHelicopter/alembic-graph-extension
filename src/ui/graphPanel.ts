@@ -14,6 +14,16 @@ const TITLE = "Migration Graph";
 
 export class GraphPanelManager {
   private panel: vscode.WebviewPanel | undefined;
+  /** True once the current `panel`'s webview has sent its "ready" message — reset on every fresh
+   * attach() since a new webview instance (new panel, or a serializer-restored one) always starts
+   * unready. `revealAndSelect()` uses this to decide whether it can post "selectNode" immediately
+   * or must wait for the next "ready" round trip. */
+  private webviewReady = false;
+  /** Node id to select once the (not-yet-ready) panel's webview sends "ready" — set by
+   * `revealAndSelect()` when it can't post immediately, consumed (and cleared) by the "ready" case
+   * in `handleMessage()`. Deliberately NOT reset in `attach()`: it's set right before `open()` is
+   * called on the same tick, so a reset there would wipe it out before "ready" ever arrives. */
+  private pendingSelectId: string | null = null;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -37,6 +47,20 @@ export class GraphPanelManager {
     panel.iconPath = this.iconPath();
     panel.webview.html = buildWebviewHtml(panel.webview, this.context.extensionUri, "graph", TITLE);
     this.attach(panel);
+  }
+
+  /** Opens/reveals the panel and selects `id` there (Task 12: sidebar head-row clicks route
+   * through here). If the panel already exists and its webview has completed the "ready" round
+   * trip, selects immediately; otherwise opens/reveals the panel and defers the selection until
+   * "ready" arrives (see `pendingSelectId`). */
+  revealAndSelect(id: string): void {
+    if (this.panel && this.webviewReady) {
+      this.panel.reveal(vscode.ViewColumn.One);
+      void this.panel.webview.postMessage({ type: "selectNode", id });
+      return;
+    }
+    this.pendingSelectId = id;
+    this.open();
   }
 
   /** Restores a panel that was open when the window last reloaded. */
@@ -85,6 +109,7 @@ export class GraphPanelManager {
       this.panel.dispose();
     }
     this.panel = panel;
+    this.webviewReady = false;
 
     const messageSub = panel.webview.onDidReceiveMessage((msg: WebviewToHostMessage) => {
       this.handleMessage(panel, msg);
@@ -112,10 +137,22 @@ export class GraphPanelManager {
           const state = this.service.getState();
           if (state) void panel.webview.postMessage({ type: "state", state });
         };
-        if (msg.restored !== null) {
-          void this.service.applyUiPrefs(msg.restored).then(postCurrentState);
-        } else {
+        // Task 12: this webview instance is now ready — flush any selection a revealAndSelect()
+        // queued up while the panel was still opening, then let future revealAndSelect() calls
+        // post "selectNode" immediately.
+        const finishReady = (): void => {
           postCurrentState();
+          this.webviewReady = true;
+          if (this.pendingSelectId !== null) {
+            const id = this.pendingSelectId;
+            this.pendingSelectId = null;
+            void panel.webview.postMessage({ type: "selectNode", id });
+          }
+        };
+        if (msg.restored !== null) {
+          void this.service.applyUiPrefs(msg.restored).then(finishReady);
+        } else {
+          finishReady();
         }
         break;
       }

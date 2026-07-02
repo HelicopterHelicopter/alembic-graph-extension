@@ -8,6 +8,7 @@ import "./graph.css";
 import { onMessage, post, getPersisted, setPersisted } from "../shared/vscodeApi";
 import type { AppState, RevisionDetail, UiPrefs } from "../../protocol/messages";
 import { render, showToast, type Handlers, type ViewState } from "./render";
+import { nodeSize, nodeXY } from "./metrics";
 
 const appRoot = document.getElementById("app");
 if (!appRoot) throw new Error("alembic graph webview: missing #app root element");
@@ -128,7 +129,19 @@ onMessage((msg) => {
     case "toast":
       showToast(msg.level, msg.text);
       break;
-    // "selectNode" / "busy" arrive starting Task 12+.
+    case "selectNode": {
+      // Task 12: a click in the sidebar heads list routes here via GraphPanelManager.
+      // revealAndSelect() — same selection side effects as clicking the card directly (onSelect
+      // above), plus centering the canvas on the node since it may be scrolled out of view.
+      store.selectedId = msg.id;
+      store.detail = null;
+      store.detailOpen = true;
+      post({ type: "select", id: msg.id });
+      renderStore();
+      scrollNodeIntoView(msg.id);
+      break;
+    }
+    // "busy" arrives starting Task 16.
     default:
       break;
   }
@@ -169,6 +182,31 @@ function renderStore(): void {
     attachScrollListener(nextViewport);
   }
 
+  persist();
+}
+
+/** Scrolls the canvas viewport so `id`'s card is roughly centered — used by the "selectNode"
+ * handler (Task 12) to bring a sidebar-selected node into view. Computes the target position from
+ * the pure metrics.ts math (the same formulas render.ts's computePositions uses) rather than
+ * querying the just-rendered DOM node's offset, so it works even for a node whose wrapper doesn't
+ * expose its own position lookup. Must run AFTER renderStore() so `.alx-canvas-viewport` reflects
+ * the current node/order/density layout and has a settled clientWidth/clientHeight to center
+ * within. A no-op if `id` isn't a real layout node (e.g. a stale/unknown id) or the viewport isn't
+ * in the DOM (state not yet rendered). */
+function scrollNodeIntoView(id: string): void {
+  if (!store.state) return;
+  const node = store.state.layout.nodes.find((n) => n.id === id);
+  const viewport = document.querySelector<HTMLElement>(".alx-canvas-viewport");
+  if (!node || !viewport) return;
+
+  const { ui, layout } = store.state;
+  const { x, y } = nodeXY(node, ui, layout.rowCount, ui.density);
+  const { w, h } = nodeSize(node, ui.density);
+  const scrollLeft = Math.max(0, x + w / 2 - viewport.clientWidth / 2);
+  const scrollTop = Math.max(0, y + h / 2 - viewport.clientHeight / 2);
+
+  viewport.scrollTo({ left: scrollLeft, top: scrollTop });
+  lastScroll = { scrollTop, scrollLeft };
   persist();
 }
 

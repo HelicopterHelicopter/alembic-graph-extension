@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<!--
+  Dev harness for the sidebar webview — lets you render the real, BUILT
+  dist/webview/sidebar.{js,css} in a plain browser (Playwright, or just double-click this file)
+  without launching VS Code. Mirrors harness/graph.html's stub pattern (see that file's header
+  comment for the general approach) but simpler: the sidebar has no "select" -> "detail" round
+  trip to simulate (clicking a head row just posts "select"; the real host's SidebarViewProvider
+  hands that off to GraphPanelManager — nothing the sidebar webview itself waits on), and no
+  persisted UI state (getState()/setState() are stubbed for API-shape completeness only).
+
+  Usage:
+    1. npm run build                 # (re)builds dist/webview/sidebar.{js,css}
+    2. node scripts/dump-state.mjs   # (re)generates state.json from the fixture
+    3. open this file directly (file://.../harness/sidebar.html), or serve harness/ over http(s)
+
+  Query params:
+    ?nostate=1  — the stub never responds to "ready", simulating the no-project host (see
+                  src/ui/sidebarView.ts: `this.service === null` means no "state" message is ever
+                  sent). Exercises render.ts's client-side renderEmpty() staying up permanently
+                  instead of being replaced by a real render().
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="../dist/webview/sidebar.css">
+<title>Alembic Migrations — dev harness</title>
+<script>
+  // Stub of the VS Code webview bridge (see src/webview/vscode-webview.d.ts / shared/vscodeApi.ts).
+  let vsState;
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => {
+      console.log("[harness] postMessage from webview:", message);
+      if (message && message.type === "ready") respondToReady();
+    },
+    getState: () => vsState,
+    setState: (state) => {
+      console.log("[harness] setState:", state);
+      vsState = state;
+    },
+  });
+
+  function nostate() {
+    return new URLSearchParams(window.location.search).get("nostate") === "1";
+  }
+
+  // Delivers the captured AppState the same way SidebarViewProvider's real "ready" case does
+  // (see src/ui/sidebarView.ts) — post a "state" message once. With ?nostate=1, simulates the
+  // no-project host: never responds, so the webview's client-side empty state stands forever.
+  function respondToReady() {
+    if (nostate()) {
+      console.log("[harness] ?nostate=1 — not responding to ready (simulates the no-project host)");
+      return;
+    }
+    fetch("./state.json")
+      .then((r) => r.json())
+      .then((state) => {
+        window.postMessage({ type: "state", state }, "*");
+      })
+      .catch((err) => {
+        console.error("[harness] failed to load state.json — run `node scripts/dump-state.mjs` first", err);
+      });
+  }
+</script>
+</head>
+<body>
+<div id="app"></div>
+<script nonce="harness" src="../dist/webview/sidebar.js"></script>
+</body>
+</html>

@@ -209,3 +209,55 @@ close/reopen).
    (**Developer: Reload Window**): the expand/collapse state is restored along with order/density.
 8. Repeat steps 1–3 with the **Run Extension (healthy fixture)** launch config: same restore
    behavior (order/density/scroll; no merge card there, so pick any card for the selection check).
+
+## Task 12: Alembic Migrations sidebar view
+
+`harness/sidebar.html` (after `npm run build` + `node scripts/dump-state.mjs`, served over http —
+see the file's header comment) covers the sidebar webview's own rendering/click-posting logic in
+isolation, including the `?nostate=1` no-project empty state. The steps below are the F5-only
+checks that harness can't cover (the real activity-bar icon/view, a real WebviewView's
+collapse/expand lifecycle, and the real cross-webview hand-off into the graph panel).
+
+1. Press F5, select **Run Extension (broken fixture)**.
+2. Click the Alembic icon in the activity bar (left-most icon column). The "Alembic Migrations"
+   sidebar view opens, showing (visual match against `design/Alembic Graph.dc.html`'s left 250px
+   column, minus its own title bar — VS Code renders "ALEMBIC MIGRATIONS" as the view's native
+   title instead):
+   - **▾ HEADS** with a yellow `3` count pill, then three rows: `5c0d13aa7d` "add audit log",
+     `4bfc02996c` "search index (experimental)", `3aebf1885b` "add rate limiting" (green ◆, mono
+     hash, dim message).
+   - **CURRENT REVISION**: hollow dot + dim `unknown` (DB state enrichment arrives in Task 13).
+   - **PROBLEMS**: one red `⚠` row reading `` `5c0d13aa7d9f` revises missing revision
+     `deadbeef0000` `` (the broken-project fixture's single problem).
+   - A sticky footer button `↻ alembic upgrade head` (blue, full width).
+3. Hover a head row: it highlights with the list hover background. Click the **view/title** bar's
+   icons (top-right of the sidebar view): the graph icon runs **Alembic Graph: Open Migration
+   Graph** and the refresh icon runs **Alembic Graph: Refresh** (both already wired from earlier
+   tasks; this task doesn't change them).
+4. Click the `5c0d13aa7d` **add audit log** head row. The "Migration Graph" panel opens (or, if
+   already open, is revealed/focused) in editor column one, with the `5c0d13aa7d9f` card selected
+   (blue ring/background) and its REVISION DETAIL panel open on the right — and the canvas is
+   scrolled so the card is roughly centered in the viewport (not just barely in view at an edge).
+5. With the graph panel still open, click the `3aebf1885b` **add rate limiting** row in the
+   sidebar. The graph panel is revealed (front-most tab) and selection/detail/centering move to
+   `3aebf1885b7d` — same round trip as step 4, now via the already-`ready` webview (immediate
+   `selectNode`, no reopen).
+6. Click the sidebar's **↻ alembic upgrade head** button. Nothing runs yet (Task 16 wires
+   execution) — check the Output channel (**Alembic Graph**) for `sidebar: not implemented yet:
+   upgrade` rather than a silent no-op or an error.
+7. Collapse the Alembic Migrations view (click its header) and re-expand it. The heads/current/
+   problems content re-renders correctly (a fresh `ready` → `state` round trip — WebviewView has no
+   `retainContextWhenHidden`, so this is a real rebuild, not a hidden tab resuming).
+8. Open webview DevTools for the sidebar (**Developer: Open Webview Developer Tools** while the
+   sidebar view has focus, or use the Command Palette while it's visible) and confirm the Console
+   has no errors/CSP violations while repeating steps 2–6.
+9. Repeat steps 1–2 with the **Run Extension (healthy fixture)** launch config: **▾ HEADS** shows a
+   `2` pill with two rows, **PROBLEMS** shows dim `No problems` (no broken links in that fixture).
+10. No-project mode: open VS Code on a workspace folder with no `alembic.ini` anywhere in it (e.g.
+    an empty temp folder, not `--extensionDevelopmentPath`'s target — use **File: Open Folder…**
+    inside a plain Extension Development Host launched without either fixture argument, or edit
+    `.vscode/launch.json` temporarily). Click the Alembic icon in the activity bar (this is what
+    activates the extension via VS Code's implicit `onView` activation — no `alembic.ini` means the
+    `workspaceContains` activation event never fires on its own). The sidebar shows the client-side
+    empty state: "No alembic.ini found in this workspace" + the dim hint line, with no console
+    errors.

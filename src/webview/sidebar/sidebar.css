@@ -1,3 +1,203 @@
+/**
+ * Theme token layer, same discipline as graph.css (see that file's header comment): every neutral
+ * chrome color is a --alx-* custom property with a `var(--vscode-*, <design hex>)` fallback; only
+ * the tokens this webview actually uses are declared here. Semantic/"product identity" colors
+ * (heads-yellow count pill, applied-teal current dot, broken-red problem rows, head-green diamond)
+ * stay literal hex, per the design and the brief — they are not chrome.
+ */
+:root {
+  --alx-bg: var(--vscode-editor-background, #1e1e1e);
+  --alx-panel: var(--vscode-sideBar-background, #252526);
+  --alx-fg: var(--vscode-foreground, #cccccc);
+  --alx-dim: var(--vscode-descriptionForeground, #8a8a8a);
+  --alx-mono: var(--vscode-editor-font-family, ui-monospace, Menlo, Consolas, monospace);
+  --alx-btn: var(--vscode-button-background, #0e639c);
+  --alx-dot-hollow: var(--vscode-icon-foreground, #6d6d6d);
+  --alx-hover: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
 body {
-  font-family: var(--vscode-font-family, sans-serif);
+  margin: 0;
+  padding: 0;
+  background: var(--alx-panel);
+}
+
+body {
+  color: var(--alx-fg);
+  font-family: var(--vscode-font-family, "Segoe UI", system-ui, -apple-system, sans-serif);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+::-webkit-scrollbar-corner {
+  background: var(--alx-panel);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--alx-hover);
+  border: 4px solid var(--alx-panel);
+  border-radius: 8px;
+}
+
+.alx-side-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ---------- empty state ---------- */
+.alx-side-empty {
+  padding: 24px 16px;
+}
+.alx-side-empty-message {
+  color: var(--alx-fg);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.alx-side-empty-hint {
+  color: var(--alx-dim);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+/* ---------- scrollable section list ---------- */
+.alx-side-scroll {
+  padding: 4px 0;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.alx-side-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  font-size: 11px;
+  color: var(--alx-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  user-select: none;
+}
+.alx-side-section-header--spaced {
+  padding-top: 9px;
+}
+
+.alx-side-count-pill {
+  margin-left: auto;
+  background: #cca700;
+  color: #1e1e1e;
+  font-weight: 700;
+  border-radius: 9px;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+/* ---------- heads ---------- */
+.alx-side-head-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px 5px 22px;
+  cursor: pointer;
+}
+.alx-side-head-row:hover {
+  background: var(--alx-hover);
+}
+
+.alx-side-head-dot {
+  color: #89d185;
+  font-size: 11px;
+  flex: none;
+}
+
+.alx-side-hash {
+  font-family: var(--alx-mono);
+  font-size: 11px;
+  color: #d0d0d0;
+  flex: none;
+}
+
+.alx-side-head-message {
+  font-size: 11.5px;
+  color: #9a9a9a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* ---------- current revision ---------- */
+.alx-side-current-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px 4px 22px;
+}
+
+.alx-side-current-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4ec9b0;
+  flex: none;
+}
+.alx-side-current-dot--hollow {
+  background: transparent;
+  border: 1.5px solid var(--alx-dot-hollow);
+}
+
+.alx-side-dim {
+  font-size: 11px;
+  color: var(--alx-dim);
+}
+
+/* ---------- problems ---------- */
+.alx-side-no-problems {
+  padding: 4px 14px 4px 22px;
+  font-size: 11.5px;
+  color: var(--alx-dim);
+}
+
+.alx-side-problem-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 14px 4px 22px;
+  color: #f0a0a0;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.alx-side-problem-icon {
+  flex: none;
+}
+
+/* ---------- footer ---------- */
+.alx-side-footer {
+  flex: none;
+  border-top: 1px solid var(--alx-bg);
+  padding: 8px 10px;
+  display: flex;
+  gap: 6px;
+}
+
+.alx-side-upgrade-btn {
+  flex: 1;
+  text-align: center;
+  padding: 6px;
+  background: var(--alx-btn);
+  color: #ffffff;
+  border-radius: 4px;
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
 }

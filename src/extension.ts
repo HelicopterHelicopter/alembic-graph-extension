@@ -3,7 +3,10 @@ import { pickProject, type AlembicProject } from "./services/discovery";
 import { MigrationService, type MigrationServiceDeps } from "./services/migrationService";
 import { createStatusBar } from "./ui/statusBar";
 import { GraphPanelManager } from "./ui/graphPanel";
+import { SidebarViewProvider } from "./ui/sidebarView";
 import type { UiPrefs } from "./protocol/messages";
+
+const SIDEBAR_VIEW_ID = "alembicGraph.sidebar";
 
 const UI_PREFS_KEY = "alembicGraph.uiPrefs";
 const DEFAULT_UI_PREFS: UiPrefs = { order: "newest-bottom", density: "comfortable", expandCollapsed: false };
@@ -85,6 +88,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   if (project === null) {
     outputChannel.appendLine("no alembic project found");
+    const sidebarProvider = new SidebarViewProvider(context.extensionUri, null, null, (line) =>
+      outputChannel.appendLine(line),
+    );
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebarProvider));
     registerRemainingStubs(context, new Set());
     return;
   }
@@ -106,6 +113,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const panelManager = new GraphPanelManager(context, service, (line) => outputChannel.appendLine(line));
   context.subscriptions.push(panelManager);
   context.subscriptions.push(panelManager.registerSerializer());
+
+  const sidebarProvider = new SidebarViewProvider(context.extensionUri, service, panelManager, (line) =>
+    outputChannel.appendLine(line),
+  );
+  context.subscriptions.push(vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebarProvider));
 
   const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(project.versionsDir, "*.py"));
   watcher.onDidCreate(() => service.scheduleRefresh());
