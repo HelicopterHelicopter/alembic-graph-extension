@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#1e1e1e}
+::-webkit-scrollbar{width:14px;height:14px}
+::-webkit-scrollbar-corner{background:#1e1e1e}
+::-webkit-scrollbar-thumb{background:#424242;border:4px solid #1e1e1e;border-radius:8px}
+::-webkit-scrollbar-thumb:hover{background:#525252}
+@keyframes alxpulse{0%,100%{opacity:.5}50%{opacity:1}}
+@keyframes alxtoast{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+</style>
+</helmet>
+<div style="display:flex;flex-direction:column;height:100vh;min-height:640px;background:#1e1e1e;color:#cccccc;font-family:'Segoe UI',system-ui,-apple-system,sans-serif;overflow:hidden;font-size:13px;">
+
+  <div style="height:30px;flex:none;background:#323233;display:flex;align-items:center;padding:0 10px;gap:16px;border-bottom:1px solid #252526;user-select:none;">
+    <div style="display:flex;gap:8px;align-items:center;">
+      <div style="width:11px;height:11px;border-radius:50%;background:#ff5f57;"></div>
+      <div style="width:11px;height:11px;border-radius:50%;background:#febc2e;"></div>
+      <div style="width:11px;height:11px;border-radius:50%;background:#28c840;"></div>
+    </div>
+    <div style="display:flex;gap:15px;font-size:12px;color:#cccccc;opacity:.85;">
+      <span>File</span><span>Edit</span><span>Selection</span><span>View</span><span>Go</span><span>Run</span><span>Terminal</span>
+    </div>
+    <div style="flex:1;text-align:center;font-size:12px;color:#9d9d9d;">payments-api — Visual Studio Code</div>
+    <div style="width:120px;"></div>
+  </div>
+
+  <div style="flex:1;display:flex;min-height:0;">
+
+    <div style="width:48px;flex:none;background:#333333;display:flex;flex-direction:column;align-items:center;padding-top:8px;gap:2px;">
+      <div style="width:48px;height:44px;display:flex;align-items:center;justify-content:center;font-size:20px;color:#858585;">▤</div>
+      <div style="width:48px;height:44px;display:flex;align-items:center;justify-content:center;font-size:19px;color:#858585;">⌕</div>
+      <div style="width:48px;height:44px;display:flex;align-items:center;justify-content:center;font-size:19px;color:#858585;">⑂</div>
+      <div style="width:48px;height:44px;display:flex;align-items:center;justify-content:center;font-size:19px;color:#858585;">▷</div>
+      <div style="width:48px;height:44px;display:flex;align-items:center;justify-content:center;font-size:19px;color:#858585;">⬚</div>
+      <div style="width:48px;height:44px;display:flex;align-items:center;justify-content:center;font-size:20px;color:#ffffff;border-left:2px solid #ffffff;box-sizing:border-box;">◈</div>
+    </div>
+
+    <div style="width:250px;flex:none;background:#252526;display:flex;flex-direction:column;border-right:1px solid #1e1e1e;">
+      <div style="height:35px;flex:none;display:flex;align-items:center;padding:0 18px;font-size:11px;letter-spacing:.6px;color:#bbbbbb;text-transform:uppercase;">Alembic Migrations</div>
+      <div style="padding:4px 0;overflow-y:auto;flex:1;">
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 14px;font-size:11px;color:#8a8a8a;text-transform:uppercase;letter-spacing:.5px;">▾ Heads <span style="margin-left:auto;background:#cca700;color:#1e1e1e;font-weight:700;border-radius:9px;padding:0 6px;font-size:10px;">{{ headCount }}</span></div>
+        <sc-for list="{{ heads }}" as="h" hint-placeholder-count="2">
+          <div style="{{ h.style }}" onClick="{{ h.onSel }}">
+            <span style="color:#89d185;font-size:11px;">◆</span>
+            <span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#d0d0d0;">{{ h.hash }}</span>
+            <span style="font-size:11.5px;color:#9a9a9a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ h.msg }}</span>
+          </div>
+        </sc-for>
+        <div style="display:flex;align-items:center;gap:6px;padding:9px 14px 5px;font-size:11px;color:#8a8a8a;text-transform:uppercase;letter-spacing:.5px;">Current revision</div>
+        <div style="display:flex;align-items:center;gap:8px;padding:4px 14px 4px 22px;">
+          <span style="width:7px;height:7px;border-radius:50%;background:#4ec9b0;flex:none;"></span>
+          <span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#d0d0d0;">{{ currentHash }}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;padding:9px 14px 5px;font-size:11px;color:#8a8a8a;text-transform:uppercase;letter-spacing:.5px;">Problems</div>
+        <div style="display:flex;align-items:center;gap:8px;padding:4px 14px 4px 22px;color:#f0a0a0;font-size:11.5px;">
+          <span style="flex:none;">⚠</span><span>{{ brokenCount }} broken down_revision</span>
+        </div>
+      </div>
+      <div style="flex:none;border-top:1px solid #1e1e1e;padding:8px 10px;display:flex;gap:6px;">
+        <div style="flex:1;text-align:center;padding:6px;background:#0e639c;color:#fff;border-radius:4px;font-size:11.5px;cursor:pointer;" onClick="{{ onRefresh }}">↻ alembic upgrade head</div>
+      </div>
+    </div>
+
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0;">
+
+      <div style="height:36px;flex:none;background:#252526;display:flex;align-items:stretch;">
+        <div style="display:flex;align-items:center;gap:8px;padding:0 14px;background:#1e1e1e;color:#ffffff;font-size:12.5px;border-top:1px solid #0e639c;border-right:1px solid #252526;">
+          <span style="color:#89d185;">◈</span> Migration Graph
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:0 14px;color:#9d9d9d;font-size:12.5px;border-right:1px solid #1e1e1e;">env.py</div>
+      </div>
+
+      <div style="height:42px;flex:none;background:#1e1e1e;border-bottom:1px solid #2b2b2b;display:flex;align-items:center;padding:0 14px;gap:12px;">
+        <div style="font-size:12px;color:#cccccc;font-weight:600;">payments-api / alembic</div>
+        <div style="width:1px;height:18px;background:#3a3a3a;"></div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:#e2c08d;"><span style="width:7px;height:7px;background:#cca700;border-radius:50%;"></span>{{ headCount }} heads</div>
+        <div style="font-size:11.5px;color:#8a8a8a;">{{ revCountText }}</div>
+        <div style="flex:1;"></div>
+        <span style="font-size:11px;color:#8a8a8a;">Order</span>
+        <div style="display:flex;gap:4px;">
+          <div style="{{ orientBottom.style }}" onClick="{{ orientBottom.onClick }}">Newest ↓</div>
+          <div style="{{ orientTop.style }}" onClick="{{ orientTop.onClick }}">Newest ↑</div>
+        </div>
+        <div style="display:flex;gap:4px;margin-left:6px;">
+          <div style="{{ densComfort.style }}" onClick="{{ densComfort.onClick }}">Comfortable</div>
+          <div style="{{ densCompact.style }}" onClick="{{ densCompact.onClick }}">Compact</div>
+        </div>
+      </div>
+
+      <div style="flex:1;display:flex;min-height:0;">
+
+        <div style="flex:1;overflow:auto;position:relative;">
+          <div ref="{{ canvasRef }}" style="{{ canvasStyle }}">
+            <svg width="{{ canvasW }}" height="{{ canvasH }}" style="position:absolute;left:0;top:0;overflow:visible;pointer-events:none;">
+              <sc-for list="{{ edges }}" as="e" hint-placeholder-count="0"><path d="{{ e.d }}" style="{{ e.style }}"></path></sc-for>
+            </svg>
+
+            <sc-if value="{{ mergeHintShow }}" hint-placeholder-val="{{ false }}">
+              <div style="{{ mergeHintStyle }}">{{ mergeHintText }}</div>
+            </sc-if>
+
+            <sc-for list="{{ nodes }}" as="node" hint-placeholder-count="9">
+              <div style="{{ node.wrapStyle }}">
+                <sc-if value="{{ node.isReal }}" hint-placeholder-val="{{ true }}">
+                  <div style="{{ node.cardStyle }}" onPointerDown="{{ node.onDown }}">
+                    <div style="{{ node.stripeStyle }}"></div>
+                    <div style="display:flex;align-items:center;gap:7px;">
+                      <div style="{{ node.dotStyle }}"></div>
+                      <div style="{{ node.hashStyle }}">{{ node.hash }}</div>
+                      <div style="flex:1;"></div>
+                      <sc-for list="{{ node.badges }}" as="b" hint-placeholder-count="0"><div style="{{ b.style }}">{{ b.text }}</div></sc-for>
+                    </div>
+                    <div style="{{ node.msgStyle }}">{{ node.message }}</div>
+                    <div style="display:flex;align-items:center;gap:6px;min-width:0;">
+                      <sc-if value="{{ node.hasTag }}" hint-placeholder-val="{{ false }}"><div style="{{ node.tagStyle }}">{{ node.branchTag }}</div></sc-if>
+                      <div style="{{ node.metaStyle }}">{{ node.metaText }}</div>
+                    </div>
+                  </div>
+                  <sc-if value="{{ node.showBrokenHint }}" hint-placeholder-val="{{ false }}">
+                    <div style="{{ node.brokenHintStyle }}">⚠ down_revision missing — drag onto a parent to re-point</div>
+                  </sc-if>
+                </sc-if>
+                <sc-if value="{{ node.isGhost }}" hint-placeholder-val="{{ false }}">
+                  <div style="{{ node.cardStyle }}" onPointerDown="{{ node.onDown }}">
+                    <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#f0a0a0;font-weight:600;">⚠ missing revision</div>
+                    <div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#cf9b9b;">{{ node.hash }}</div>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ node.isCollapse }}" hint-placeholder-val="{{ false }}">
+                  <div style="{{ node.cardStyle }}" onPointerDown="{{ node.onDown }}">{{ node.collapseText }}</div>
+                </sc-if>
+              </div>
+            </sc-for>
+
+            <sc-if value="{{ toastShow }}" hint-placeholder-val="{{ false }}">
+              <div style="{{ toastStyle }}">{{ toastText }}</div>
+            </sc-if>
+          </div>
+        </div>
+
+        <sc-if value="{{ hasDetails }}" hint-placeholder-val="{{ false }}">
+          <div style="width:328px;flex:none;background:#252526;border-left:1px solid #1e1e1e;display:flex;flex-direction:column;min-height:0;">
+            <div style="height:38px;flex:none;display:flex;align-items:center;padding:0 14px;gap:8px;border-bottom:1px solid #1e1e1e;">
+              <span style="font-size:11px;letter-spacing:.6px;color:#bbbbbb;text-transform:uppercase;flex:1;">Revision detail</span>
+              <div style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:4px;cursor:pointer;color:#9d9d9d;font-size:15px;" onClick="{{ closeDetails }}">✕</div>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:16px 16px 24px;">
+              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+                <sc-for list="{{ details.badges }}" as="b" hint-placeholder-count="1"><div style="{{ b.style }}">{{ b.text }}</div></sc-for>
+              </div>
+              <div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;color:#ffffff;margin-bottom:4px;">{{ details.hash }}</div>
+              <div style="font-size:13.5px;color:#e0e0e0;line-height:1.4;margin-bottom:16px;">{{ details.message }}</div>
+
+              <div style="display:flex;flex-direction:column;gap:9px;font-size:12px;margin-bottom:18px;">
+                <div style="display:flex;gap:10px;"><span style="color:#8a8a8a;width:96px;flex:none;">author</span><span style="color:#cccccc;">{{ details.author }}</span></div>
+                <div style="display:flex;gap:10px;"><span style="color:#8a8a8a;width:96px;flex:none;">date</span><span style="color:#cccccc;">{{ details.date }}</span></div>
+                <div style="display:flex;gap:10px;"><span style="color:#8a8a8a;width:96px;flex:none;">status</span><span style="{{ details.statusStyle }}">{{ details.statusText }}</span></div>
+                <div style="display:flex;gap:10px;align-items:flex-start;"><span style="color:#8a8a8a;width:96px;flex:none;">down_revision</span>
+                  <div style="display:flex;flex-direction:column;gap:4px;">
+                    <sc-for list="{{ details.parents }}" as="p" hint-placeholder-count="1"><span style="{{ p.style }}">{{ p.hash }}</span></sc-for>
+                  </div>
+                </div>
+                <div style="display:flex;gap:10px;align-items:flex-start;"><span style="color:#8a8a8a;width:96px;flex:none;">file</span><span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#9cdcfe;word-break:break-all;">{{ details.path }}</span></div>
+              </div>
+
+              <sc-if value="{{ showSql }}" hint-placeholder-val="{{ true }}">
+                <div style="font-size:11px;letter-spacing:.5px;color:#8a8a8a;text-transform:uppercase;margin-bottom:8px;">Migration</div>
+                <div style="background:#1e1e1e;border:1px solid #2b2b2b;border-radius:6px;padding:12px 12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;line-height:1.6;overflow-x:auto;">
+                  <div style="color:#569cd6;">def <span style="color:#dcdcaa;">upgrade</span>():</div>
+                  <sc-for list="{{ details.up }}" as="l" hint-placeholder-count="1"><div style="{{ l.style }}">{{ l.text }}</div></sc-for>
+                  <div style="height:8px;"></div>
+                  <div style="color:#569cd6;">def <span style="color:#dcdcaa;">downgrade</span>():</div>
+                  <sc-for list="{{ details.down }}" as="l" hint-placeholder-count="1"><div style="{{ l.style }}">{{ l.text }}</div></sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </div>
+        </sc-if>
+
+      </div>
+    </div>
+  </div>
+
+  <div style="height:22px;flex:none;background:#007acc;display:flex;align-items:center;padding:0 12px;gap:14px;color:#ffffff;font-size:11.5px;">
+    <span>⑂ main</span>
+    <span style="background:rgba(255,255,255,.18);padding:0 7px;border-radius:9px;">◈ {{ headCount }} heads</span>
+    <span>current: {{ currentHash }}</span>
+    <div style="flex:1;"></div>
+    <span>{{ revCountText }}</span>
+    <span>Alembic 1.13</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1280,&quot;height&quot;:780},&quot;laneColorA&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#4aa3ff&quot;,&quot;options&quot;:[&quot;#4aa3ff&quot;,&quot;#4ec9b0&quot;,&quot;#dcdcaa&quot;,&quot;#e2c08d&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Lanes&quot;},&quot;laneColorB&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#c586c0&quot;,&quot;options&quot;:[&quot;#c586c0&quot;,&quot;#ce9178&quot;,&quot;#569cd6&quot;,&quot;#b5cea8&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Lanes&quot;},&quot;showSqlPreview&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Detail panel&quot;}}">
+class Component extends DCLogic {
+  constructor(props){
+    super(props);
+    this.state = {
+      nodes: this.seed(),
+      selectedId: 'R03',
+      showDetails: true,
+      orientation: 'bottom',
+      density: 'comfortable',
+      dragId: null, dx: 0, dy: 0, dragKind: null, hoverTargetId: null,
+      toast: null
+    };
+    this.onMove = this.onMove.bind(this);
+    this.onUp = this.onUp.bind(this);
+  }
+
+  seed(){
+    return [
+      {id:'COLLAPSE', kind:'collapse', lane:0, row:0, count:204},
+      {id:'R01', hash:'8f2a1c9d4e07', msg:'add product catalog', author:'sarah', date:'Mar 03', lane:0, row:1, down:['COLLAPSE'], applied:true},
+      {id:'R02', hash:'b2e5d3a10f66', msg:'create users table', author:'sarah', date:'Mar 07', lane:0, row:2, down:['R01'], applied:true},
+      {id:'R03', hash:'c3d6e4b721a8', msg:'add sessions and tokens', author:'miguel', date:'Mar 12', lane:0, row:3, down:['R02'], applied:true, current:true},
+      {id:'R04', hash:'d4c7f5309b2e', msg:'add oauth provider fields', author:'miguel', date:'Mar 18', lane:0, row:4, down:['R03']},
+      {id:'GHOST', kind:'ghost', hash:'e5b8a600cc11', lane:1, row:3},
+      {id:'R07', hash:'f6a9b7241d3c', msg:'billing: create plans', author:'lena', date:'Mar 20', lane:1, row:4, down:['GHOST'], broken:true, branch:'billing'},
+      {id:'R08', hash:'07b8c8552e4a', msg:'billing: add invoices', author:'lena', date:'Mar 24', lane:1, row:5, down:['R07'], branch:'billing'},
+      {id:'R05', hash:'18c9d9663f5b', msg:'merge oauth + billing', author:'sarah', date:'Mar 26', lane:0, row:6, down:['R04','R08'], merge:true},
+      {id:'R06', hash:'29dae0774a6c', msg:'add rate limiting', author:'miguel', date:'Mar 29', lane:0, row:7, down:['R05'], head:true},
+      {id:'R09', hash:'3aebf1885b7d', msg:'search index (experimental)', author:'lena', date:'Mar 30', lane:1, row:7, down:['R05'], head:true, branch:'experimental'}
+    ];
+  }
+
+  componentDidMount(){
+    window.addEventListener('pointermove', this.onMove);
+    window.addEventListener('pointerup', this.onUp);
+  }
+  componentWillUnmount(){
+    window.removeEventListener('pointermove', this.onMove);
+    window.removeEventListener('pointerup', this.onUp);
+    clearTimeout(this._tt);
+  }
+
+  rand12(){ let s=''; const h='0123456789abcdef'; for(let i=0;i<12;i++) s+=h[Math.floor(Math.random()*16)]; return s; }
+  slug(m){ return (m||'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'').slice(0,26); }
+
+  toast(text){ clearTimeout(this._tt); this.setState({toast:text}); this._tt=setTimeout(()=>this.setState({toast:null}),3800); }
+
+  down(n, e){
+    this.setState({selectedId:n.id, showDetails:true});
+    if(n.kind==='collapse'){ this.toast('Expanding history — loading 204 earlier revisions…'); return; }
+    if(n.kind==='ghost'){ return; }
+    if(n.head || n.broken){
+      if(e && e.preventDefault) e.preventDefault();
+      this._start = {x:e.clientX, y:e.clientY};
+      this.setState({dragId:n.id, dx:0, dy:0, dragKind: n.head?'merge':'repoint', hoverTargetId:null});
+    }
+  }
+
+  onMove(e){
+    const S = this.state;
+    if(!S.dragId) return;
+    const dx = e.clientX - this._start.x;
+    const dy = e.clientY - this._start.y;
+    let target = null;
+    if(this._canvas){
+      const r = this._canvas.getBoundingClientRect();
+      const px = e.clientX - r.left, py = e.clientY - r.top;
+      (this._layout||[]).forEach(L => {
+        if(L.id === S.dragId) return;
+        const ok = S.dragKind==='merge' ? L.head : (!L.kind);
+        if(!ok) return;
+        if(px>=L.left && px<=L.left+L.w && py>=L.top && py<=L.top+L.h) target = L.id;
+      });
+    }
+    this.setState({dx, dy, hoverTargetId:target});
+  }
+
+  onUp(){
+    const S = this.state;
+    if(!S.dragId) return;
+    const did = S.dragId, tgt = S.hoverTargetId, kind = S.dragKind;
+    if(tgt){
+      if(kind==='merge') this.mergeHeads(did, tgt);
+      else this.repoint(did, tgt);
+    }
+    this.setState({dragId:null, dx:0, dy:0, hoverTargetId:null, dragKind:null});
+  }
+
+  mergeHeads(a, b){
+    const hash = this.rand12();
+    this.setState(s => {
+      let nodes = s.nodes.map(n => (n.id===a||n.id===b) ? {...n, head:false} : n);
+      const A = nodes.find(n=>n.id===a), B = nodes.find(n=>n.id===b);
+      const lane = Math.min(A.lane, B.lane);
+      const row = Math.max(A.row, B.row) + 1;
+      const nn = {id:'M'+Date.now(), hash, msg:'merge heads '+A.hash.slice(0,4)+' + '+B.hash.slice(0,4), author:'you', date:'now', lane, row, down:[a,b], merge:true, head:true};
+      return {nodes:[...nodes, nn], selectedId:nn.id, showDetails:true};
+    });
+    this.toast('Created merge revision '+hash.slice(0,8)+'…  ·  alembic merge -m "merge heads"');
+  }
+
+  repoint(brokenId, targetId){
+    const t = this.state.nodes.find(n=>n.id===targetId);
+    this.setState(s => {
+      let nodes = s.nodes.filter(n => n.kind!=='ghost');
+      nodes = nodes.map(n => n.id===brokenId ? {...n, down:[targetId], broken:false} : n);
+      return {nodes};
+    });
+    this.toast('Re-pointed down_revision → '+(t?t.hash.slice(0,8):targetId)+'…  ·  broken link fixed');
+  }
+
+  onRefresh(){ this.toast('Reloaded history  ·  214 revisions  ·  '+this.state.nodes.filter(n=>n.head).length+' heads'); }
+
+  ops(m){
+    m = (m||'').toLowerCase();
+    if(m.includes('merge')) return {up:['pass'], down:['pass']};
+    if(m.includes('index')) return {up:["op.create_index('ix_docs_tsv', 'documents',", "              ['search_vector'])"], down:["op.drop_index('ix_docs_tsv')"]};
+    if(m.includes('rate limit')) return {up:["op.create_table('rate_limits',", "    sa.Column('key', sa.String(64), primary_key=True),", "    sa.Column('window', sa.Integer()))"], down:["op.drop_table('rate_limits')"]};
+    if(m.includes('create') || m.includes('table')){
+      const t = m.includes('users')?'users' : m.includes('plans')?'plans' : m.includes('invoices')?'invoices' : m.includes('catalog')?'products' : 'items';
+      return {up:["op.create_table('"+t+"',", "    sa.Column('id', sa.Integer(), primary_key=True),", "    sa.Column('name', sa.String(120)),", "    sa.Column('created_at', sa.DateTime()))"], down:["op.drop_table('"+t+"')"]};
+    }
+    if(m.includes('oauth') || m.includes('field') || m.includes('token') || m.includes('session'))
+      return {up:["op.add_column('users',", "    sa.Column('oauth_sub', sa.String(255)))"], down:["op.drop_column('users', 'oauth_sub')"]};
+    return {up:["op.add_column('items',", "    sa.Column('field', sa.String()))"], down:["op.drop_column('items', 'field')"]};
+  }
+
+  setOrient(v){ this.setState({orientation:v}); }
+  setDensity(v){ this.setState({density:v}); }
+
+  renderVals(){
+    const S = this.state, P = this.props || {};
+    const orient = S.orientation;
+    const compact = S.density === 'compact';
+    const laneA = P.laneColorA || '#4aa3ff';
+    const laneB = P.laneColorB || '#c586c0';
+    const laneC = '#4ec9b0';
+    const showSql = P.showSqlPreview !== false;
+
+    const CARD_W = 226, CARD_H = compact?76:92, ROW_GAP = compact?112:134, LANE_GAP = 252, PAD_X = 44, PAD_Y = 34;
+    const nodes = S.nodes;
+    const byId = {}; nodes.forEach(n => byId[n.id]=n);
+    let maxRow = 0, maxLane = 0;
+    nodes.forEach(n => { maxRow=Math.max(maxRow,n.row); maxLane=Math.max(maxLane,n.lane); });
+
+    const laneColor = l => l===0?laneA : l===1?laneB : laneC;
+    const wOf = n => n.kind==='ghost'?190 : CARD_W;
+    const hOf = n => n.kind==='ghost'?54 : n.kind==='collapse'?42 : CARD_H;
+    const leftOf = n => PAD_X + n.lane*LANE_GAP + (n.id===S.dragId? S.dx : 0);
+    const topOf = n => { const base = orient==='bottom' ? PAD_Y + n.row*ROW_GAP : PAD_Y + (maxRow-n.row)*ROW_GAP; return base + (n.id===S.dragId? S.dy : 0); };
+
+    const pos = {};
+    nodes.forEach(n => { const w=wOf(n), h=hOf(n), l=leftOf(n), t=topOf(n); pos[n.id]={l,t,w,h,cx:l+w/2,top:t,bottom:t+h}; });
+    this._layout = nodes.map(n => ({id:n.id, left:pos[n.id].l, top:pos[n.id].t, w:pos[n.id].w, h:pos[n.id].h, head:!!n.head, kind:n.kind}));
+
+    const canvasW = PAD_X + maxLane*LANE_GAP + CARD_W + 80;
+    const canvasH = PAD_Y + maxRow*ROW_GAP + CARD_H + 60;
+
+    const edges = [];
+    nodes.forEach(child => {
+      (child.down||[]).forEach(pid => {
+        const p = byId[pid]; if(!p) return;
+        const a = pos[pid], b = pos[child.id];
+        const upper = a.top<=b.top ? a : b;
+        const lower = a.top<=b.top ? b : a;
+        const sx = upper.cx, sy = upper.bottom, ex = lower.cx, ey = lower.top;
+        const mid = (sy+ey)/2;
+        const d = 'M '+sx+' '+sy+' C '+sx+' '+mid+' '+ex+' '+mid+' '+ex+' '+ey;
+        let color = laneColor(p.lane), dash = 'none', wdt = 2;
+        if(child.broken && p.kind==='ghost'){ color = '#f14c4c'; dash = '5 4'; }
+        else if(p.kind==='collapse'){ color = '#555555'; dash = '3 5'; }
+        edges.push({id:pid+'>'+child.id, d, style:{fill:'none', stroke:color, strokeWidth:wdt, strokeDasharray:dash, strokeLinecap:'round', opacity: child.applied?0.95:0.68}});
+      });
+    });
+
+    const badge = (color,bg,border) => ({fontSize:'8.5px', fontWeight:700, letterSpacing:'.6px', padding:'2px 5px', borderRadius:'4px', color, background:bg, border:'1px solid '+border, lineHeight:1, fontFamily:"'Segoe UI',system-ui,sans-serif", flex:'none', whiteSpace:'nowrap'});
+
+    const view = nodes.map(n => {
+      const p = pos[n.id];
+      const lc = laneColor(n.lane);
+      const draggable = !!(n.head || n.broken);
+      const wrapStyle = {position:'absolute', left:p.l+'px', top:p.t+'px', width:p.w+'px', height:p.h+'px', overflow:'visible', touchAction: draggable?'none':'auto', zIndex: n.id===S.dragId?60 : (n.id===S.selectedId?25:6)};
+      const vo = {id:n.id, wrapStyle, isReal: !n.kind, isGhost: n.kind==='ghost', isCollapse: n.kind==='collapse', badges:[], hasTag:false, showBrokenHint:false, onDown: (e)=>this.down(n,e)};
+
+      if(n.kind==='collapse'){
+        vo.collapseText = '⋮   '+n.count+' earlier revisions';
+        vo.cardStyle = {position:'absolute', inset:'0', display:'flex', alignItems:'center', justifyContent:'center', border:'1px dashed #4a4a4a', borderRadius:'7px', background:'rgba(255,255,255,.02)', color:'#8a8a8a', fontSize:'11.5px', fontFamily:"'Segoe UI',system-ui,sans-serif", cursor:'pointer'};
+        return vo;
+      }
+      if(n.kind==='ghost'){
+        vo.hash = n.hash;
+        vo.cardStyle = {position:'absolute', inset:'0', display:'flex', flexDirection:'column', justifyContent:'center', gap:'3px', padding:'0 14px', border:'1.5px dashed #f14c4c', borderRadius:'7px', background:'rgba(241,76,76,.08)', cursor:'default'};
+        return vo;
+      }
+
+      const selected = n.id===S.selectedId;
+      const isTarget = n.id===S.hoverTargetId;
+      let border = selected ? '#1c8fd6' : '#3a3d41';
+      let bg = selected ? '#093251' : '#2b2d2e';
+      let shadow = n.id===S.dragId ? '0 14px 30px rgba(0,0,0,.6)' : (selected ? '0 0 0 1px #1c8fd6' : '0 1px 2px rgba(0,0,0,.3)');
+      if(isTarget){ const ring = S.dragKind==='merge' ? '#89d185' : '#4aa3ff'; border = ring; shadow = '0 0 0 2px '+ring+', 0 0 20px '+ring+'55'; }
+
+      vo.cardStyle = {position:'absolute', inset:'0', display:'flex', flexDirection:'column', gap:'5px', padding: compact?'8px 11px 8px 14px':'10px 12px 10px 16px', background:bg, border:'1px solid '+border, borderRadius:'7px', boxShadow:shadow, cursor: draggable?'grab':'pointer', overflow:'hidden'};
+      vo.stripeStyle = {position:'absolute', left:0, top:0, bottom:0, width:'4px', background:lc, opacity: n.applied?1:0.32, borderRadius:'7px 0 0 7px'};
+      vo.hash = n.hash;
+      vo.hashStyle = {fontFamily:'ui-monospace,Menlo,Consolas,monospace', fontSize:'11px', color: n.applied?'#d7d7d7':'#9a9a9a', letterSpacing:'.3px'};
+      vo.message = n.msg;
+      vo.msgStyle = {fontSize: compact?'12px':'12.5px', fontWeight:600, color: n.applied?'#eaeaea':'#bdbdbd', lineHeight:1.25, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'};
+      vo.metaText = n.author+'   ·   '+n.date + (n.applied?'':'   ·   not applied');
+      vo.metaStyle = {fontSize:'10.5px', color:'#8a8a8a', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'};
+      vo.dotStyle = {width:'8px', height:'8px', borderRadius:'50%', flex:'none', background: n.applied?'#4ec9b0':'transparent', border:'1.5px solid '+(n.applied?'#4ec9b0':'#6d6d6d'), boxShadow: n.current?'0 0 0 3px rgba(28,143,214,.35)':'none'};
+
+      if(n.current) vo.badges.push({text:'CURRENT', style:badge('#ffffff','#0e639c','#1c8fd6')});
+      if(n.head) vo.badges.push({text:'HEAD', style:badge('#0c2a16','#89d185','#89d185')});
+      if(n.merge) vo.badges.push({text:'MERGE', style:badge('#efe0ff','#5a3a80','#8a5cc0')});
+      if(n.broken) vo.badges.push({text:'BROKEN', style:badge('#ffffff','#b23838','#f14c4c')});
+      if(n.branch){ vo.hasTag = true; vo.branchTag = n.branch; vo.tagStyle = badge(lc,'transparent',lc); }
+
+      if(n.broken){
+        vo.showBrokenHint = true;
+        vo.brokenHintStyle = {position:'absolute', left:'0', top:'calc(100% + 4px)', width:'100%', fontSize:'10px', color:'#f0a0a0', lineHeight:1.3, animation:'alxpulse 1.8s ease-in-out infinite'};
+      }
+      return vo;
+    });
+
+    const heads = nodes.filter(n => n.head);
+    let mergeHintShow = false, mergeHintStyle = {}, mergeHintText = '';
+    if(heads.length >= 2 && !S.dragId){
+      const a = pos[heads[0].id], b = pos[heads[1].id];
+      const midx = (a.cx + b.cx)/2;
+      const topy = Math.min(a.top, b.top) - 34;
+      mergeHintShow = true;
+      mergeHintText = 'drag one head onto the other to merge  ⇄';
+      mergeHintStyle = {position:'absolute', left:(midx-125)+'px', top:topy+'px', width:'250px', textAlign:'center', fontSize:'11px', color:'#89d185', background:'rgba(137,209,133,.10)', border:'1px dashed rgba(137,209,133,.5)', borderRadius:'6px', padding:'4px 8px', pointerEvents:'none', animation:'alxpulse 2s ease-in-out infinite', zIndex:2};
+    }
+
+    const cur = nodes.find(n => n.current);
+    const currentHash = cur ? cur.hash.slice(0,10) : '—';
+    const brokenCount = nodes.filter(n => n.broken).length;
+    const revTotal = 214 - 11 + nodes.filter(n => !n.kind).length;
+
+    const headsSidebar = heads.map(h => ({
+      id:h.id, hash:h.hash.slice(0,10), msg:h.msg,
+      onSel: () => this.setState({selectedId:h.id, showDetails:true}),
+      style: {display:'flex', alignItems:'center', gap:'8px', padding:'5px 14px 5px 22px', cursor:'pointer', background: h.id===S.selectedId?'#04395e':'transparent'}
+    }));
+
+    const toggleBtn = (active) => ({padding:'4px 9px', fontSize:'11px', borderRadius:'5px', border:'1px solid '+(active?'#0e639c':'#3a3d41'), background: active?'#094771':'#2a2d2e', color: active?'#ffffff':'#bbbbbb', cursor:'pointer', whiteSpace:'nowrap', userSelect:'none'});
+
+    // details
+    let hasDetails = false, details = null;
+    const sel = byId[S.selectedId];
+    if(S.showDetails && sel && !sel.kind){
+      hasDetails = true;
+      const parents = (sel.down||[]).map(pid => {
+        const pn = byId[pid];
+        const missing = pn && pn.kind==='ghost';
+        const isCol = pn && pn.kind==='collapse';
+        const txt = missing ? pn.hash+'  (missing)' : isCol ? '(root history)' : (pn ? pn.hash : pid);
+        return {hash:txt, style:{fontFamily:'ui-monospace,Menlo,Consolas,monospace', fontSize:'11px', color: missing?'#f14c4c':'#9cdcfe'}};
+      });
+      if(parents.length===0) parents.push({hash:'None  (base)', style:{fontFamily:'ui-monospace,Menlo,Consolas,monospace', fontSize:'11px', color:'#8a8a8a'}});
+      const dbadges = [];
+      if(sel.current) dbadges.push({text:'CURRENT', style:badge('#ffffff','#0e639c','#1c8fd6')});
+      if(sel.head) dbadges.push({text:'HEAD', style:badge('#0c2a16','#89d185','#89d185')});
+      if(sel.merge) dbadges.push({text:'MERGE', style:badge('#efe0ff','#5a3a80','#8a5cc0')});
+      if(sel.broken) dbadges.push({text:'BROKEN', style:badge('#ffffff','#b23838','#f14c4c')});
+      if(sel.branch) dbadges.push({text:sel.branch, style:badge(laneColor(sel.lane),'transparent',laneColor(sel.lane))});
+      const op = this.ops(sel.msg);
+      const codeLine = (t) => ({text:'    '+t, style:{color: t.trim().startsWith('#')?'#6a9955':'#d4d4d4', whiteSpace:'pre'}});
+      details = {
+        hash: sel.hash, message: sel.msg, author: sel.author, date: sel.date,
+        path: 'alembic/versions/'+sel.hash.slice(0,12)+'_'+this.slug(sel.msg)+'.py',
+        parents, badges: dbadges,
+        statusText: sel.applied?'Applied':'Pending',
+        statusStyle: sel.applied ? {color:'#89d185'} : {color:'#e2c08d'},
+        up: op.up.map(codeLine), down: op.down.map(codeLine)
+      };
+    }
+
+    return {
+      headCount: heads.length,
+      revCountText: revTotal+' revisions',
+      brokenCount,
+      currentHash,
+      heads: headsSidebar,
+      onRefresh: () => this.onRefresh(),
+      orientBottom: {style: toggleBtn(orient==='bottom'), onClick: () => this.setOrient('bottom')},
+      orientTop: {style: toggleBtn(orient==='top'), onClick: () => this.setOrient('top')},
+      densComfort: {style: toggleBtn(!compact), onClick: () => this.setDensity('comfortable')},
+      densCompact: {style: toggleBtn(compact), onClick: () => this.setDensity('compact')},
+      canvasRef: (el) => { this._canvas = el; },
+      canvasStyle: {position:'relative', width:canvasW+'px', height:canvasH+'px', minWidth:'100%', minHeight:'100%', backgroundImage:'radial-gradient(circle, #2a2a2a 1px, transparent 1px)', backgroundSize:'23px 23px', backgroundPosition:'14px 14px'},
+      canvasW, canvasH,
+      edges,
+      nodes: view,
+      mergeHintShow, mergeHintStyle, mergeHintText,
+      toastShow: !!S.toast,
+      toastText: S.toast || '',
+      toastStyle: {position:'absolute', right:'20px', bottom:'20px', maxWidth:'360px', background:'#252526', border:'1px solid #3a3d41', borderLeft:'3px solid #89d185', borderRadius:'6px', padding:'11px 14px', fontSize:'12px', color:'#e0e0e0', boxShadow:'0 8px 24px rgba(0,0,0,.5)', animation:'alxtoast .18s ease-out', zIndex:80, lineHeight:1.4},
+      hasDetails, details, showSql,
+      closeDetails: () => this.setState({showDetails:false})
+    };
+  }
+}
+</script>
+</body>
+</html>
