@@ -1,0 +1,62 @@
+import type { GraphLayout, Problem } from "../core/types";
+
+// ---------- shared payloads ----------
+export interface UiPrefs {
+  order: "newest-top" | "newest-bottom";
+  density: "comfortable" | "compact";
+  expandCollapsed: boolean;
+}
+
+export interface AppState {
+  project: { label: string; iniPath: string } | null;  // null = no alembic.ini found
+  layout: GraphLayout;
+  heads: { id: string; message: string }[];
+  currentIds: string[];
+  problems: Problem[];
+  dbReachable: boolean;
+  /** Hex color per lane index. */
+  laneColors: string[];
+  counts: { revisions: number; heads: number; problems: number };
+  config: { showSqlPreview: boolean };
+  ui: UiPrefs;
+}
+
+export interface RevisionDetail {
+  id: string; hash: string; message: string;
+  author: string | null; date: string | null;
+  applied: boolean | null; isCurrent: boolean;
+  isHead: boolean; isMerge: boolean; isBroken: boolean;
+  branchLabel: string | null;
+  downRevisions: { id: string; missing: boolean }[];
+  filePath: string;
+  upgradeBody: string | null;   // null when showSqlPreview off
+  downgradeBody: string | null;
+}
+
+// ---------- webview -> host ----------
+export type WebviewToHostMessage =
+  | { type: "ready"; restored: Partial<UiPrefs> | null }
+  | { type: "select"; id: string | null }
+  | { type: "merge"; a: string; b: string }
+  | { type: "repoint"; ghostId: string; targetId: string }
+  | { type: "upgrade" }
+  | { type: "upgradeTo"; id: string }
+  | { type: "downgradeTo"; id: string }
+  | { type: "previewSql"; id: string | null }   // null = head(s)
+  | { type: "newRevision" }
+  | { type: "copyId"; id: string }
+  | { type: "exportSvg"; svg: string }
+  | { type: "refresh" }
+  | { type: "setOrientation"; order: UiPrefs["order"] }
+  | { type: "setDensity"; density: UiPrefs["density"] }
+  | { type: "expandCollapse" }
+  | { type: "openFile"; id: string }
+  | { type: "openGraph" };   // sidebar only
+
+// ---------- host -> webview ----------
+export type HostToWebviewMessage =
+  | { type: "state"; state: AppState }
+  | { type: "detail"; detail: RevisionDetail | null }
+  | { type: "selectNode"; id: string }
+  | { type: "toast"; level: "info" | "success" | "error"; text: string }
+  | { type: "busy"; operation: "merge" | "upgrade" | "downgrade" | "scan" | "revision" | "sql"; active: boolean };
