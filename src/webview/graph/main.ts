@@ -58,14 +58,14 @@ onMessage((msg) => {
       renderStore();
       break;
     case "detail":
-      // Guard against a stale response for a selection the user has since moved on from (the
-      // protocol carries no request id — a non-null detail is self-describing via its own `id`,
-      // so drop it if it no longer matches the current selection; a null response has no id to
-      // check, so it's accepted unconditionally, same as the synchronous real host: VS Code's
-      // webview message channel is FIFO in both directions and GraphPanelManager's "select" case
-      // has no async gap, so responses land in request order there — this guard only matters for
-      // a host (or the dev harness) whose response timing could ever reorder).
-      if (msg.detail === null || msg.detail.id === store.selectedId) {
+      // Guard against a stale response for a selection the user has since moved on from.
+      // `forId` names the id the response answers (null for a deselect), so one symmetric rule
+      // covers both null and non-null: apply the message only if it still answers the current
+      // selection. This matters even though VS Code's webview message channel is FIFO in both
+      // directions and GraphPanelManager's "select" case has no async gap — a *later* select can
+      // still be posted before an *earlier* select's response is handled, and without checking
+      // `forId` a stale null response could wipe out a valid, newer detail (or vice versa).
+      if (msg.forId === store.selectedId) {
         store.detail = msg.detail;
         renderStore();
       }

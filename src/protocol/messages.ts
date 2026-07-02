@@ -56,7 +56,7 @@ export type WebviewToHostMessage =
 // ---------- host -> webview ----------
 export type HostToWebviewMessage =
   | { type: "state"; state: AppState }
-  | { type: "detail"; detail: RevisionDetail | null }
+  | { type: "detail"; forId: string | null; detail: RevisionDetail | null }
   | { type: "selectNode"; id: string }
   | { type: "toast"; level: "info" | "success" | "error"; text: string }
   | { type: "busy"; operation: "merge" | "upgrade" | "downgrade" | "scan" | "revision" | "sql"; active: boolean };

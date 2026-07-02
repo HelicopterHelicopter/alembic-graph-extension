@@ -52,21 +52,24 @@
   });
 
   // Mirrors GraphPanelManager's "select" case -> MigrationService.getDetail(): looks `id` up in
-  // details.json and posts a "detail" message back. Fetches fresh every time (simplicity over
-  // caching — this is a dev-only stub) so the fetch's Promise chain is what makes the response
-  // land asynchronously, same as a real cross-process postMessage round trip would. Unlike the
-  // real host (whose webview message channel is FIFO and whose "select" handler has no async
-  // gap, so responses always land in request order), these are independent concurrent fetches —
-  // if the user clicks node A then B before A's fetch resolves, A's response can land after B's.
-  // Drop it in that case: only post if `id` still matches the LATEST select, not just the one
-  // this call started for.
+  // details.json and posts a "detail" message back, tagged with `forId` (the id this response
+  // answers — the protocol's own race guard, see src/webview/graph/main.ts) so the webview can
+  // discard it if a later select has since superseded it. Fetches fresh every time (simplicity
+  // over caching — this is a dev-only stub) so the fetch's Promise chain is what makes the
+  // response land asynchronously, same as a real cross-process postMessage round trip would.
+  // Unlike the real host (whose webview message channel is FIFO and whose "select" handler has
+  // no async gap, so responses always land in request order), these are independent concurrent
+  // fetches — if the user clicks node A then B before A's fetch resolves, A's response can land
+  // after B's. This harness-side check (only post if `id` still matches the LATEST select) is
+  // redundant with the webview's own `forId` guard, but keeps this stub from spamming stale
+  // "detail" messages it already knows are superseded.
   function respondToSelect(id) {
     fetch("./details.json")
       .then((r) => r.json())
       .then((details) => {
         if (id !== pendingSelectId) return; // superseded by a later select — stale, drop it
         const detail = id !== null && Object.prototype.hasOwnProperty.call(details, id) ? details[id] : null;
-        window.postMessage({ type: "detail", detail }, "*");
+        window.postMessage({ type: "detail", forId: id, detail }, "*");
       })
       .catch((err) => {
         console.error("[harness] failed to load details.json — run `node scripts/dump-state.mjs` first", err);

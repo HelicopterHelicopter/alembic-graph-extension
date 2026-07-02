@@ -130,7 +130,7 @@ export class GraphPanelManager {
       }
       case "select": {
         const detail = msg.id === null ? null : this.service.getDetail(msg.id);
-        void panel.webview.postMessage({ type: "detail", detail });
+        void panel.webview.postMessage({ type: "detail", forId: msg.id, detail });
         break;
       }
       default:

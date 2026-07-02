@@ -200,7 +200,7 @@ export class MigrationService {
    * Sync, pure-over-caches assembly of the revision detail panel payload. Returns null when
    * there's no cached graph yet, or `id` isn't a real revision (unknown id, or a ghost/collapse
    * placeholder id — neither has a graph node). GraphPanelManager forwards a null straight
-   * through as `{type:"detail", detail:null}` so the webview knows to hide the panel.
+   * through as `{type:"detail", forId:id, detail:null}` so the webview knows to hide the panel.
    */
   getDetail(id: string): RevisionDetail | null {
     const graph = this.cachedGraph;
