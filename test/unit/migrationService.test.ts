@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { MigrationService, type MigrationServiceDeps } from "../../src/services/migrationService";
+import { extractFunctionBody } from "../../src/core/parser";
 import type { UiPrefs } from "../../src/protocol/messages";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -281,5 +282,115 @@ describe("MigrationService edge cases (self-review)", () => {
 
     expect(listener).not.toHaveBeenCalled();
     expect(service.getState()).toBeNull();
+  });
+});
+
+describe("MigrationService.getDetail", () => {
+  it("returns null before any refresh has completed", () => {
+    const service = new MigrationService(makeDeps());
+    expect(service.getDetail("8f2a1c9d4e07")).toBeNull();
+  });
+
+  it("known id (a root revision): full detail with real upgrade/downgrade body text from its fixture file, downRevisions []", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    const detail = service.getDetail("8f2a1c9d4e07");
+    expect(detail).not.toBeNull();
+
+    const rawContent = readFileSync(
+      path.join(BROKEN_VERSIONS_DIR, "8f2a1c9d4e07_create_products_table.py"),
+      "utf8",
+    );
+    // Cross-checked against the real parser (not re-derived by hand) so this doesn't silently
+    // drift if the fixture file changes, while still asserting real, non-empty body text below.
+    expect(detail!.upgradeBody).toBe(extractFunctionBody(rawContent, "upgrade"));
+    expect(detail!.downgradeBody).toBe(extractFunctionBody(rawContent, "downgrade"));
+    expect(detail!.upgradeBody).toContain("op.create_table(");
+    expect(detail!.upgradeBody).toContain("'products'");
+    expect(detail!.downgradeBody).toBe("op.drop_table('products')");
+
+    expect(detail).toMatchObject({
+      id: "8f2a1c9d4e07",
+      hash: "8f2a1c9d4e07",
+      message: "create products table",
+      author: null,
+      date: "2026-05-01 10:01:00.000000",
+      applied: null, // appliedSet is always null pre-Task 13
+      isCurrent: false,
+      isHead: false,
+      isMerge: false,
+      isBroken: false,
+      branchLabel: null,
+      downRevisions: [],
+    });
+    expect(detail!.filePath).toContain("8f2a1c9d4e07_create_products_table.py");
+  });
+
+  it("a broken child lists its missing down_revision with missing: true", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    const detail = service.getDetail("5c0d13aa7d9f");
+    expect(detail).not.toBeNull();
+    expect(detail!.isBroken).toBe(true);
+    expect(detail!.downRevisions).toEqual([{ id: "deadbeef0000", missing: true }]);
+  });
+
+  it("a merge node has two non-missing downRevisions (in source order) and 'pass' bodies", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    const detail = service.getDetail("29dae0774a6c");
+    expect(detail).not.toBeNull();
+    expect(detail!.isMerge).toBe(true);
+    expect(detail!.downRevisions).toEqual([
+      { id: "18c9d9663f5b", missing: false },
+      { id: "07b8c8552e4a", missing: false },
+    ]);
+    expect(detail!.upgradeBody).toBe("pass");
+    expect(detail!.downgradeBody).toBe("pass");
+  });
+
+  it("showSqlPreview: false yields null upgrade/downgrade bodies (both, not just one)", async () => {
+    const deps = makeDeps({ getConfig: vi.fn(() => ({ ...DEFAULT_CONFIG, showSqlPreview: false })) });
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    const detail = service.getDetail("29dae0774a6c");
+    expect(detail).not.toBeNull();
+    expect(detail!.upgradeBody).toBeNull();
+    expect(detail!.downgradeBody).toBeNull();
+  });
+
+  it("re-reads showSqlPreview live at call time, not the value captured at last refresh", async () => {
+    let showSqlPreview = true;
+    const deps = makeDeps({ getConfig: vi.fn(() => ({ ...DEFAULT_CONFIG, showSqlPreview })) });
+    const service = new MigrationService(deps);
+    await service.refresh(); // scanned while showSqlPreview was true
+
+    showSqlPreview = false; // flipped without a re-refresh
+    const detail = service.getDetail("29dae0774a6c");
+    expect(detail!.upgradeBody).toBeNull();
+    expect(detail!.downgradeBody).toBeNull();
+  });
+
+  it("unknown id returns null", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    expect(service.getDetail("not-a-real-revision-id")).toBeNull();
+  });
+
+  it("a ghost id (referenced by a broken child but no file of its own) returns null", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    expect(service.getDetail("deadbeef0000")).toBeNull();
   });
 });

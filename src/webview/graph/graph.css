@@ -35,6 +35,12 @@
   --alx-toast-bg: var(--vscode-editorWidget-background, #252526);
   --alx-toast-border: var(--vscode-editorWidget-border, #3a3d41);
   --alx-toast-fg: var(--vscode-foreground, #e0e0e0);
+
+  /* Revision detail panel (Task 10). */
+  --alx-fg-bright: var(--vscode-editor-foreground, #ffffff);
+  --alx-detail-title: var(--vscode-descriptionForeground, #bbbbbb);
+  --alx-detail-close: var(--vscode-icon-foreground, #9d9d9d);
+  --alx-detail-message: var(--vscode-foreground, #e0e0e0);
 }
 
 * {
@@ -185,7 +191,13 @@ body {
   color: #ffffff;
 }
 
-/* ---------- canvas ---------- */
+/* ---------- canvas row (viewport + optional detail panel) ---------- */
+.alx-canvas-row {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
 .alx-canvas-viewport {
   flex: 1;
   overflow: auto;
@@ -443,6 +455,180 @@ body {
   pointer-events: none;
   animation: alxpulse 2s ease-in-out infinite;
   z-index: 2;
+}
+
+/* ---------- revision detail panel ---------- */
+.alx-detail-panel {
+  width: 328px;
+  flex: none;
+  background: var(--alx-panel);
+  border-left: 1px solid var(--alx-bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.alx-detail-header {
+  height: 38px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  gap: 8px;
+  border-bottom: 1px solid var(--alx-bg);
+}
+
+.alx-detail-title {
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  color: var(--alx-detail-title);
+  text-transform: uppercase;
+  flex: 1;
+}
+
+.alx-detail-close {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--alx-detail-close);
+  font-size: 15px;
+}
+.alx-detail-close:hover {
+  background: var(--alx-toggle-bg);
+}
+
+.alx-detail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 16px 24px;
+}
+
+.alx-detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.alx-detail-tag {
+  color: var(--alx-dim);
+  border-color: var(--alx-dim);
+}
+
+.alx-detail-hash {
+  font-family: var(--alx-mono);
+  font-size: 14px;
+  color: var(--alx-fg-bright);
+  margin-bottom: 4px;
+}
+
+.alx-detail-message {
+  font-size: 13.5px;
+  color: var(--alx-detail-message);
+  line-height: 1.4;
+  margin-bottom: 16px;
+}
+
+.alx-detail-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 12px;
+  margin-bottom: 18px;
+}
+
+.alx-detail-row {
+  display: flex;
+  gap: 10px;
+}
+.alx-detail-row--start {
+  align-items: flex-start;
+}
+
+.alx-detail-key {
+  color: var(--alx-dim);
+  width: 96px;
+  flex: none;
+}
+
+.alx-detail-value {
+  color: var(--alx-fg);
+}
+.alx-detail-status--applied {
+  color: #89d185;
+}
+.alx-detail-status--pending {
+  color: #e2c08d;
+}
+.alx-detail-status--unknown {
+  color: var(--alx-dim);
+}
+
+.alx-detail-parents {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.alx-detail-parent {
+  font-family: var(--alx-mono);
+  font-size: 11px;
+  color: #9cdcfe;
+}
+.alx-detail-parent--missing {
+  color: #f14c4c;
+}
+.alx-detail-parent--none {
+  color: var(--alx-dim);
+}
+
+.alx-detail-file {
+  font-family: var(--alx-mono);
+  font-size: 11px;
+  color: #9cdcfe;
+  word-break: break-all;
+  cursor: pointer;
+}
+.alx-detail-file:hover {
+  text-decoration: underline;
+}
+
+.alx-detail-section-label {
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--alx-dim);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.alx-detail-code {
+  background: var(--alx-bg);
+  border: 1px solid var(--alx-border);
+  border-radius: 6px;
+  padding: 12px 12px;
+  font-family: var(--alx-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+.alx-detail-code-def {
+  color: #569cd6;
+}
+.alx-detail-code-name {
+  color: #dcdcaa;
+}
+.alx-detail-code-line {
+  white-space: pre;
+  color: #d4d4d4;
+}
+.alx-detail-code-comment {
+  color: #6a9955;
+}
+.alx-detail-code-spacer {
+  height: 8px;
 }
 
 /* ---------- toast ---------- */

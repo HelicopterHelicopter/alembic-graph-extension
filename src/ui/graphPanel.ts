@@ -128,6 +128,11 @@ export class GraphPanelManager {
         if (node?.filePath) void vscode.window.showTextDocument(vscode.Uri.file(node.filePath));
         break;
       }
+      case "select": {
+        const detail = msg.id === null ? null : this.service.getDetail(msg.id);
+        void panel.webview.postMessage({ type: "detail", detail });
+        break;
+      }
       default:
         this.log(`graph panel: message not implemented yet: ${msg.type}`);
     }

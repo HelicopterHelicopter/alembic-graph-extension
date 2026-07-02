@@ -7,11 +7,19 @@
  * inline styles — every other visual rule lives in a graph.css class.
  */
 import type { GraphLayout, LayoutNode } from "../../core/types";
-import type { AppState, UiPrefs } from "../../protocol/messages";
+import type { AppState, RevisionDetail, UiPrefs } from "../../protocol/messages";
+import { buildBadgeItems } from "./badges";
+import { buildDetailPanel, type DetailHandlers } from "./detail";
 import { canvasSize, nodeSize, nodeXY, type Density } from "./metrics";
 
 export interface ViewState {
   selectedId: string | null;
+  /** Last detail payload the host sent for the current selection; null while unknown/loading or
+   * when the selected id has no detail (ghost/collapse). */
+  detail: RevisionDetail | null;
+  /** Whether the panel should be shown at all — independent of `detail`, so closing it (✕) keeps
+   * the card selection/highlight while hiding the panel (matches the design's `closeDetails`). */
+  detailOpen: boolean;
 }
 
 export interface Handlers {
@@ -19,6 +27,8 @@ export interface Handlers {
   onToggleOrder(order: UiPrefs["order"]): void;
   onToggleDensity(density: UiPrefs["density"]): void;
   onExpandCollapse(): void;
+  onCloseDetail(): void;
+  onOpenFile(id: string): void;
 }
 
 interface Pos {
@@ -50,7 +60,16 @@ export function render(root: HTMLElement, state: AppState, view: ViewState, hand
   const toolbar = buildToolbar(state, handlers);
   const canvasViewport = buildCanvasViewport(state, view, handlers, positions);
 
-  root.replaceChildren(toolbar, canvasViewport, toastLayer);
+  const canvasRow = document.createElement("div");
+  canvasRow.className = "alx-canvas-row";
+  canvasRow.append(canvasViewport);
+
+  if (view.detailOpen && view.detail !== null) {
+    const detailHandlers: DetailHandlers = { onClose: handlers.onCloseDetail, onOpenFile: handlers.onOpenFile };
+    canvasRow.append(buildDetailPanel(view.detail, detailHandlers));
+  }
+
+  root.replaceChildren(toolbar, canvasRow, toastLayer);
 }
 
 // ---------- toast ----------
@@ -256,7 +275,12 @@ function buildNodeElement(
   wrapper.style.zIndex = String(node.id === view.selectedId ? 25 : 6);
 
   if (node.kind === "ghost") {
-    wrapper.append(buildGhostCard(node));
+    const ghost = buildGhostCard(node);
+    // Per the design (onPointerDown on every node kind): a ghost is selectable — the host has no
+    // graph node for it, so `select` resolves to a null detail and the panel simply stays hidden
+    // (see ViewState.detail / render()'s `view.detail !== null` gate).
+    ghost.addEventListener("click", () => handlers.onSelect(node.id));
+    wrapper.append(ghost);
     return wrapper;
   }
   if (node.kind === "collapse") {
@@ -383,21 +407,12 @@ function metaText(node: LayoutNode): string {
 }
 
 function buildBadges(node: LayoutNode): HTMLElement | null {
-  const items: { text: string; cls: string }[] = [];
-  if (node.isCurrent) items.push({ text: "CURRENT", cls: "alx-badge--current" });
-  if (node.isHead) items.push({ text: "HEAD", cls: "alx-badge--head" });
-  if (node.isMerge) items.push({ text: "MERGE", cls: "alx-badge--merge" });
-  if (node.isBroken) items.push({ text: "BROKEN", cls: "alx-badge--broken" });
+  const items = buildBadgeItems(node);
   if (items.length === 0) return null;
 
   const wrap = document.createElement("div");
   wrap.className = "alx-badges";
-  for (const item of items) {
-    const badge = document.createElement("div");
-    badge.className = `alx-badge ${item.cls}`;
-    badge.textContent = item.text;
-    wrap.append(badge);
-  }
+  wrap.append(...items);
   return wrap;
 }
 

@@ -11,9 +11,9 @@
  */
 import { buildGraph } from "../core/graph";
 import { layoutGraph } from "../core/layout";
-import { parseRevisionSource } from "../core/parser";
+import { extractFunctionBody, parseRevisionSource } from "../core/parser";
 import type { MigrationGraph } from "../core/types";
-import type { AppState, UiPrefs } from "../protocol/messages";
+import type { AppState, RevisionDetail, UiPrefs } from "../protocol/messages";
 
 export interface MigrationServiceDeps {
   /** List and read all *.py files in the versions dir. */
@@ -33,6 +33,9 @@ export class MigrationService {
   /** Parsed graph from the last successful refresh — reused by setExpandCollapsed so it never
    * needs to re-read files just to change the collapse/expand display option. */
   private cachedGraph: MigrationGraph | null = null;
+  /** Raw source text per file path, refreshed in lockstep with `cachedGraph` — the detail panel's
+   * upgrade()/downgrade() bodies (getDetail) are extracted from this without re-reading disk. */
+  private rawContent: Map<string, string> = new Map();
   private readonly listeners = new Set<(s: AppState) => void>();
 
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -119,6 +122,7 @@ export class MigrationService {
       };
 
       this.cachedGraph = graph;
+      this.rawContent = new Map(files.map((file) => [file.path, file.content]));
       this.state = state;
 
       this.deps.log(
@@ -190,6 +194,55 @@ export class MigrationService {
   /** Null before the first refresh. */
   getState(): AppState | null {
     return this.state;
+  }
+
+  /**
+   * Sync, pure-over-caches assembly of the revision detail panel payload. Returns null when
+   * there's no cached graph yet, or `id` isn't a real revision (unknown id, or a ghost/collapse
+   * placeholder id — neither has a graph node). GraphPanelManager forwards a null straight
+   * through as `{type:"detail", detail:null}` so the webview knows to hide the panel.
+   */
+  getDetail(id: string): RevisionDetail | null {
+    const graph = this.cachedGraph;
+    const state = this.state;
+    if (graph === null || state === null) return null;
+
+    const node = graph.nodes[id];
+    if (!node) return null;
+
+    const layoutNode = state.layout.nodes.find((n) => n.id === id);
+    const applied = layoutNode?.applied ?? null;
+
+    // Re-read live (not the config captured at last refresh): the panel must reflect a setting
+    // flipped after the graph was last scanned, without forcing a full refresh.
+    const config = this.deps.getConfig();
+    let upgradeBody: string | null = null;
+    let downgradeBody: string | null = null;
+    if (config.showSqlPreview) {
+      const content = this.rawContent.get(node.filePath);
+      if (content !== undefined) {
+        upgradeBody = extractFunctionBody(content, "upgrade");
+        downgradeBody = extractFunctionBody(content, "downgrade");
+      }
+    }
+
+    return {
+      id,
+      hash: id,
+      message: node.message,
+      author: null, // git-blame enrichment arrives in Task 21
+      date: node.createDate,
+      applied,
+      isCurrent: state.currentIds.includes(id),
+      isHead: node.isHead,
+      isMerge: node.isMerge,
+      isBroken: node.isBroken,
+      branchLabel: node.branchLabels[0] ?? null,
+      downRevisions: node.downRevisions.map((parentId) => ({ id: parentId, missing: !(parentId in graph.nodes) })),
+      filePath: node.filePath,
+      upgradeBody,
+      downgradeBody,
+    };
   }
 
   onDidChangeState(listener: (s: AppState) => void): { dispose(): void } {

@@ -1,0 +1,265 @@
+{
+  "5c0d13aa7d9f": {
+    "id": "5c0d13aa7d9f",
+    "hash": "5c0d13aa7d9f",
+    "message": "add audit log",
+    "author": null,
+    "date": "2026-05-12 10:12:00.000000",
+    "applied": null,
+    "isCurrent": false,
+    "isHead": true,
+    "isMerge": false,
+    "isBroken": true,
+    "branchLabel": null,
+    "downRevisions": [
+      {
+        "id": "deadbeef0000",
+        "missing": true
+      }
+    ],
+    "filePath": "5c0d13aa7d9f_add_audit_log.py",
+    "upgradeBody": "op.create_table(\n    'audit_log',\n    sa.Column('id', sa.Integer(), primary_key=True),\n    sa.Column('actor', sa.String(length=255), nullable=False),\n    sa.Column('action', sa.String(length=100), nullable=False),\n    sa.Column('created_at', sa.DateTime(), nullable=False),\n)",
+    "downgradeBody": "op.drop_table('audit_log')"
+  },
+  "4bfc02996c8e": {
+    "id": "4bfc02996c8e",
+    "hash": "4bfc02996c8e",
+    "message": "search index (experimental)",
+    "author": null,
+    "date": "2026-05-11 10:11:00.000000",
+    "applied": null,
+    "isCurrent": false,
+    "isHead": true,
+    "isMerge": false,
+    "isBroken": false,
+    "branchLabel": null,
+    "downRevisions": [
+      {
+        "id": "29dae0774a6c",
+        "missing": false
+      }
+    ],
+    "filePath": "4bfc02996c8e_search_index_experimental.py",
+    "upgradeBody": "op.create_index('ix_products_name', 'products', ['name'])",
+    "downgradeBody": "op.drop_index('ix_products_name', table_name='products')"
+  },
+  "3aebf1885b7d": {
+    "id": "3aebf1885b7d",
+    "hash": "3aebf1885b7d",
+    "message": "add rate limiting",
+    "author": null,
+    "date": "2026-05-10 10:10:00.000000",
+    "applied": null,
+    "isCurrent": false,
+    "isHead": true,
+    "isMerge": false,
+    "isBroken": false,
+    "branchLabel": null,
+    "downRevisions": [
+      {
+        "id": "29dae0774a6c",
+        "missing": false
+      }
+    ],
+    "filePath": "3aebf1885b7d_add_rate_limiting.py",
+    "upgradeBody": "op.create_table(\n    \"rate_limits\",\n    sa.Column(\"id\", sa.Integer(), primary_key=True),\n    sa.Column(\"user_id\", sa.Integer(), nullable=False),\n    sa.Column(\"endpoint\", sa.String(length=100), nullable=False),\n    sa.Column(\"window_start\", sa.DateTime(), nullable=False),\n)",
+    "downgradeBody": "op.drop_table(\"rate_limits\")"
+  },
+  "29dae0774a6c": {
+    "id": "29dae0774a6c",
+    "hash": "29dae0774a6c",
+    "message": "merge oauth and billing",
+    "author": null,
+    "date": "2026-05-09 10:09:00.000000",
+    "applied": null,
+    "isCurrent": false,
+    "isHead": false,
+    "isMerge": true,
+    "isBroken": false,
+    "branchLabel": null,
+    "downRevisions": [
+      {
+        "id": "18c9d9663f5b",
+        "missing": false
+      },
+      {
+        "id": "07b8c8552e4a",
+        "missing": false
+      }
+    ],
+    "filePath": "29dae0774a6c_merge_oauth_and_billing.py",
+    "upgradeBody": "pass",
+    "downgradeBody": "pass"
+  },
+  "07b8c8552e4a": {
+    "id": "07b8c8552e4a",
+    "hash": "07b8c8552e4a",
+    "message": "billing: add invoices",
+    "author": null,
+    "date": "2026-05-08 10:08:00.000000",
+    "applied": null,
+    "isCurrent": false,
+    "isHead": false,
+    "isMerge": false,
+    "isBroken": false,
+    "branchLabel": null,
+    "downRevisions": [
+      {
+        "id": "f6a9b7241d3c",
+        "missing": false
+      }
+    ],
+    "filePath": "07b8c8552e4a_billing_add_invoices.py",
+    "upgradeBody": "op.create_table(\n    'invoices',\n    sa.Column('id', sa.Integer(), primary_key=True),\n    sa.Column('plan_id', sa.Integer(), nullable=False),\n    sa.Column('amount_cents', sa.Integer(), nullable=False),\n    sa.Column('status', sa.String(length=20), nullable=False),\n)",
+    "downgradeBody": "op.drop_table('invoices')"
+  },
+  "18c9d9663f5b": {
+    "id": "18c9d9663f5b",
+    "hash": "18c9d9663f5b",
+    "message": "add api keys table",
+    "author": null,
+    "date": "2026-05-07 10:07:00.000000",
+    "applied": null,
+    "isCurrent": false,
+    "isHead": false,
+    "isMerge": false,
+    "isBroken": false,
+    "branchLabel": null,
+    "downRevisions": [
+      {
+        "id": "e5b8a600cc11",
+        "missing": false
+      }
+    ],
+    "filePath": "18c9d9663f5b_add_api_keys_table.py",
+    "upgradeBody": "op.create_table(\n    \"api_keys\",\n    sa.Column(\"id\", sa.Integer(), primary_key=True),\n    sa.Column(\"user_id\", sa.Integer(), nullable=False),\n    sa.Column(\"key\", sa.String(length=64), nullable=False),\n    sa.Column(\"created_at\", sa.DateTime(), nullable=False),\n)",
+    "downgradeBody": "op.drop_table(\"api_keys\")"
+  },
+  "f6a9b7241d3c": {
+    "id": "f6a9b7241d3c",
+    "hash": "f6a9b7241d3c",
+    "message": "billing: create plans",
+    "author": null,
+    "date": "2026-05-06 10:06:00.000000",
+    "applied": null,
+    "isCurrent": false,
+    "isHead": false,
+    "isMerge": false,
+    "isBroken": false,
+    "branchLabel": "billing",
+    "downRevisions": [
+      {
+        "id": "d4c7f5309b2e",
+        "missing": false
+      }
+    ],
+    "filePath": "f6a9b7241d3c_billing_create_plans.py",
+    "upgradeBody": "op.create_table(\n    \"plans\",\n    sa.Column(\"id\", sa.Integer(), primary_key=True),\n    sa.Column(\"name\", sa.String(length=100), nullable=False),\n    sa.Column(\"price_cents\", sa.Integer(), nullable=False),\n    sa.Column(\"interval\", sa.String(length=20), nullable=False),\n)",
+    "downgradeBody": "op.drop_table(\"plans\")"
+  },
+  "e5b8a600cc11": {
+    "id": "e5b8a600cc11",
+    "hash": "e5b8a600cc11",
+    "message": "add oauth provider fields",
+    "author": null,
+    "date": "2026-05-05 10:05:00.000000",
+    "applied": null,
+    "isCurrent": false,
+    "isHead": false,
+    "isMerge": false,
+    "isBroken": false,
+    "branchLabel": null,
+    "downRevisions": [
+      {
+        "id": "d4c7f5309b2e",
+        "missing": false
+      }
+    ],
+    "filePath": "e5b8a600cc11_add_oauth_provider_fields.py",
+    "upgradeBody": "op.add_column('users', sa.Column('oauth_provider', sa.String(length=50), nullable=True))\nop.add_column('users', sa.Column('oauth_id', sa.String(length=255), nullable=True))",
+    "downgradeBody": "op.drop_column('users', 'oauth_id')\nop.drop_column('users', 'oauth_provider')"
+  },
+  "d4c7f5309b2e": {
+    "id": "d4c7f5309b2e",
+    "hash": "d4c7f5309b2e",
+    "message": "add password reset flow",
+    "author": null,
+    "date": "2026-05-04 10:04:00.000000",
+    "applied": null,
+    "isCurrent": false,
+    "isHead": false,
+    "isMerge": false,
+    "isBroken": false,
+    "branchLabel": null,
+    "downRevisions": [
+      {
+        "id": "c3d6e4b721a8",
+        "missing": false
+      }
+    ],
+    "filePath": "d4c7f5309b2e_add_password_reset_flow.py",
+    "upgradeBody": "op.create_table(\n    'password_resets',\n    sa.Column('id', sa.Integer(), primary_key=True),\n    sa.Column('user_id', sa.Integer(), nullable=False),\n    sa.Column('token', sa.String(length=255), nullable=False),\n    sa.Column('expires_at', sa.DateTime(), nullable=False),\n)",
+    "downgradeBody": "op.drop_table('password_resets')"
+  },
+  "c3d6e4b721a8": {
+    "id": "c3d6e4b721a8",
+    "hash": "c3d6e4b721a8",
+    "message": "add sessions and tokens",
+    "author": null,
+    "date": "2026-05-03 10:03:00.000000",
+    "applied": null,
+    "isCurrent": false,
+    "isHead": false,
+    "isMerge": false,
+    "isBroken": false,
+    "branchLabel": null,
+    "downRevisions": [
+      {
+        "id": "b2e5d3a10f66",
+        "missing": false
+      }
+    ],
+    "filePath": "c3d6e4b721a8_add_sessions_and_tokens.py",
+    "upgradeBody": "op.create_table(\n    \"sessions\",\n    sa.Column(\"id\", sa.Integer(), primary_key=True),\n    sa.Column(\"user_id\", sa.Integer(), nullable=False),\n    sa.Column(\"created_at\", sa.DateTime(), nullable=False),\n)\nop.create_table(\n    \"tokens\",\n    sa.Column(\"id\", sa.Integer(), primary_key=True),\n    sa.Column(\"session_id\", sa.Integer(), nullable=False),\n    sa.Column(\"token\", sa.String(length=255), nullable=False),\n)",
+    "downgradeBody": "op.drop_table(\"tokens\")\nop.drop_table(\"sessions\")"
+  },
+  "b2e5d3a10f66": {
+    "id": "b2e5d3a10f66",
+    "hash": "b2e5d3a10f66",
+    "message": "create users table",
+    "author": null,
+    "date": "2026-05-02 10:02:00.000000",
+    "applied": null,
+    "isCurrent": false,
+    "isHead": false,
+    "isMerge": false,
+    "isBroken": false,
+    "branchLabel": null,
+    "downRevisions": [
+      {
+        "id": "8f2a1c9d4e07",
+        "missing": false
+      }
+    ],
+    "filePath": "b2e5d3a10f66_create_users_table.py",
+    "upgradeBody": "op.create_table(\n    \"users\",\n    sa.Column(\"id\", sa.Integer(), primary_key=True),\n    sa.Column(\"email\", sa.String(length=255), nullable=False),\n    sa.Column(\"password_hash\", sa.String(length=255), nullable=False),\n)",
+    "downgradeBody": "op.drop_table(\"users\")"
+  },
+  "8f2a1c9d4e07": {
+    "id": "8f2a1c9d4e07",
+    "hash": "8f2a1c9d4e07",
+    "message": "create products table",
+    "author": null,
+    "date": "2026-05-01 10:01:00.000000",
+    "applied": null,
+    "isCurrent": false,
+    "isHead": false,
+    "isMerge": false,
+    "isBroken": false,
+    "branchLabel": null,
+    "downRevisions": [],
+    "filePath": "8f2a1c9d4e07_create_products_table.py",
+    "upgradeBody": "op.create_table(\n    'products',\n    sa.Column('id', sa.Integer(), primary_key=True),\n    sa.Column('name', sa.String(length=100), nullable=False),\n    sa.Column('price', sa.Numeric(10, 2), nullable=False),\n)",
+    "downgradeBody": "op.drop_table('products')"
+  }
+}
