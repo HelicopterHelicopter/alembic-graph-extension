@@ -22,7 +22,11 @@ export class GraphPanelManager {
   /** Node id to select once the (not-yet-ready) panel's webview sends "ready" — set by
    * `revealAndSelect()` when it can't post immediately, consumed (and cleared) by the "ready" case
    * in `handleMessage()`. Deliberately NOT reset in `attach()`: it's set right before `open()` is
-   * called on the same tick, so a reset there would wipe it out before "ready" ever arrives. */
+   * called on the same tick, so a reset there would wipe it out before "ready" ever arrives.
+   * Cleared on panel disposal instead (see `attach()`'s `onDidDispose`) — otherwise a pending
+   * selection whose panel closed before "ready" ever arrived would leak into a LATER, unrelated
+   * panel (e.g. opened via the plain "Open Migration Graph" command) and replay a stale/unwanted
+   * selection there. */
   private pendingSelectId: string | null = null;
 
   constructor(
@@ -122,7 +126,12 @@ export class GraphPanelManager {
     panel.onDidDispose(() => {
       messageSub.dispose();
       stateSub.dispose();
-      if (this.panel === panel) this.panel = undefined;
+      if (this.panel === panel) {
+        this.panel = undefined;
+        // A selection queued for THIS panel instance is meaningless once it's gone — don't let it
+        // replay against whatever panel opens next (see `pendingSelectId`'s doc comment).
+        this.pendingSelectId = null;
+      }
     });
   }
 
