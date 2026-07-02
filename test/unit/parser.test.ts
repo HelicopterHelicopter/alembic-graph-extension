@@ -291,6 +291,86 @@ Create Date: 1999-01-01 00:00:00.000000
   });
 });
 
+describe("parseRevisionSource bracket-spanning down_revision / branch_labels (multi-line tuple/list values)", () => {
+  it("parses a multi-line tuple down_revision spanning several lines (merge revision)", () => {
+    const src = `"""m"""
+revision = "child1"
+down_revision = (
+    "18c9d9663f5b",
+    "07b8c8552e4a",
+)
+`;
+    const result = parseRevisionSource(src, "f.py");
+    expect(result).not.toBeNull();
+    expect(result!.downRevisions).toEqual(["18c9d9663f5b", "07b8c8552e4a"]);
+    // line 0: """m"""
+    // line 1: revision = "child1"
+    // line 2: down_revision = (
+    expect(result!.downRevisionLine).toBe(2);
+  });
+
+  it("parses a multi-line single-element tuple branch_labels", () => {
+    const src = `"""m"""
+revision = "child1"
+down_revision = None
+branch_labels = (
+    "billing",
+)
+`;
+    const result = parseRevisionSource(src, "f.py");
+    expect(result).not.toBeNull();
+    expect(result!.branchLabels).toEqual(["billing"]);
+  });
+
+  it("parses a multi-line list-form down_revision", () => {
+    const src = `"""m"""
+revision = "child2"
+down_revision = [
+    "parentX",
+    "parentY",
+]
+`;
+    const result = parseRevisionSource(src, "f.py");
+    expect(result).not.toBeNull();
+    expect(result!.downRevisions).toEqual(["parentX", "parentY"]);
+  });
+
+  it("ignores trailing comments on continuation lines inside a multi-line tuple", () => {
+    const src = `"""m"""
+revision = "child3"
+down_revision = (  # merge of two parents
+    "18c9d9663f5b",  # first parent
+    "07b8c8552e4a",  # second parent
+)
+`;
+    const result = parseRevisionSource(src, "f.py");
+    expect(result).not.toBeNull();
+    expect(result!.downRevisions).toEqual(["18c9d9663f5b", "07b8c8552e4a"]);
+  });
+
+  it("keeps downRevisionLine pointing at the assignment's first line, not the closing bracket", () => {
+    const src = `"""m"""
+revision = "child4"
+
+
+down_revision = (
+    "18c9d9663f5b",
+    "07b8c8552e4a",
+)
+branch_labels = None
+`;
+    const result = parseRevisionSource(src, "f.py");
+    expect(result).not.toBeNull();
+    // line 0: """m"""
+    // line 1: revision = "child4"
+    // line 2: (blank)
+    // line 3: (blank)
+    // line 4: down_revision = (
+    expect(result!.downRevisionLine).toBe(4);
+    expect(result!.downRevisions).toEqual(["18c9d9663f5b", "07b8c8552e4a"]);
+  });
+});
+
 describe("extractFunctionBody", () => {
   it("13a. extracts a normal multi-statement body, dedented", () => {
     const src = `def upgrade() -> None:

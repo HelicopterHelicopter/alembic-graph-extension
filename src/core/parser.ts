@@ -53,13 +53,16 @@ function matchModuleAssignment(line: string, name: string): string | null {
 /** Extracts the first single/double-quoted string literal from a value expression. */
 function extractQuotedString(rhs: string): string | null {
   const stripped = stripTrailingComment(rhs).trim();
+  // Assumes revision ids never contain embedded/escaped quotes (real Alembic ids are
+  // hex/slug strings), so a naive non-greedy quote match is sufficient here.
   const m = stripped.match(/^['"]([^'"]*)['"]/);
   return m ? m[1] : null;
 }
 
 /**
  * Parses the down_revision / branch_labels value grammar: `None` -> [], a quoted string ->
- * single-element array, or a tuple/list of quoted strings -> array in order.
+ * single-element array, or a tuple/list of quoted strings -> array in order. `rhs` may span
+ * multiple lines already joined by `resolveValueListRhs` for bracket-spanning tuples/lists.
  */
 function extractValueList(rhs: string): string[] {
   const stripped = stripTrailingComment(rhs).trim();
@@ -71,6 +74,7 @@ function extractValueList(rhs: string): string[] {
   }
   if (first === "(" || first === "[") {
     const values: string[] = [];
+    // Same simplifying assumption as extractQuotedString: no embedded/escaped quotes.
     const re = /['"]([^'"]*)['"]/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(stripped)) !== null) {
@@ -79,6 +83,57 @@ function extractValueList(rhs: string): string[] {
     return values;
   }
   return [];
+}
+
+/**
+ * Computes the net (`(`/`[` minus `)`/`]`) bracket depth of a string, ignoring bracket
+ * characters that appear inside quoted segments.
+ */
+function netBracketDepth(s: string): number {
+  let depth = 0;
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+    } else if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+    } else if (!inSingle && !inDouble) {
+      if (c === "(" || c === "[") depth++;
+      else if (c === ")" || c === "]") depth--;
+    }
+  }
+  return depth;
+}
+
+/**
+ * Resolves a `down_revision`/`branch_labels` right-hand side that may span multiple lines,
+ * e.g. a Black-formatted merge revision:
+ * ```
+ * down_revision = (
+ *     "18c9d9663f5b",
+ *     "07b8c8552e4a",
+ * )
+ * ```
+ * `rhs` is the text after `=` on the assignment's own line (`lines[startIndex]`). Each
+ * candidate line is stripped of trailing comments (quote-aware, via `stripTrailingComment`)
+ * before being folded into the running bracket-depth count, so a comment containing `(`/`)`
+ * never perturbs the balance. Accumulation stops once depth returns to 0 (single-line values,
+ * which never go positive, are returned unchanged) or at EOF. The joined text is handed to
+ * `extractValueList` exactly as a single-line RHS would be.
+ */
+function resolveValueListRhs(lines: string[], startIndex: number, rhs: string): string {
+  let combined = stripTrailingComment(rhs);
+  let depth = netBracketDepth(combined);
+  let i = startIndex + 1;
+  while (depth > 0 && i < lines.length) {
+    const strippedLine = stripTrailingComment(lines[i]);
+    combined += "\n" + strippedLine;
+    depth += netBracketDepth(strippedLine);
+    i++;
+  }
+  return combined;
 }
 
 /**
@@ -140,14 +195,16 @@ export function parseRevisionSource(src: string, filePath: string): ParsedRevisi
     if (downRevisionMatch === null) {
       const rhs = matchModuleAssignment(line, "down_revision");
       if (rhs !== null) {
-        downRevisionMatch = { values: extractValueList(rhs), line: i };
+        const resolvedRhs = resolveValueListRhs(lines, i, rhs);
+        downRevisionMatch = { values: extractValueList(resolvedRhs), line: i };
       }
     }
 
     if (branchLabelsValues === null) {
       const rhs = matchModuleAssignment(line, "branch_labels");
       if (rhs !== null) {
-        branchLabelsValues = extractValueList(rhs);
+        const resolvedRhs = resolveValueListRhs(lines, i, rhs);
+        branchLabelsValues = extractValueList(resolvedRhs);
       }
     }
   }
