@@ -9,6 +9,8 @@ import {
   findLaneNeighbor,
   findRowNeighbor,
   matchesQuery,
+  nextMatchIndex,
+  prevMatchIndex,
   stepZoom,
   verticalRowDelta,
   zoomAnchorScroll,
@@ -126,6 +128,38 @@ describe("uxMath — matchesQuery", () => {
 
   it("no match returns false", () => {
     expect(matchesQuery("zzz-nope", node)).toBe(false);
+  });
+});
+
+describe("uxMath — nextMatchIndex / prevMatchIndex (search cycle)", () => {
+  // Task 19 review fix (finding 3): the first Shift+Enter after a query change/set (index === -1)
+  // must land on the LAST match, not one short of it.
+  it("first Enter (index -1) always lands on the first match (0)", () => {
+    expect(nextMatchIndex(-1, 3)).toBe(0);
+    expect(nextMatchIndex(-1, 1)).toBe(0);
+  });
+
+  it("first Shift+Enter (index -1) always lands on the LAST match, not one short of it", () => {
+    expect(prevMatchIndex(-1, 3)).toBe(2); // regression case from the bug report: "3 of 3"
+    expect(prevMatchIndex(-1, 1)).toBe(0);
+    expect(prevMatchIndex(-1, 5)).toBe(4);
+  });
+
+  it("nextMatchIndex wraps forward from a real index", () => {
+    expect(nextMatchIndex(0, 3)).toBe(1);
+    expect(nextMatchIndex(1, 3)).toBe(2);
+    expect(nextMatchIndex(2, 3)).toBe(0); // wraps
+  });
+
+  it("prevMatchIndex wraps backward from a real index", () => {
+    expect(prevMatchIndex(2, 3)).toBe(1);
+    expect(prevMatchIndex(1, 3)).toBe(0);
+    expect(prevMatchIndex(0, 3)).toBe(2); // wraps
+  });
+
+  it("next then prev (or vice versa) from a fresh -1 returns to the same match for a single-match set", () => {
+    expect(nextMatchIndex(-1, 1)).toBe(0);
+    expect(prevMatchIndex(-1, 1)).toBe(0);
   });
 });
 

@@ -13,7 +13,7 @@
  * only thing that legitimately needs to rebuild the input, and render.ts seeds its `.value` from
  * `initialQuery` so that path doesn't lose the in-progress query either (see main.ts's `store.search`).
  */
-import { matchesQuery, type SearchableNode } from "./uxMath";
+import { matchesQuery, nextMatchIndex, prevMatchIndex, type SearchableNode } from "./uxMath";
 
 export interface SearchableCard extends SearchableNode {
   id: string;
@@ -77,7 +77,10 @@ export function attachSearch(
     if (e.key === "Enter") {
       if (matches.length === 0) return;
       e.preventDefault();
-      index = e.shiftKey ? (index - 1 + matches.length) % matches.length : (index + 1) % matches.length;
+      // Minor fix (Task 19 review, finding 3): see uxMath's nextMatchIndex/prevMatchIndex doc
+      // comment — the inline `(index -/+ 1 + n) % n` formula this replaced landed the FIRST
+      // Shift+Enter one match short of the last (e.g. "2 of 3" instead of "3 of 3" for 3 matches).
+      index = e.shiftKey ? prevMatchIndex(index, matches.length) : nextMatchIndex(index, matches.length);
       updateCount(countEl, matches, index);
       cb.onStateChange(input.value, index);
       cb.onNavigate(matches[index]);

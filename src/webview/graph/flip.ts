@@ -82,12 +82,45 @@ export function playFlip(viewport: HTMLElement | null, previous: FlipSnapshot | 
     for (const { el } of moved) {
       el.style.transition = "transform 200ms ease";
       el.style.transform = "";
+      clearInlineTransitionWhenSettled(el, "transform");
     }
     for (const el of entered) {
       el.style.transition = "opacity 150ms ease";
       el.style.opacity = "1";
+      clearInlineTransitionWhenSettled(el, "opacity");
     }
   });
+}
+
+/**
+ * Important fix (Task 19 review, finding 2): `el.style.transition` set above is never otherwise
+ * cleared, so it lingers on the (still-live — this IS the fresh, current canvas, not a discarded
+ * one; see this module's header comment) `.alx-node` wrapper indefinitely, i.e. until the NEXT
+ * render() rebuilds the canvas from scratch. If a drag starts on that node before then, dnd.ts's
+ * per-frame `translate()` writes land on an element that still carries `transition: transform
+ * 200ms ease` — the browser eases toward each new pointer position instead of snapping to it
+ * immediately, so the dragged card visibly lags the cursor. Clears the inline `transition` (and any
+ * leftover `transform`, belt-and-suspenders — `moved`'s callers already reset it to `""` above, but
+ * `entered`'s opacity-only path never touched `transform` to begin with) on the transition actually
+ * finishing, with a fixed timeout as a safety net in case `transitionend` never fires (e.g. the
+ * element is detached by a re-render before the transition completes, or a browser quirk drops the
+ * event) — either path is idempotent and safe to run twice.
+ */
+function clearInlineTransitionWhenSettled(el: HTMLElement, property: "transform" | "opacity"): void {
+  let cleared = false;
+  const clear = (): void => {
+    if (cleared) return;
+    cleared = true;
+    el.style.transition = "";
+  };
+  el.addEventListener(
+    "transitionend",
+    (e: TransitionEvent) => {
+      if (e.target === el && e.propertyName === property) clear();
+    },
+    { once: true },
+  );
+  setTimeout(clear, 250);
 }
 
 /** Fades `.alx-edges` in over 150ms on any re-render after the first (no path morphing — a

@@ -104,6 +104,32 @@ export function matchesQuery(query: string, node: SearchableNode): boolean {
   return false;
 }
 
+// ---------- search cycle ----------
+
+/**
+ * Cycle-index math for Enter/Shift+Enter over `count` search matches (search.ts). `index` is the
+ * last cycle position, or -1 as the sentinel for "no cycle yet since the query last changed/was
+ * set" (search.ts starts fresh at -1 on every keystroke).
+ *
+ * Both the first-Enter and first-Shift+Enter cases are handled explicitly rather than falling
+ * through to the general wrap formula: naively computing `(index +/- 1 + count) % count` with
+ * `index = -1` only happens to give the right answer (0) for the forward direction — for backward
+ * it gives `count - 2`, landing one match short of the actual last match. Modeling `-1` as "no
+ * current position" (not "the position before 0") for both directions keeps the two symmetric: the
+ * very first Enter always shows the FIRST match, the very first Shift+Enter always shows the LAST.
+ */
+export function nextMatchIndex(index: number, count: number): number {
+  if (index === -1) return 0;
+  return (index + 1) % count;
+}
+
+/** Backward counterpart of {@link nextMatchIndex} — see its doc comment for the `-1` sentinel
+ * handling that fixes the "lands one short" bug. */
+export function prevMatchIndex(index: number, count: number): number {
+  if (index === -1) return count - 1;
+  return (index - 1 + count) % count;
+}
+
 // ---------- ancestry ----------
 
 export interface AncestorNode {

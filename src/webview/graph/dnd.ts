@@ -199,6 +199,12 @@ export function attachDnd(viewport: HTMLElement, state: AppState, zoom: number, 
       drag.dragging = true;
       drag.originCard.setPointerCapture(drag.pointerId);
       drag.originCard.classList.add("alx-card--dragging");
+      // Important fix (Task 19 review, finding 2): defensively clear any leftover FLIP transition
+      // (flip.ts sets `transition: transform 200ms ease` on a node it just animated into place —
+      // normally cleared on transitionend/timeout, but this belt-and-suspenders wipe means even a
+      // pathological case where that cleanup hasn't fired yet can't make THIS drag's per-frame
+      // translate()s below ease toward the cursor instead of tracking it 1:1.
+      drag.originWrapper.style.transition = "";
       drag.originWrapper.style.zIndex = "60";
       document.addEventListener("keydown", onKeyDown);
       if (drag.kind === "repoint") {

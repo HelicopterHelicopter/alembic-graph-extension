@@ -20,6 +20,7 @@ import {
   clampZoom,
   fitScroll,
   fitZoom,
+  matchesQuery,
   stepZoom,
   zoomAnchorScroll,
   type NavNode,
@@ -226,13 +227,22 @@ function applyZoom(newZoom: number, anchor?: { offsetX: number; offsetY: number 
 
 /** Ctrl/Cmd+wheel on the viewport zooms, anchored at the cursor; a plain wheel keeps scrolling
  * (the browser's default). Re-attached every render, same as attachDnd/attachContextMenu below —
- * the viewport is a fresh element each time. */
+ * the viewport is a fresh element each time.
+ *
+ * Critical fix (Task 19 review, finding 1): while `dragActive`, a ctrl/cmd+wheel is swallowed
+ * entirely — NOT applied and NOT queued. `applyZoom` -> `renderStore()` rebuilds the canvas
+ * wholesale (see renderStore's header comment), which would detach the card currently holding
+ * pointer capture mid-drag; dnd.ts's `endDrag`/pointer handlers would then never fire again on that
+ * detached element, wedging `dragActive` true forever (state pushes stashed forever, context menu
+ * and hover permanently gated — see the `dragActive` doc comment above). `preventDefault` still
+ * fires so the browser doesn't fall back to its own page-zoom gesture. */
 function attachZoomWheel(viewport: HTMLElement): void {
   viewport.addEventListener(
     "wheel",
     (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
+      if (dragActive) return;
       const direction: 1 | -1 = e.deltaY < 0 ? 1 : -1;
       const rect = viewport.getBoundingClientRect();
       applyZoom(stepZoom(store.zoom, direction), { offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top });
@@ -316,9 +326,20 @@ function searchableCards(state: AppState): SearchableCard[] {
 
 /** Revision nodes adapted to uxMath's `NavNode` shape for keyboardNav.ts — same revision-only
  * scoping as `searchableCards` (ghost/collapse cards get no tabindex, see render.ts, so they're
- * never a keyboard-nav origin or destination). */
+ * never a keyboard-nav origin or destination).
+ *
+ * Minor fix (Task 19 review, finding 4): while a search query is active, cards that don't match it
+ * are dimmed (search.ts's `.alx-card--dimmed`) but arrow-key navigation used to ignore that
+ * entirely, landing on dimmed cards same as lit ones. Excluding non-matching cards here scopes
+ * `findRowNeighbor`/`findLaneNeighbor`'s candidate pool to only the lit (matching) cards. If every
+ * card is dimmed (or the currently-focused card itself no longer matches), navigation simply
+ * doesn't move — keyboardNav.ts's `nodes.find(...)` fails to resolve `current` and the keydown is a
+ * no-op, same as any other "no neighbor in that direction" case. */
 function navNodes(state: AppState): NavNode[] {
-  return state.layout.nodes.filter((n) => n.kind === "revision").map((n) => ({ id: n.id, lane: n.lane, row: n.row }));
+  const query = store.search.query.trim();
+  const revisionNodes = state.layout.nodes.filter((n) => n.kind === "revision");
+  const visible = query === "" ? revisionNodes : revisionNodes.filter((n) => matchesQuery(query, n));
+  return visible.map((n) => ({ id: n.id, lane: n.lane, row: n.row }));
 }
 
 /** contextMenu.ts's per-item handlers — each just posts the corresponding typed message; the
