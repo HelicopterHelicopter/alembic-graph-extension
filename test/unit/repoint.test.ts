@@ -198,4 +198,62 @@ down_revision = ("18c9d9663f5b", "deadbeef0000")
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.newSrc).toBe(expected);
   });
+
+  it("10. comment on the opening line quotes missingId, real member is on a continuation line: the real member is replaced, the comment is byte-identical", () => {
+    const src = `"""m"""
+revision = "child1"
+down_revision = (  # replaces "deadbeef0000"
+    "deadbeef0000",
+)
+`;
+    const expected = `"""m"""
+revision = "child1"
+down_revision = (  # replaces "deadbeef0000"
+    "4bfc02996c8e",
+)
+`;
+    const result = computeRepointedSource(src, "deadbeef0000", "4bfc02996c8e");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.newSrc).toBe(expected);
+  });
+
+  it("11. targetId appears only in a trailing comment, not as a real member: not treated as already-present", () => {
+    const src = `"""m"""
+revision = "child1"
+down_revision = "deadbeef0000"  # was previously "4bfc02996c8e"
+`;
+    const expected = `"""m"""
+revision = "child1"
+down_revision = "4bfc02996c8e"  # was previously "4bfc02996c8e"
+`;
+    const result = computeRepointedSource(src, "deadbeef0000", "4bfc02996c8e");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.newSrc).toBe(expected);
+  });
+
+  it("12. patchRevisesLine keeps scanning past an earlier Revises: line that doesn't mention missingId", () => {
+    const src = `"""merge note
+
+Revises: 18c9d9663f5b
+
+The actual predecessor:
+Revises: deadbeef0000
+"""
+revision = "child1"
+down_revision = "deadbeef0000"
+`;
+    const expected = `"""merge note
+
+Revises: 18c9d9663f5b
+
+The actual predecessor:
+Revises: 4bfc02996c8e
+"""
+revision = "child1"
+down_revision = "4bfc02996c8e"
+`;
+    const result = computeRepointedSource(src, "deadbeef0000", "4bfc02996c8e");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.newSrc).toBe(expected);
+  });
 });

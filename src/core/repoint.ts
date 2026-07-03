@@ -14,13 +14,16 @@
  * caller's own `src`, so joining them back always reproduces the original string exactly except
  * for the one quoted span (and, separately, the one `Revises:` token) that's deliberately changed.
  */
-import { locateDownRevisionAssignment } from "./parser";
+import { commentStartIndex, locateDownRevisionAssignment } from "./parser";
 
 export type RepointResult = { ok: true; newSrc: string } | { ok: false; reason: string };
 
 /** Matches a single/double-quoted string literal. Same simplifying assumption parser.ts's own
  * `extractQuotedString`/`extractValueList` make: revision ids never contain embedded/escaped
- * quotes, so a naive non-greedy quote match is sufficient. */
+ * quotes, so a naive non-greedy quote match is sufficient. Scanned over the RAW block text
+ * (comments included), so callers MUST filter out matches that fall inside a comment — see
+ * `computeCommentRanges`/`isInRange` below — or a comment mentioning a revision id in passing can
+ * shadow/masquerade as a real quoted member. */
 const QUOTED_RE = /(['"])([^'"]*)\1/g;
 
 /** 8-char id prefix used in error messages, matching the truncation convention used elsewhere in
@@ -31,6 +34,32 @@ function shortId(id: string): string {
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Computes the [start, end) character ranges within `blockRaw` (the concatenation of `blockLines`
+ * in order) that fall inside a comment, using `parser.ts`'s `commentStartIndex` per line so this
+ * stays in sync with the exact same quote-aware state machine `locateDownRevisionAssignment` uses
+ * to find the block in the first place. Each line's own line-ending characters are harmlessly
+ * included in its range when that line has a comment (a `QUOTED_RE` match can never begin inside
+ * an EOL sequence).
+ */
+function computeCommentRanges(blockLines: string[]): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let offset = 0;
+  for (const line of blockLines) {
+    const idx = commentStartIndex(line);
+    if (idx < line.length) {
+      ranges.push([offset + idx, offset + line.length]);
+    }
+    offset += line.length;
+  }
+  return ranges;
+}
+
+/** True if `pos` falls inside one of `ranges`. */
+function isInRange(pos: number, ranges: Array<[number, number]>): boolean {
+  return ranges.some(([start, end]) => pos >= start && pos < end);
 }
 
 /**
@@ -73,12 +102,12 @@ function patchRevisesLine(src: string, missingId: string, targetId: string): str
     const m = /^(\s*Revises:\s*)(.*)$/.exec(content);
     if (!m) continue;
     const [, prefix, rest] = m;
-    if (!tokenRe.test(rest)) return src; // a Revises: line exists but doesn't mention missingId
+    if (!tokenRe.test(rest)) continue; // this Revises: line doesn't mention missingId — keep scanning
     const newRest = rest.replace(tokenRe, (_whole, boundary: string) => `${boundary}${targetId}`);
     rawLines[i] = prefix + newRest + eol;
     return rawLines.join("");
   }
-  return src; // no Revises: line at all — docstring absent (or non-standard); leave untouched
+  return src; // no Revises: line mentions missingId — docstring absent (or non-standard); leave untouched
 }
 
 /**
@@ -95,9 +124,18 @@ export function computeRepointedSource(src: string, missingId: string, targetId:
 
   const rawLines = splitRawLines(src);
   const { startLine, endLine } = loc;
-  const blockRaw = rawLines.slice(startLine, endLine + 1).join("");
+  const blockLines = rawLines.slice(startLine, endLine + 1);
+  const blockRaw = blockLines.join("");
+  const commentRanges = computeCommentRanges(blockLines);
 
-  const matches = [...blockRaw.matchAll(QUOTED_RE)];
+  // Comment-aware: a quoted span whose match starts inside a comment (e.g. `# was "deadbeef0000"`)
+  // is never a real down_revision member, so it must be excluded from BOTH the missingId search
+  // and the "already has target" check below — otherwise a comment can shadow the real member
+  // (silent false success) or masquerade as an already-present target (false rejection).
+  const matches = [...blockRaw.matchAll(QUOTED_RE)].filter((m) => {
+    const idx = m.index ?? blockRaw.indexOf(m[0]);
+    return !isInRange(idx, commentRanges);
+  });
   const missingMatch = matches.find((m) => m[2] === missingId);
   if (!missingMatch) {
     return { ok: false, reason: `down_revision does not reference ${shortId(missingId)}` };

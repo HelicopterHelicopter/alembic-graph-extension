@@ -17,8 +17,13 @@ function stripBOM(src: string): string {
   return src.length > 0 && src.charCodeAt(0) === 0xfeff ? src.slice(1) : src;
 }
 
-/** Truncates a line at the first `#` that isn't inside a quoted string. */
-function stripTrailingComment(s: string): string {
+/**
+ * Returns the index of the first `#` in `s` that isn't inside a single/double-quoted string, or
+ * `s.length` if there is none. The shared quote-aware state machine backing both
+ * `stripTrailingComment` (below) and `core/repoint.ts`'s comment-aware quote scanning — exported
+ * so repoint.ts can mask out comment ranges without duplicating this logic.
+ */
+export function commentStartIndex(s: string): number {
   let inSingle = false;
   let inDouble = false;
   for (let i = 0; i < s.length; i++) {
@@ -28,10 +33,15 @@ function stripTrailingComment(s: string): string {
     } else if (c === '"' && !inSingle) {
       inDouble = !inDouble;
     } else if (c === "#" && !inSingle && !inDouble) {
-      return s.slice(0, i);
+      return i;
     }
   }
-  return s;
+  return s.length;
+}
+
+/** Truncates a line at the first `#` that isn't inside a quoted string. */
+function stripTrailingComment(s: string): string {
+  return s.slice(0, commentStartIndex(s));
 }
 
 /**
