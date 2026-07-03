@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterAll } from "vitest";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, mkdtempSync, cpSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 import path from "node:path";
 import {
   AlembicCli,
@@ -9,6 +10,7 @@ import {
   type ExecFn,
   type RunResult,
 } from "../../src/services/alembicCli";
+import { parseRevisionSource } from "../../src/core/parser";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(here, "../..");
@@ -235,4 +237,49 @@ describe.skipIf(!existsSync(VENV_PYTHON))("AlembicCli real-fixture integration (
     const cli = makeFixtureCli(BROKEN_PROJECT);
     await expect(cli.current()).resolves.toEqual({ dbReachable: false });
   }, 30000);
+
+  describe("6d. merge integration (Task 14 — real alembic, tmp copy)", () => {
+    // Golden rule for this test: NEVER run `merge` (or any other mutating command) against
+    // HEALTHY_PROJECT/BROKEN_PROJECT directly — those are checked-in fixtures other tests and F5
+    // depend on. Copy to os.tmpdir() first, mutate the copy, and always clean it up below.
+    let tmpDir: string | undefined;
+
+    afterAll(() => {
+      if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("6d. merge -m against a tmp copy: new versions file down-revises both heads; heads collapses to one", async () => {
+      tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-merge-"));
+      const projectDir = path.join(tmpDir, "healthy-project");
+      cpSync(HEALTHY_PROJECT, projectDir, { recursive: true });
+
+      const cli = makeFixtureCli(projectDir);
+      const versionsDir = path.join(projectDir, "alembic/versions");
+      const before = new Set(readdirSync(versionsDir).filter((f) => f.endsWith(".py")));
+
+      const result = await cli.run(["merge", "-m", "test merge", "3aebf1885b7d", "4bfc02996c8e"]);
+      expect(result.ok).toBe(true);
+
+      const after = readdirSync(versionsDir).filter((f) => f.endsWith(".py"));
+      const newFiles = after.filter((f) => !before.has(f));
+      expect(newFiles).toHaveLength(1);
+
+      // Use the REAL parser (not a hand-rolled regex here) to confirm the new file's
+      // down_revision tuple names exactly the two merged heads, order-independent.
+      const newFilePath = path.join(versionsDir, newFiles[0]);
+      const parsed = parseRevisionSource(readFileSync(newFilePath, "utf-8"), newFilePath);
+      expect(parsed).not.toBeNull();
+      expect(new Set(parsed?.downRevisions)).toEqual(new Set(["3aebf1885b7d", "4bfc02996c8e"]));
+
+      const headsResult = await cli.run(["heads"]);
+      expect(headsResult.ok).toBe(true);
+      if (headsResult.ok) {
+        const headLines = headsResult.stdout
+          .split("\n")
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0);
+        expect(headLines).toHaveLength(1); // both original heads merged into a single new head
+      }
+    }, 30000);
+  });
 });

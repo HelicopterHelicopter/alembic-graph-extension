@@ -314,3 +314,68 @@ gitignored, but delete it after testing so future runs start from "nothing appli
    and Refresh on either fixture. Same silent degradation: graph renders, Output shows the
    attempted command + an ENOENT error, no user-facing error.
 7. Cleanup: remove the override settings and delete `fixtures/*/fixture.db`.
+
+## Task 14: drag-to-merge heads + mergeHeads QuickPick
+
+`harness/graph.html` (after `npm run build`, served over http — see the file's header comment)
+covers the pointer mechanics in isolation: drag threshold, target-ring hit-testing, transform-based
+follow, revert-on-empty-drop, non-head/busy gating, Escape-cancel, and the posted `{type:"merge",
+a, b}` message (recorded into `window.__postedMerges`; `window.__sendBusy(operation, active)`
+simulates the host's busy round trip). The steps below are the F5-only checks that harness can't
+cover: a real `alembic merge` subprocess, the input box, the busy toast/spinner round trip, a real
+file-watcher-triggered re-render, and the command-palette QuickPick flow.
+
+Setup: same override as Task 13 — in the Extension Development Host, **Preferences: Open Workspace
+Settings (JSON)** →
+`"alembicGraph.alembicCommand": "<absolute repo path>/.venv/bin/python -m alembic"`. **Fixture
+mutations from this section must be reverted** — run `git checkout -- fixtures/` (and delete any
+stray `fixtures/*/fixture.db`) once you're done, before committing or handing off.
+
+1. Press F5, select **Run Extension (healthy fixture)** (2 heads: `3aebf1885b7d`/`4bfc02996c8e`),
+   set the override, then **Alembic Graph: Open Migration Graph**.
+2. Drag the `3aebf1885b7d` **add rate limiting** card by its header (not the message/meta text —
+   anywhere on the card works) toward the `4bfc02996c8e` **search index (experimental)** card.
+   Confirm, while the pointer is over it: the target card gets a bright green ring/glow, the
+   dragged card gets a drop shadow and follows the cursor exactly, the cursor is a closed hand.
+   Drop it there (release over the target).
+3. An input box appears, pre-filled `merge heads 3aebf188 and 4bfc0299`, prompt "Merge revision
+   message". Accept the default (Enter). Expect: the toolbar shows a small spinning `⟳ working…`
+   indicator briefly, then a green success toast bottom-right reading `Merge revision created —
+   Generating <path> ... done`; a new file appears under
+   `fixtures/healthy-project/alembic/versions/` (check in a terminal or the Explorer); the graph
+   re-renders with exactly **one** head (the new merge revision, badges HEAD + MERGE) — the file
+   watcher picks up the new file with no manual refresh needed.
+4. Run `git checkout -- fixtures/healthy-project` in a terminal, then **Alembic Graph: Refresh** —
+   back to 2 heads.
+5. Repeat step 2, but this time press **Escape** while the drop target's green ring is showing
+   instead of releasing normally: the card snaps back to its origin, no input box, no toast, no new
+   file.
+6. Repeat step 2, but drop on empty canvas (not on the other head card): the card snaps back to its
+   origin cleanly, no input box, no toast, no new file.
+7. Repeat step 2's drag, but this time in the input box press **Escape** (cancel) instead of
+   accepting: no toast, no busy spinner, no new file — confirm via the Output channel
+   (**Alembic Graph**) that nothing was logged for this attempt (a cancelled prompt is silent by
+   design).
+8. Try dragging a non-head card (e.g. `8f2a1c9d4e07`): no shadow, no follow, nothing happens —
+   plain click-to-select on it still works normally.
+9. Command palette flow: run **Alembic Graph: Merge Heads…**. A multi-select QuickPick lists both
+   heads (10-char hash label, message description). Select only **one** and confirm: a warning
+   toast-style message "select exactly 2 heads..." appears and the QuickPick re-opens. Select
+   **both**, confirm: same input box → busy → success toast → one-head graph flow as steps 2–3.
+   `git checkout -- fixtures/healthy-project` again afterward.
+10. With the graph panel **closed**, run **Alembic Graph: Merge Heads…** again and complete a
+    merge: the input box, busy state, and success/error toasts all still work correctly even
+    though `postToPanel` has nothing to post to (no panel-related errors in the Output channel).
+    `git checkout -- fixtures/healthy-project` again afterward.
+11. Failure path: temporarily set `"alembicGraph.alembicCommand"` to an invalid value (e.g.
+    `"definitely-not-a-real-binary"`), repeat step 2's drag-and-drop, accept the input box: expect
+    a red error toast (truncated CLI error text) AND a modal error message "alembic merge failed —
+    see Alembic Graph output", and the Output channel shows the attempted command + ENOENT. Restore
+    the override afterward.
+12. Open webview DevTools (**Developer: Open Webview Developer Tools**) and confirm the Console has
+    no errors/CSP violations while repeating steps 2–3.
+13. Repeat steps 1–3 with the **Run Extension (broken fixture)** launch config (3 heads;
+    `3aebf1885b7d`/`4bfc02996c8e` are two of them) — same drag/merge behavior, now down to 2 heads
+    afterward (`5c0d13aa7d9f` remains). `git checkout -- fixtures/broken-project` afterward.
+14. Final cleanup: confirm `git status` shows no stray changes under `fixtures/` and no
+    `fixtures/*/fixture.db` files remain, then remove the `alembicCommand` override setting.

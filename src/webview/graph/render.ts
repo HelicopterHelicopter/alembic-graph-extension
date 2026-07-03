@@ -20,6 +20,10 @@ export interface ViewState {
   /** Whether the panel should be shown at all — independent of `detail`, so closing it (✕) keeps
    * the card selection/highlight while hiding the panel (matches the design's `closeDetails`). */
   detailOpen: boolean;
+  /** True while `store.busyOps` (main.ts) is non-empty — any host-side action (merge, later
+   * upgrade/downgrade/...) is in flight. Drives the toolbar's busy indicator; drag gating itself
+   * lives in dnd.ts's `isEnabled()` callback, not here. */
+  busy: boolean;
 }
 
 export interface Handlers {
@@ -57,7 +61,7 @@ export function render(root: HTMLElement, state: AppState, view: ViewState, hand
   }
 
   const positions = computePositions(state);
-  const toolbar = buildToolbar(state, handlers);
+  const toolbar = buildToolbar(state, handlers, view.busy);
   const canvasViewport = buildCanvasViewport(state, view, handlers, positions);
 
   const canvasRow = document.createElement("div");
@@ -105,7 +109,7 @@ function ensureToastLayer(root: HTMLElement): HTMLElement {
 
 // ---------- toolbar ----------
 
-function buildToolbar(state: AppState, handlers: Handlers): HTMLElement {
+function buildToolbar(state: AppState, handlers: Handlers, busy: boolean): HTMLElement {
   const toolbar = document.createElement("div");
   toolbar.className = "alx-toolbar";
 
@@ -131,6 +135,8 @@ function buildToolbar(state: AppState, handlers: Handlers): HTMLElement {
   const spacer = document.createElement("div");
   spacer.className = "alx-spacer";
 
+  const busyIndicator = buildBusyIndicator(busy);
+
   const orderLabel = document.createElement("span");
   orderLabel.className = "alx-order-label";
   orderLabel.textContent = "Order";
@@ -149,8 +155,29 @@ function buildToolbar(state: AppState, handlers: Handlers): HTMLElement {
     makeToggle("Compact", state.ui.density === "compact", () => handlers.onToggleDensity("compact")),
   );
 
-  toolbar.append(label, sep, headsChip, revCount, spacer, orderLabel, orderGroup, densityGroup);
+  toolbar.append(label, sep, headsChip, revCount, spacer);
+  if (busyIndicator) toolbar.append(busyIndicator);
+  toolbar.append(orderLabel, orderGroup, densityGroup);
   return toolbar;
+}
+
+/** Subtle "an action is running" indicator (Task 14: shown while `store.busyOps` — main.ts — is
+ * non-empty, e.g. a drag-to-merge drop is running `alembic merge`). Returns null when not busy so
+ * callers can skip appending it entirely rather than appending an empty/hidden element. */
+function buildBusyIndicator(busy: boolean): HTMLElement | null {
+  if (!busy) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "alx-busy-indicator";
+
+  const spinner = document.createElement("span");
+  spinner.className = "alx-busy-spinner";
+  spinner.textContent = "⟳";
+
+  const label = document.createElement("span");
+  label.textContent = "working…";
+
+  wrap.append(spinner, label);
+  return wrap;
 }
 
 function makeToggle(text: string, active: boolean, onClick: () => void): HTMLElement {
@@ -284,7 +311,9 @@ function buildNodeElement(
     return wrapper;
   }
   if (node.kind === "collapse") {
-    wrapper.append(buildCollapseCard(node, handlers));
+    const collapse = buildCollapseCard(node, handlers);
+    collapse.dataset.nodeId = node.id;
+    wrapper.append(collapse);
     return wrapper;
   }
 
@@ -305,6 +334,7 @@ function buildNodeElement(
 function buildGhostCard(node: LayoutNode): HTMLElement {
   const card = document.createElement("div");
   card.className = "alx-ghost";
+  card.dataset.nodeId = node.id;
 
   const label = document.createElement("div");
   label.className = "alx-ghost-label";
@@ -335,9 +365,18 @@ function buildRevisionCard(node: LayoutNode, view: ViewState, density: Density, 
     "alx-card",
     density === "compact" ? "alx-card--compact" : null,
     selected ? "alx-card--selected" : null,
+    // Task 14: only HEAD cards are drag-to-merge sources — ghost/broken-card drag (repoint) is
+    // Task 15's scope. touch-action:none lives on this class too (see graph.css) so it's only
+    // applied where a drag can actually start.
+    node.isHead ? "alx-card--draggable" : null,
   ]
     .filter((c): c is string => c !== null)
     .join(" ");
+  // dnd.ts (Task 14) event-delegates off these — data-node-id on every revision card (also set on
+  // ghost/collapse cards above, for Task 15/general hit-testing reuse), data-head only on the
+  // subset that's a legal drag source/drop target for merge.
+  card.dataset.nodeId = node.id;
+  if (node.isHead) card.dataset.head = "true";
 
   const stripe = document.createElement("div");
   stripe.className = node.applied === false ? "alx-stripe alx-stripe--dim" : "alx-stripe";

@@ -191,6 +191,29 @@ body {
   color: #ffffff;
 }
 
+/* ---------- busy indicator (Task 14) ---------- */
+.alx-busy-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--alx-dim);
+  white-space: nowrap;
+  margin-right: 4px;
+}
+.alx-busy-spinner {
+  display: inline-block;
+  animation: alxspin 0.9s linear infinite;
+}
+@keyframes alxspin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ---------- canvas row (viewport + optional detail panel) ---------- */
 .alx-canvas-row {
   flex: 1;
@@ -272,6 +295,22 @@ body {
   background: var(--alx-sel-bg);
   border-color: var(--alx-accent);
   box-shadow: 0 0 0 1px var(--alx-accent);
+}
+
+/* ---------- drag-to-merge (Task 14) ---------- */
+.alx-card--draggable {
+  cursor: grab;
+  touch-action: none;
+}
+.alx-card--dragging {
+  cursor: grabbing;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.6);
+}
+.alx-card--merge-target {
+  border-color: #89d185;
+  box-shadow:
+    0 0 0 2px #89d185,
+    0 0 20px #89d18555;
 }
 
 .alx-stripe {

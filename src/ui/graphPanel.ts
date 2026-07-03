@@ -6,8 +6,10 @@
  */
 import * as vscode from "vscode";
 import { buildWebviewHtml } from "./html";
+import { mergeHeadsAction, type ActionContext } from "./actions";
+import { getCli } from "../extension";
 import type { MigrationService } from "../services/migrationService";
-import type { WebviewToHostMessage } from "../protocol/messages";
+import type { HostToWebviewMessage, WebviewToHostMessage } from "../protocol/messages";
 
 const VIEW_TYPE = "alembicGraph.graphPanel";
 const TITLE = "Migration Graph";
@@ -84,6 +86,13 @@ export class GraphPanelManager {
   /** Closes the current panel (if any). Safe to call when nothing is open. */
   dispose(): void {
     this.panel?.dispose();
+  }
+
+  /** Posts `msg` to the currently open graph panel's webview; a no-op if no panel is open. This is
+   * the `ActionContext.postToPanel` implementation (src/ui/actions.ts) — host-side actions (merge,
+   * later upgrade/downgrade/...) never need to know whether the panel exists. */
+  postMessage(msg: HostToWebviewMessage): void {
+    void this.panel?.webview.postMessage(msg);
   }
 
   private webviewOptions(): vscode.WebviewOptions {
@@ -187,6 +196,28 @@ export class GraphPanelManager {
       case "select": {
         const detail = msg.id === null ? null : this.service.getDetail(msg.id);
         void panel.webview.postMessage({ type: "detail", forId: msg.id, detail });
+        break;
+      }
+      case "merge": {
+        // Task 14: drag-to-merge drop. `getCli()` is extension.ts's accessor for the active
+        // project's AlembicCli (Task 13) — this panel doesn't own one directly since it's
+        // constructed before activate() knows whether a CLI will ever be buildable.
+        const cli = getCli();
+        if (!cli) {
+          this.log("graph panel: merge requested but no active alembic CLI is available");
+          break;
+        }
+        const ctx: ActionContext = {
+          cli,
+          service: this.service,
+          log: this.log,
+          postToPanel: (m) => this.postMessage(m),
+        };
+        // mergeHeadsAction never throws in practice (see its own doc comment) — the .catch is
+        // defensive only, per the brief.
+        mergeHeadsAction(ctx, msg.a, msg.b).catch((err) => {
+          this.log(`graph panel: mergeHeadsAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
+        });
         break;
       }
       default:

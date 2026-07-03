@@ -6,6 +6,7 @@ import { getActivePythonPath } from "./services/pythonEnv";
 import { createStatusBar } from "./ui/statusBar";
 import { GraphPanelManager } from "./ui/graphPanel";
 import { SidebarViewProvider } from "./ui/sidebarView";
+import { mergeHeadsAction, type ActionContext } from "./ui/actions";
 import type { UiPrefs } from "./protocol/messages";
 
 const SIDEBAR_VIEW_ID = "alembicGraph.sidebar";
@@ -73,6 +74,45 @@ function registerRemainingStubs(context: vscode.ExtensionContext, skip: Set<stri
   for (const [command, title] of stubs) {
     if (skip.has(command)) continue;
     registerStubCommand(context, command, title);
+  }
+}
+
+interface HeadQuickPickItem extends vscode.QuickPickItem {
+  headId: string;
+}
+
+/**
+ * `alembicGraph.mergeHeads` command body: needs at least 2 current heads, lets the user pick
+ * exactly 2 via a multi-select QuickPick (re-prompting on any other selection count), then hands
+ * off to the same `mergeHeadsAction` the graph panel's drag-and-drop uses.
+ */
+async function runMergeHeadsCommand(ctx: ActionContext): Promise<void> {
+  const heads = ctx.service.getState()?.heads ?? [];
+  if (heads.length < 2) {
+    void vscode.window.showInformationMessage("Alembic Graph: need at least 2 heads to merge.");
+    return;
+  }
+
+  const items: HeadQuickPickItem[] = heads.map((h) => ({
+    label: h.id.slice(0, 10),
+    description: h.message,
+    headId: h.id,
+  }));
+
+  for (;;) {
+    const picked = await vscode.window.showQuickPick(items, {
+      canPickMany: true,
+      placeHolder: "Select exactly 2 heads to merge",
+    });
+    if (picked === undefined) return; // cancelled outright
+    if (picked.length === 2) {
+      await mergeHeadsAction(ctx, picked[0].headId, picked[1].headId);
+      return;
+    }
+    void vscode.window.showWarningMessage(
+      `Alembic Graph: select exactly 2 heads to merge (${picked.length} selected).`,
+    );
+    // loop: re-prompt
   }
 }
 
@@ -174,7 +214,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("alembicGraph.openGraph", () => panelManager.open()),
   );
 
-  registerRemainingStubs(context, new Set(["alembicGraph.refresh", "alembicGraph.openGraph"]));
+  // Task 14: one shared ActionContext for every command-palette action (mergeHeads here; upgrade/
+  // downgrade/revision follow in later tasks) — `postToPanel` delegates to the panel manager's
+  // safe passthrough, which no-ops when no graph panel is open. The graph panel's own "merge"
+  // message case (drag-and-drop) builds its own equivalent context per-message instead of reusing
+  // this one, since it needs `getCli()`'s freshest value rather than the one captured here at
+  // activation time (see graphPanel.ts).
+  const actionCtx: ActionContext = {
+    cli,
+    service,
+    log: (line) => outputChannel.appendLine(line),
+    postToPanel: (msg) => panelManager.postMessage(msg),
+  };
+  context.subscriptions.push(
+    vscode.commands.registerCommand("alembicGraph.mergeHeads", () => runMergeHeadsCommand(actionCtx)),
+  );
+
+  registerRemainingStubs(
+    context,
+    new Set(["alembicGraph.refresh", "alembicGraph.openGraph", "alembicGraph.mergeHeads"]),
+  );
 
   await service.refresh();
 }

@@ -9,6 +9,7 @@ import { onMessage, post, getPersisted, setPersisted } from "../shared/vscodeApi
 import type { AppState, RevisionDetail, UiPrefs } from "../../protocol/messages";
 import { render, showToast, type Handlers, type ViewState } from "./render";
 import { nodeSize, nodeXY } from "./metrics";
+import { attachDnd, type DndCallbacks } from "./dnd";
 
 const appRoot = document.getElementById("app");
 if (!appRoot) throw new Error("alembic graph webview: missing #app root element");
@@ -34,7 +35,54 @@ const store: {
   selectedId: string | null;
   detail: RevisionDetail | null;
   detailOpen: boolean;
-} = { state: null, selectedId: null, detail: null, detailOpen: false };
+  /** Operations (per the "busy" message's `operation` field) currently running host-side —
+   * non-empty disables drag start (dnd.ts's `isEnabled()`) and shows the toolbar's busy
+   * indicator. Populated/drained by the "busy" case in onMessage below. */
+  busyOps: Set<string>;
+} = { state: null, selectedId: null, detail: null, detailOpen: false, busyOps: new Set() };
+
+/**
+ * True from the instant a drag exceeds the pointer-move threshold (dnd.ts) until it fully ends
+ * (drop, revert, or cancel). While true, incoming "state" messages are stashed in `pendingState`
+ * instead of triggering a re-render — render() rebuilds the canvas wholesale, which would orphan
+ * the card currently holding pointer capture mid-drag. See `dndCallbacks.onDragActiveChange`.
+ */
+let dragActive = false;
+/** Latest "state" message received while `dragActive` — applied the moment the drag ends. Only
+ * ever holds at most one entry: a second stash while still dragging simply overwrites the first,
+ * since only the newest state matters once we do re-render. */
+let pendingState: AppState | null = null;
+
+/**
+ * Extra guard beyond `store.busyOps`, closing the narrow race between a drop posting "merge" and
+ * the host's "busy" response: mergeHeadsAction (src/ui/actions.ts) shows an interactive
+ * `showInputBox` BEFORE ever posting `busy:true`, so there's a real, human-timescale window after
+ * a drop where `store.busyOps` is still empty and a second drag could start. Armed the instant a
+ * drop fires; disarmed by the next "busy" or "toast" message (the earliest possible signal the
+ * host round-tripped past the input box, cancelled or not) or — since a *cancelled* input box
+ * sends no message back at all, per the brief — a generous fixed timeout, so this can never wedge
+ * dragging off forever.
+ */
+let dropGuardActive = false;
+let dropGuardTimer: ReturnType<typeof setTimeout> | null = null;
+const DROP_GUARD_TIMEOUT_MS = 30000;
+
+function armDropGuard(): void {
+  dropGuardActive = true;
+  if (dropGuardTimer !== null) clearTimeout(dropGuardTimer);
+  dropGuardTimer = setTimeout(() => {
+    dropGuardTimer = null;
+    dropGuardActive = false;
+  }, DROP_GUARD_TIMEOUT_MS);
+}
+
+function clearDropGuard(): void {
+  dropGuardActive = false;
+  if (dropGuardTimer !== null) {
+    clearTimeout(dropGuardTimer);
+    dropGuardTimer = null;
+  }
+}
 
 /** Last known canvas scroll position. The single source of truth `persist()` reads from — the
  * canvas DOM is torn down and rebuilt wholesale on every render(), so scroll can't be read lazily
@@ -87,30 +135,38 @@ const handlers: Handlers = {
   },
 };
 
+/** dnd.ts's hooks into this store — see the module doc comments on `dragActive`/`dropGuardActive`
+ * above for why each exists. */
+const dndCallbacks: DndCallbacks = {
+  isEnabled() {
+    return store.busyOps.size === 0 && !dropGuardActive;
+  },
+  onMergeDrop(a, b) {
+    armDropGuard();
+    post({ type: "merge", a, b });
+  },
+  onDragActiveChange(active) {
+    dragActive = active;
+    if (!active && pendingState !== null) {
+      const next = pendingState;
+      pendingState = null;
+      applyState(next);
+    }
+  },
+};
+
 renderWaiting();
 
 onMessage((msg) => {
   switch (msg.type) {
     case "state": {
-      const isFirstState = !firstStateHandled;
-      firstStateHandled = true;
-      store.state = msg.state;
-
-      // One-time restore reconciliation: only meaningful the first time we have a real layout to
-      // check the persisted selectedId against.
-      if (isFirstState && persisted && store.selectedId !== null) {
-        const stillExists = msg.state.layout.nodes.some((n) => n.id === store.selectedId);
-        if (stillExists) {
-          // Highlight applies for free (renderStore() below reads store.selectedId); refetch its
-          // detail since the previous webview instance's fetched detail didn't survive.
-          post({ type: "select", id: store.selectedId });
-        } else {
-          store.selectedId = null;
-          store.detailOpen = false;
-        }
+      // Re-render guard (Task 14): a mid-drag DOM rebuild would orphan the card currently holding
+      // pointer capture — stash and apply once the drag ends (dndCallbacks.onDragActiveChange).
+      if (dragActive) {
+        pendingState = msg.state;
+        break;
       }
-
-      renderStore();
+      applyState(msg.state);
       break;
     }
     case "detail":
@@ -127,6 +183,9 @@ onMessage((msg) => {
       }
       break;
     case "toast":
+      // A toast is one of the possible signals that a drop's mergeHeadsAction round trip has
+      // progressed past its interactive input box — see dropGuardActive's doc comment.
+      clearDropGuard();
       showToast(msg.level, msg.text);
       break;
     case "selectNode": {
@@ -141,7 +200,13 @@ onMessage((msg) => {
       scrollNodeIntoView(msg.id);
       break;
     }
-    // "busy" arrives starting Task 16.
+    case "busy": {
+      clearDropGuard();
+      if (msg.active) store.busyOps.add(msg.operation);
+      else store.busyOps.delete(msg.operation);
+      renderStore();
+      break;
+    }
     default:
       break;
   }
@@ -159,19 +224,54 @@ function renderWaiting(): void {
   app.append(waiting);
 }
 
+/** Applies a freshly-received (or drag-end-flushed) AppState: the one-time restored-selection
+ * reconciliation, then a render. Split out of the "state" onMessage case so both the live
+ * round-trip and the deferred-render flush (dndCallbacks.onDragActiveChange) share the exact same
+ * logic. */
+function applyState(state: AppState): void {
+  const isFirstState = !firstStateHandled;
+  firstStateHandled = true;
+  store.state = state;
+
+  // One-time restore reconciliation: only meaningful the first time we have a real layout to
+  // check the persisted selectedId against.
+  if (isFirstState && persisted && store.selectedId !== null) {
+    const stillExists = state.layout.nodes.some((n) => n.id === store.selectedId);
+    if (stillExists) {
+      // Highlight applies for free (renderStore() below reads store.selectedId); refetch its
+      // detail since the previous webview instance's fetched detail didn't survive.
+      post({ type: "select", id: store.selectedId });
+    } else {
+      store.selectedId = null;
+      store.detailOpen = false;
+    }
+  }
+
+  renderStore();
+}
+
 /** Re-renders from the current store, preserving the canvas scroll position across the rebuild
  * (render() replaces the canvas DOM wholesale on every call) — falling back to the last known
  * (possibly restored) scroll when there's no existing viewport yet, i.e. on the very first
  * render. Persists the full UI-prefs/selection/detail/scroll snapshot after every render, which
  * covers order/density/expandCollapsed (mirrored from state.ui), selection, and detailOpen —
- * every change funnels through here except scroll-only movement (see attachScrollListener). */
+ * every change funnels through here except scroll-only movement (see attachScrollListener).
+ *
+ * Never called while `dragActive` (see the "state" case in onMessage and
+ * dndCallbacks.onDragActiveChange) — render() rebuilds the canvas wholesale, which would orphan
+ * the card currently holding pointer capture mid-drag. */
 function renderStore(): void {
   if (!store.state) return;
   const viewport = document.querySelector<HTMLElement>(".alx-canvas-viewport");
   const scrollTop = viewport?.scrollTop ?? lastScroll.scrollTop;
   const scrollLeft = viewport?.scrollLeft ?? lastScroll.scrollLeft;
 
-  const view: ViewState = { selectedId: store.selectedId, detail: store.detail, detailOpen: store.detailOpen };
+  const view: ViewState = {
+    selectedId: store.selectedId,
+    detail: store.detail,
+    detailOpen: store.detailOpen,
+    busy: store.busyOps.size > 0,
+  };
   render(app, store.state, view, handlers);
 
   const nextViewport = document.querySelector<HTMLElement>(".alx-canvas-viewport");
@@ -180,6 +280,9 @@ function renderStore(): void {
     nextViewport.scrollLeft = scrollLeft;
     lastScroll = { scrollTop, scrollLeft };
     attachScrollListener(nextViewport);
+    // dnd.ts (Task 14): re-attach every render since the viewport (and every card in it) is a
+    // fresh DOM subtree each time — same reason attachScrollListener above is re-run.
+    attachDnd(nextViewport, store.state, dndCallbacks);
   }
 
   persist();
