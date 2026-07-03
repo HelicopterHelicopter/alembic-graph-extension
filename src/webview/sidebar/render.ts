@@ -14,8 +14,10 @@ export interface Handlers {
   onUpgrade(): void;
 }
 
-/** Renders the full sidebar into `root`, replacing its previous contents. */
-export function render(root: HTMLElement, state: AppState, handlers: Handlers): void {
+/** Renders the full sidebar into `root`, replacing its previous contents. `busy` (Task 16) is
+ * true while any host-side operation is in flight — it only affects the footer button's
+ * disabled state; main.ts's onUpgrade handler independently refuses to post while busy. */
+export function render(root: HTMLElement, state: AppState, handlers: Handlers, busy = false): void {
   root.className = "alx-side-root";
 
   // Defensive, mirroring graph/render.ts: MigrationService always sets `project` when it exists
@@ -31,7 +33,7 @@ export function render(root: HTMLElement, state: AppState, handlers: Handlers): 
   scroll.className = "alx-side-scroll";
   scroll.append(buildHeadsSection(state, handlers), buildCurrentSection(state), buildProblemsSection(state));
 
-  root.replaceChildren(scroll, buildFooter(handlers));
+  root.replaceChildren(scroll, buildFooter(handlers, busy));
 }
 
 /** Client-side-only placeholder rendered the instant the webview boots, before the host has had a
@@ -198,13 +200,17 @@ function buildProblemRow(problem: Problem): HTMLElement {
 
 // ---------- footer ----------
 
-function buildFooter(handlers: Handlers): HTMLElement {
+function buildFooter(handlers: Handlers, busy: boolean): HTMLElement {
   const footer = document.createElement("div");
   footer.className = "alx-side-footer";
 
   const button = document.createElement("div");
-  button.className = "alx-side-upgrade-btn";
-  button.textContent = "↻ alembic upgrade head";
+  // Task 16: while any host-side operation is in flight the button is visually disabled (dim, no
+  // pointer cursor, pointer-events:none — see sidebar.css). The click listener stays attached
+  // regardless: pointer-events:none already stops real clicks, and main.ts's onUpgrade guard
+  // covers synthesized ones — simpler than add/remove listener churn across re-renders.
+  button.className = busy ? "alx-side-upgrade-btn alx-side-upgrade-btn--disabled" : "alx-side-upgrade-btn";
+  button.textContent = busy ? "⟳ working…" : "↻ alembic upgrade head";
   button.addEventListener("click", () => handlers.onUpgrade());
 
   footer.append(button);

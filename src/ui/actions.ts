@@ -1,14 +1,15 @@
 /**
- * Host-side action handlers shared by the graph panel's message dispatch (src/ui/graphPanel.ts)
- * and command-palette entry points (src/extension.ts) — one seam so both call sites run the exact
- * same guard/prompt/CLI/toast/refresh flow instead of two copies drifting apart.
+ * Host-side action handlers shared by the graph panel's message dispatch (src/ui/graphPanel.ts),
+ * the sidebar's (src/ui/sidebarView.ts), and command-palette entry points (src/extension.ts) —
+ * one seam so every call site runs the exact same guard/prompt/CLI/toast/refresh flow instead of
+ * copies drifting apart.
  *
  * Golden rule (same one alembicCli.ts and migrationService.ts follow): a CLI-backed action must
  * degrade, never throw — a missing interpreter, a rejected prompt, or a broken revision chain all
  * end in a toast/log line, never an unhandled rejection back to VS Code or the webview.
  */
 import * as vscode from "vscode";
-import { bothAreCurrentHeads, mergeSuccessText, mergeErrorText, repointSuccessText } from "./actionHelpers";
+import { bothAreCurrentHeads, mergeSuccessText, cliErrorText, repointSuccessText } from "./actionHelpers";
 import { applyRepoint } from "../services/repoint";
 import type { AlembicCli, RunResult } from "../services/alembicCli";
 import type { MigrationService } from "../services/migrationService";
@@ -18,8 +19,13 @@ export interface ActionContext {
   cli: AlembicCli;
   service: MigrationService;
   log: (line: string) => void;
-  /** Post to the graph panel if open; no-op otherwise (see GraphPanelManager.postMessage). */
-  postToPanel: (msg: HostToWebviewMessage) => void;
+  /** Posts to the graph panel AND the sidebar view — each a safe no-op when its webview isn't
+   * currently open/resolved (see GraphPanelManager.postMessage / SidebarViewProvider.postMessage).
+   * Renamed from Task 14/15's `postToPanel`: busy/toast now needs to reach both surfaces (e.g. the
+   * sidebar's upgrade button must grey out while ANY operation — merge, repoint, upgrade, sql — is
+   * running, not just its own); `state`/`detail`/`selectNode` messaging is untouched by this and
+   * still goes through each webview's own dedicated push (see graphPanel.ts / sidebarView.ts). */
+  broadcast: (msg: HostToWebviewMessage) => void;
 }
 
 /**
@@ -28,7 +34,7 @@ export interface ActionContext {
  * live `AlembicCli` here would wrongly gate repoint's availability on Python/alembic being
  * configured at all.
  */
-export type RepointActionContext = Pick<ActionContext, "service" | "log" | "postToPanel">;
+export type RepointActionContext = Pick<ActionContext, "service" | "log" | "broadcast">;
 
 /**
  * Drag-to-merge / "Merge Heads…" command flow: validates both ids are current heads, prompts for
@@ -40,7 +46,13 @@ export async function mergeHeadsAction(ctx: ActionContext, a: string, b: string)
   try {
     const heads = ctx.service.getState()?.heads ?? [];
     if (!bothAreCurrentHeads(heads, a, b)) {
-      ctx.postToPanel({ type: "toast", level: "error", text: "Both revisions must be current heads to merge." });
+      ctx.broadcast({ type: "toast", level: "error", text: "Both revisions must be current heads to merge." });
+      // The webview armed its drop guard the instant the drop posted "merge", and (Task 16) only
+      // a merge/repoint `busy:false` disarms it — toasts no longer do. Send that definitive
+      // "transaction over" signal even though `busy:true` was never broadcast (deleting an op that
+      // was never added is a webview-side no-op), or an aborted drop would leave dragging locked
+      // out for the guard's full 30s timeout.
+      ctx.broadcast({ type: "busy", operation: "merge", active: false });
       ctx.log(`mergeHeadsAction: ${a} / ${b} are not both current heads — aborting`);
       return;
     }
@@ -49,21 +61,28 @@ export async function mergeHeadsAction(ctx: ActionContext, a: string, b: string)
       value: `merge heads ${a.slice(0, 8)} and ${b.slice(0, 8)}`,
       prompt: "Merge revision message",
     });
-    if (message === undefined) return; // cancelled — silently return, no toast/log noise
+    if (message === undefined) {
+      // Cancelled — still silent (no toast/log noise), but broadcast `busy:false` (Task 14 review
+      // carry-over): a cancelled input box previously sent NOTHING back to the webview, leaving
+      // its drop guard silently armed until the 30s timeout. Same never-added/no-op-delete note
+      // as the abort path above.
+      ctx.broadcast({ type: "busy", operation: "merge", active: false });
+      return;
+    }
 
-    ctx.postToPanel({ type: "busy", operation: "merge", active: true });
+    ctx.broadcast({ type: "busy", operation: "merge", active: true });
     try {
       const result: RunResult = await ctx.cli.run(["merge", "-m", message, a, b]);
       if (result.ok) {
-        ctx.postToPanel({ type: "toast", level: "success", text: mergeSuccessText(result.stdout, message) });
+        ctx.broadcast({ type: "toast", level: "success", text: mergeSuccessText(result.stdout, message) });
         ctx.service.scheduleRefresh();
       } else {
-        ctx.postToPanel({ type: "toast", level: "error", text: mergeErrorText(result) });
+        ctx.broadcast({ type: "toast", level: "error", text: cliErrorText(result) });
         void vscode.window.showErrorMessage("alembic merge failed — see Alembic Graph output");
         ctx.log(`mergeHeadsAction: alembic merge failed: ${result.error}`);
       }
     } finally {
-      ctx.postToPanel({ type: "busy", operation: "merge", active: false });
+      ctx.broadcast({ type: "busy", operation: "merge", active: false });
     }
   } catch (err) {
     // Defensive only — every awaited call above is documented never-throw, but the same golden
@@ -86,27 +105,111 @@ export async function repointAction(ctx: RepointActionContext, ghostId: string, 
   try {
     const plan = ctx.service.getRepointPlan(ghostId, targetId);
     if (!plan.ok) {
-      ctx.postToPanel({ type: "toast", level: "error", text: plan.reason });
+      ctx.broadcast({ type: "toast", level: "error", text: plan.reason });
+      // Same drop-guard release as mergeHeadsAction's abort path (see the comment there): the
+      // webview armed its guard on drop, and only a merge/repoint busy:false disarms it now.
+      ctx.broadcast({ type: "busy", operation: "repoint", active: false });
       ctx.log(`repointAction: ${ghostId} -> ${targetId}: ${plan.reason}`);
       return;
     }
 
-    ctx.postToPanel({ type: "busy", operation: "repoint", active: true });
+    ctx.broadcast({ type: "busy", operation: "repoint", active: true });
     try {
       const result = await applyRepoint(plan.edits, ghostId, targetId);
       if (result.ok) {
-        ctx.postToPanel({ type: "toast", level: "success", text: repointSuccessText(targetId) });
+        ctx.broadcast({ type: "toast", level: "success", text: repointSuccessText(targetId) });
       } else {
-        ctx.postToPanel({ type: "toast", level: "error", text: result.reason });
+        ctx.broadcast({ type: "toast", level: "error", text: result.reason });
         void vscode.window.showErrorMessage("alembic graph: re-point failed — see Alembic Graph output");
         ctx.log(`repointAction: applyRepoint failed: ${result.reason}`);
       }
     } finally {
-      ctx.postToPanel({ type: "busy", operation: "repoint", active: false });
+      ctx.broadcast({ type: "busy", operation: "repoint", active: false });
     }
   } catch (err) {
     // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
     // is documented never-throw.
     ctx.log(`repointAction: unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * DB-mutating upgrade flow (sidebar footer button, graph panel's `upgrade` message, and the
+ * `alembicGraph.upgradeHead` command all land here). `target` is `"heads"` for the multi-head-safe
+ * upgrade-all (plural — `head` errors when more than one head exists) or a specific revision id
+ * (Task 17's upgradeTo). Because this is the first action that actually MODIFIES the user's
+ * database, it opens with a modal confirmation offering three ways out: **Upgrade** (run it),
+ * **Preview SQL** (hand off to previewSqlAction's offline dry run instead), or cancel/Escape
+ * (silent return — no busy was ever broadcast, so there's nothing to clear; unlike merge/repoint
+ * there's no webview drop guard armed for this flow either, since it starts from a button/command,
+ * not a drag). Success refreshes via `service.refresh()` (NOT scheduleRefresh: no file changed, so
+ * no watcher event is coming — and refresh's phase-2 enrichment is exactly what picks up the new
+ * current/applied DB state). Never throws — same golden rule as every action above.
+ */
+export async function upgradeAction(ctx: ActionContext, target: string): Promise<void> {
+  try {
+    const choice = await vscode.window.showWarningMessage(
+      `Run alembic upgrade ${target}? This modifies the database.`,
+      { modal: true },
+      "Upgrade",
+      "Preview SQL",
+    );
+    if (choice === "Preview SQL") {
+      await previewSqlAction(ctx, target);
+      return;
+    }
+    if (choice !== "Upgrade") return; // cancelled — silent, nothing was ever broadcast
+
+    ctx.broadcast({ type: "busy", operation: "upgrade", active: true });
+    try {
+      const result: RunResult = await ctx.cli.run(["upgrade", target]);
+      if (result.ok) {
+        ctx.broadcast({ type: "toast", level: "success", text: `Upgraded to ${target}` });
+        void ctx.service.refresh();
+      } else {
+        ctx.broadcast({ type: "toast", level: "error", text: cliErrorText(result) });
+        void vscode.window.showErrorMessage("alembic upgrade failed — see Alembic Graph output");
+        ctx.log(`upgradeAction: alembic upgrade ${target} failed: ${result.error}`);
+      }
+    } finally {
+      ctx.broadcast({ type: "busy", operation: "upgrade", active: false });
+    }
+  } catch (err) {
+    // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
+    // is documented never-throw.
+    ctx.log(`upgradeAction: unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * Offline SQL dry run: `alembic upgrade <to> --sql` emits the DDL it WOULD run as plain SQL on
+ * stdout — offline mode never opens a DB connection (sqlite never even creates the db file; the
+ * integration test in test/unit/alembicCli.test.ts proves that), so this is always safe to run,
+ * no confirmation needed. The captured stdout opens in a fresh untitled `sql` editor
+ * (`preview: false` so a follow-up action can't silently replace the tab). `to` is any upgrade
+ * target alembic accepts (`"heads"` from Task 16's call sites; a specific id from Task 17's
+ * context menu). Never throws — CLI failure degrades to an error toast + log, same as the rest.
+ */
+export async function previewSqlAction(ctx: ActionContext, to: string): Promise<void> {
+  try {
+    ctx.broadcast({ type: "busy", operation: "sql", active: true });
+    try {
+      const result: RunResult = await ctx.cli.run(["upgrade", to, "--sql"]);
+      if (result.ok) {
+        const doc = await vscode.workspace.openTextDocument({ language: "sql", content: result.stdout });
+        await vscode.window.showTextDocument(doc, { preview: false });
+      } else {
+        ctx.broadcast({ type: "toast", level: "error", text: cliErrorText(result) });
+        void vscode.window.showErrorMessage("alembic upgrade --sql failed — see Alembic Graph output");
+        ctx.log(`previewSqlAction: alembic upgrade ${to} --sql failed: ${result.error}`);
+      }
+    } finally {
+      ctx.broadcast({ type: "busy", operation: "sql", active: false });
+    }
+  } catch (err) {
+    // Not purely defensive here: openTextDocument/showTextDocument CAN reject (e.g. the window
+    // closing mid-flight) — the same degrade-never-throw rule absorbs it, and the finally above
+    // has already cleared busy by the time this runs.
+    ctx.log(`previewSqlAction: unexpected error: ${err instanceof Error ? err.message : String(err)}`);
   }
 }

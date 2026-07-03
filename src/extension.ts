@@ -6,8 +6,8 @@ import { getActivePythonPath } from "./services/pythonEnv";
 import { createStatusBar } from "./ui/statusBar";
 import { GraphPanelManager } from "./ui/graphPanel";
 import { SidebarViewProvider } from "./ui/sidebarView";
-import { mergeHeadsAction, type ActionContext } from "./ui/actions";
-import type { UiPrefs } from "./protocol/messages";
+import { mergeHeadsAction, upgradeAction, type ActionContext } from "./ui/actions";
+import type { HostToWebviewMessage, UiPrefs } from "./protocol/messages";
 
 const SIDEBAR_VIEW_ID = "alembicGraph.sidebar";
 
@@ -166,8 +166,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   if (project === null) {
     outputChannel.appendLine("no alembic project found");
-    const sidebarProvider = new SidebarViewProvider(context.extensionUri, null, null, (line) =>
-      outputChannel.appendLine(line),
+    const sidebarProvider = new SidebarViewProvider(
+      context.extensionUri,
+      null,
+      null,
+      (line) => outputChannel.appendLine(line),
+      null, // no project -> no CLI -> no ActionContext; the sidebar's upgrade path degrades to a log line
     );
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebarProvider));
     registerRemainingStubs(context, new Set());
@@ -192,12 +196,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(createStatusBar(service));
 
-  const panelManager = new GraphPanelManager(context, service, (line) => outputChannel.appendLine(line));
+  // Task 16: busy/toast messages go to BOTH webview surfaces (the graph panel's toolbar spinner /
+  // drop-guard release and the sidebar's busy-disabled upgrade button), each leg a safe no-op when
+  // that webview isn't open. A hoisted function declaration on purpose: its body reads
+  // `panelManager`/`sidebarProvider` at CALL time (always after activate() finishes), which breaks
+  // the construction cycle — the panel manager wants broadcast at construction, broadcast wants
+  // the sidebar provider, and the sidebar provider wants the panel manager.
+  function broadcast(msg: HostToWebviewMessage): void {
+    panelManager.postMessage(msg);
+    sidebarProvider.postMessage(msg);
+  }
+
+  // One shared ActionContext (Task 14, broadcast-ified in Task 16) for every command-palette
+  // action and the sidebar's upgrade button. The graph panel's own CLI-backed message cases
+  // (merge/upgrade/previewSql) still build an equivalent context per-message instead of reusing
+  // this one, since they read `getCli()`'s freshest value rather than the one captured here at
+  // activation time (see graphPanel.ts's buildActionContext).
+  const actionCtx: ActionContext = {
+    cli,
+    service,
+    log: (line) => outputChannel.appendLine(line),
+    broadcast,
+  };
+
+  const panelManager = new GraphPanelManager(context, service, (line) => outputChannel.appendLine(line), broadcast);
   context.subscriptions.push(panelManager);
   context.subscriptions.push(panelManager.registerSerializer());
 
-  const sidebarProvider = new SidebarViewProvider(context.extensionUri, service, panelManager, (line) =>
-    outputChannel.appendLine(line),
+  const sidebarProvider = new SidebarViewProvider(
+    context.extensionUri,
+    service,
+    panelManager,
+    (line) => outputChannel.appendLine(line),
+    actionCtx,
   );
   context.subscriptions.push(vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebarProvider));
 
@@ -214,25 +245,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("alembicGraph.openGraph", () => panelManager.open()),
   );
 
-  // Task 14: one shared ActionContext for every command-palette action (mergeHeads here; upgrade/
-  // downgrade/revision follow in later tasks) — `postToPanel` delegates to the panel manager's
-  // safe passthrough, which no-ops when no graph panel is open. The graph panel's own "merge"
-  // message case (drag-and-drop) builds its own equivalent context per-message instead of reusing
-  // this one, since it needs `getCli()`'s freshest value rather than the one captured here at
-  // activation time (see graphPanel.ts).
-  const actionCtx: ActionContext = {
-    cli,
-    service,
-    log: (line) => outputChannel.appendLine(line),
-    postToPanel: (msg) => panelManager.postMessage(msg),
-  };
   context.subscriptions.push(
     vscode.commands.registerCommand("alembicGraph.mergeHeads", () => runMergeHeadsCommand(actionCtx)),
+  );
+  // Task 16: real implementation replacing the stub — same modal-confirmed multi-head-safe
+  // upgrade-all the sidebar button and graph panel dispatch.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("alembicGraph.upgradeHead", () => upgradeAction(actionCtx, "heads")),
   );
 
   registerRemainingStubs(
     context,
-    new Set(["alembicGraph.refresh", "alembicGraph.openGraph", "alembicGraph.mergeHeads"]),
+    new Set(["alembicGraph.refresh", "alembicGraph.openGraph", "alembicGraph.mergeHeads", "alembicGraph.upgradeHead"]),
   );
 
   await service.refresh();

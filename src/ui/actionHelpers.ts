@@ -27,8 +27,11 @@ export function mergeSuccessText(stdout: string, message: string): string {
 
 /** Error-toast text for a failed CLI run — alembic's own stderr if it said anything, else the
  * run's own `error` field (e.g. a spawn failure with no child process to produce stderr at all) —
- * truncated to 200 chars so a runaway traceback can't blow out the toast. */
-export function mergeErrorText(result: { error: string; stderr: string }): string {
+ * truncated to 200 chars so a runaway traceback can't blow out the toast. Shared by every
+ * actions.ts flow that runs a real `alembic` subprocess and reports its failure as a toast (merge,
+ * upgrade, offline SQL preview) — repointAction is the one exception, since applyRepoint's own
+ * `reason` string is already toast-ready and involves no subprocess. */
+export function cliErrorText(result: { error: string; stderr: string }): string {
   const raw = result.stderr.trim().length > 0 ? result.stderr.trim() : result.error;
   return raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
 }

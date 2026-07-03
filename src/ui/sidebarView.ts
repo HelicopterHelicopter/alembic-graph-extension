@@ -12,21 +12,38 @@
  */
 import * as vscode from "vscode";
 import { buildWebviewHtml } from "./html";
+import { upgradeAction, type ActionContext } from "./actions";
 import type { GraphPanelManager } from "./graphPanel";
 import type { MigrationService } from "../services/migrationService";
-import type { WebviewToHostMessage } from "../protocol/messages";
+import type { HostToWebviewMessage, WebviewToHostMessage } from "../protocol/messages";
 
 const TITLE = "Alembic Migrations";
 
 export class SidebarViewProvider implements vscode.WebviewViewProvider {
+  /** The currently resolved (live) webview view, if any — see postMessage(). A WebviewView can be
+   * torn down and re-resolved by VS Code at will, so this tracks whichever instance is current. */
+  private view: vscode.WebviewView | undefined;
+
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly service: MigrationService | null,
     private readonly panelManager: GraphPanelManager | null,
     private readonly log: (line: string) => void,
+    /** Shared ActionContext built by extension.ts (Task 16) — null in no-project mode, where the
+     * upgrade button's post degrades to a log line. Late-bound broadcast inside, same note as
+     * GraphPanelManager's constructor. */
+    private readonly actionCtx: ActionContext | null,
   ) {}
 
+  /** Posts `msg` to the currently resolved sidebar webview; a no-op when the view isn't resolved
+   * (never opened, or currently torn down). The sidebar leg of `ActionContext.broadcast`
+   * (src/ui/actions.ts) — mirrors GraphPanelManager.postMessage. */
+  postMessage(msg: HostToWebviewMessage): void {
+    void this.view?.webview.postMessage(msg);
+  }
+
   resolveWebviewView(webviewView: vscode.WebviewView): void {
+    this.view = webviewView;
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")],
@@ -59,6 +76,10 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       messageSub.dispose();
       stateSub?.dispose();
       visibilitySub.dispose();
+      // Only clear if WE are still the current instance — a re-resolve may already have replaced
+      // `this.view` with a fresh one whose messages must keep flowing (same guard pattern as
+      // GraphPanelManager's onDidDispose).
+      if (this.view === webviewView) this.view = undefined;
     });
   }
 
@@ -89,10 +110,22 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         // shared across both webviews.
         if (msg.id !== null) this.panelManager?.revealAndSelect(msg.id);
         break;
-      case "upgrade":
-        // Task 16 wires real execution; the footer button renders and posts regardless.
-        this.log("sidebar: not implemented yet: upgrade");
+      case "upgrade": {
+        // Task 16: footer button → modal-confirmed `alembic upgrade heads` (plural: multi-head-
+        // safe). actionCtx is null only in no-project mode, where there is no CLI to run — but
+        // the webview never renders the footer button then either (renderNoProject), so this
+        // guard is defensive.
+        if (!this.actionCtx) {
+          this.log("sidebar: upgrade requested but no alembic project/CLI is available");
+          break;
+        }
+        // upgradeAction never throws in practice (see its own doc comment) — the .catch is
+        // defensive only, same pattern as the graph panel's dispatch.
+        upgradeAction(this.actionCtx, "heads").catch((err) => {
+          this.log(`sidebar: upgradeAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
+        });
         break;
+      }
       default:
         this.log(`sidebar: message not implemented yet: ${msg.type}`);
     }

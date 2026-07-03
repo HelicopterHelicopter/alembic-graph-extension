@@ -4,7 +4,7 @@ import { describe, it, expect } from "vitest";
 // resolvable outside a real extension host — even importing an unrelated named export from
 // actions.ts here would fail the whole test file at load time. mergeHeadsAction itself is
 // vscode-coupled and, per the brief, intentionally NOT unit-tested; only the pure helpers are.
-import { bothAreCurrentHeads, mergeSuccessText, mergeErrorText, repointSuccessText } from "../../src/ui/actionHelpers";
+import { bothAreCurrentHeads, mergeSuccessText, cliErrorText, repointSuccessText } from "../../src/ui/actionHelpers";
 
 describe("bothAreCurrentHeads", () => {
   const heads = [{ id: "aaa" }, { id: "bbb" }, { id: "ccc" }];
@@ -59,28 +59,28 @@ describe("mergeSuccessText", () => {
   });
 });
 
-describe("mergeErrorText", () => {
+describe("cliErrorText", () => {
   it("3a. non-empty stderr wins over error", () => {
-    expect(mergeErrorText({ error: "exit code 1", stderr: "  FAILED: some traceback  \n" })).toBe(
+    expect(cliErrorText({ error: "exit code 1", stderr: "  FAILED: some traceback  \n" })).toBe(
       "FAILED: some traceback",
     );
   });
 
   it("3b. blank/whitespace-only stderr falls back to error", () => {
-    expect(mergeErrorText({ error: "ENOENT: no such file", stderr: "   \n" })).toBe("ENOENT: no such file");
-    expect(mergeErrorText({ error: "ENOENT: no such file", stderr: "" })).toBe("ENOENT: no such file");
+    expect(cliErrorText({ error: "ENOENT: no such file", stderr: "   \n" })).toBe("ENOENT: no such file");
+    expect(cliErrorText({ error: "ENOENT: no such file", stderr: "" })).toBe("ENOENT: no such file");
   });
 
   it("3c. truncates to 200 chars with an ellipsis", () => {
     const longStderr = "x".repeat(250);
-    const result = mergeErrorText({ error: "", stderr: longStderr });
+    const result = cliErrorText({ error: "", stderr: longStderr });
     expect(result).toBe(`${"x".repeat(200)}…`);
     expect(result.length).toBe(201);
   });
 
   it("3d. exactly 200 chars is left untouched (no ellipsis)", () => {
     const exact = "y".repeat(200);
-    expect(mergeErrorText({ error: "", stderr: exact })).toBe(exact);
+    expect(cliErrorText({ error: "", stderr: exact })).toBe(exact);
   });
 });
 

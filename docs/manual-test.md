@@ -443,3 +443,60 @@ stray `fixtures/*/fixture.db`) once you're done, before committing or handing of
     no errors/CSP violations while repeating steps 3–4.
 12. Final cleanup: confirm `git status` shows no stray changes under `fixtures/` and no
     `fixtures/*/fixture.db` files remain, then remove the `alembicCommand` override setting.
+
+## Task 16: upgrade with modal confirm + offline SQL preview + busy-gating polish
+
+`harness/graph.html` and `harness/sidebar.html` (after `npm run build`, served over http) cover the
+webview-side busy polish in isolation: the drop guard now clears ONLY on a merge/repoint
+`busy:false` (an unrelated op's busy/toast leaves it armed — verified via `window.__sendBusy` +
+a real drag), and the sidebar's footer button disables (dim, `⟳ working…`, no post) while any
+`__sendBusy` op is active. The steps below are the F5-only checks the harness can't cover: the real
+modal, a real `alembic upgrade` mutating a real sqlite DB, the untitled SQL editor, and the
+cross-webview busy broadcast.
+
+Setup: same override as Task 13–15 — in the Extension Development Host, **Preferences: Open
+Workspace Settings (JSON)** →
+`"alembicGraph.alembicCommand": "<absolute repo path>/.venv/bin/python -m alembic"`. **A real
+Upgrade writes `fixtures/healthy-project/fixture.db`** (gitignored but must not linger) — when
+done, run `git checkout -- fixtures/` and delete any `fixtures/*/fixture.db` before committing or
+handing off.
+
+1. Press F5, select **Run Extension (healthy fixture)**, set the override, then open the Alembic
+   activity-bar sidebar. Click the **↻ alembic upgrade head** footer button. A MODAL warning
+   appears: "Run alembic upgrade heads? This modifies the database." with **Upgrade** and
+   **Preview SQL** buttons (plus Cancel).
+2. Click **Preview SQL**: no DB is touched — an untitled editor tab opens with `language: sql`
+   containing the full DDL script (`CREATE TABLE alembic_version`, `CREATE TABLE products`, …,
+   both branches' statements). Confirm NO `fixtures/healthy-project/fixture.db` was created
+   (`ls` in a terminal) — offline mode never opens a connection. Close the tab (don't save).
+3. Click the button again, this time press **Escape** (or Cancel): nothing happens — no toast, no
+   busy flicker, no editor, no DB file, nothing in the Output channel for the attempt.
+4. Click the button again, click **Upgrade**: the sidebar button dims to `⟳ working…` (and the
+   graph panel's toolbar, if open, shows the same busy spinner — the broadcast reaches both), then
+   a green success toast `Upgraded to heads` appears in the graph panel (open it via the graph icon
+   if you want to watch), and the state refreshes on its own: every card gains the filled applied
+   dot, `3aebf1885b7d` and `4bfc02996c8e` both gain the green **CURRENT** badge, the sidebar's
+   CURRENT REVISION section shows a filled dot + hash, and the status bar gains `current: <hash>`.
+   `fixtures/healthy-project/fixture.db` now exists.
+5. With the graph panel open, run the command **Alembic Graph: Upgrade to Head** (Command
+   Palette): same modal → same flow (it replaced the Task 6 stub). Clicking **Upgrade** again on an
+   already-upgraded DB still succeeds (alembic no-ops) with the same toast.
+6. Failure path: temporarily set `"alembicGraph.alembicCommand"` to
+   `"definitely-not-a-real-binary"`, click the sidebar button, click **Upgrade**: red error toast
+   (truncated error text) in the graph panel + modal error "alembic upgrade failed — see Alembic
+   Graph output"; Output shows the attempted command + ENOENT; the sidebar button re-enables (busy
+   cleared in the finally). Repeat choosing **Preview SQL**: analogous "alembic upgrade --sql
+   failed" path, no editor opens. Restore the override.
+7. Busy gating across webviews: start a **real** Upgrade (step 4) and, while the `⟳ working…`
+   spinner is up, confirm the sidebar button ignores clicks (dim, no pointer cursor, no second
+   modal) and dragging a head card in the graph panel does nothing. Both re-enable when the toast
+   lands. (The run is quick against sqlite — re-run `git checkout` + delete fixture.db between
+   attempts if you need a longer window, or just trust the harness checks above.)
+8. Merge-cancel lockout fix (Task 14 carry-over): in the graph panel drag one head onto the other,
+   then press **Escape** in the merge input box. Immediately drag the same head again: the drag
+   starts right away (previously the webview's silent drop guard locked dragging out for up to
+   30s after a cancelled input box).
+9. Open webview DevTools for both webviews and confirm no errors/CSP violations while repeating
+   steps 2–4.
+10. Final cleanup: `git checkout -- fixtures/`, delete `fixtures/*/fixture.db`, confirm
+    `git status` is clean, and remove the `alembicCommand` override setting.

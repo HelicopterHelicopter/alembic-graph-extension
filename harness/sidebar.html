@@ -33,10 +33,14 @@
 <script>
   // Stub of the VS Code webview bridge (see src/webview/vscode-webview.d.ts / shared/vscodeApi.ts).
   let vsState;
+  // Task 16: every posted "upgrade" message, in order — a Playwright test reads this directly
+  // (same pattern as graph.html's __postedMerges) to prove the busy-disabled button doesn't post.
+  window.__postedUpgrades = [];
   window.acquireVsCodeApi = () => ({
     postMessage: (message) => {
       console.log("[harness] postMessage from webview:", message);
       if (message && message.type === "ready") respondToReady();
+      else if (message && message.type === "upgrade") window.__postedUpgrades.push({ at: Date.now() });
     },
     getState: () => vsState,
     setState: (state) => {
@@ -44,6 +48,12 @@
       vsState = state;
     },
   });
+
+  // Task 16: lets a Playwright test simulate the host's broadcast busy on/off round trip (the
+  // sidebar main.ts "busy" case) without a real action in flight — same helper graph.html has.
+  window.__sendBusy = (operation, active) => {
+    window.postMessage({ type: "busy", operation, active }, "*");
+  };
 
   function nostate() {
     return new URLSearchParams(window.location.search).get("nostate") === "1";

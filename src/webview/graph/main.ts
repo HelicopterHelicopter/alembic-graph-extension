@@ -58,10 +58,13 @@ let pendingState: AppState | null = null;
  * the host's "busy" response: mergeHeadsAction (src/ui/actions.ts) shows an interactive
  * `showInputBox` BEFORE ever posting `busy:true`, so there's a real, human-timescale window after
  * a drop where `store.busyOps` is still empty and a second drag could start. Armed the instant a
- * drop fires; disarmed by the next "busy" or "toast" message (the earliest possible signal the
- * host round-tripped past the input box, cancelled or not) or — since a *cancelled* input box
- * sends no message back at all, per the brief — a generous fixed timeout, so this can never wedge
- * dragging off forever.
+ * drop fires; disarmed ONLY by a `busy` message with operation "merge" or "repoint" and
+ * active:false — the drop's own transaction ending (Task 16 scoping; previously ANY busy/toast
+ * message disarmed it, so an unrelated operation's toast — e.g. an upgrade finishing — could
+ * reopen the double-drop race mid-window). The host now guarantees that terminal busy:false on
+ * EVERY merge/repoint outcome, including a cancelled input box and pre-busy validation aborts
+ * (see mergeHeadsAction/repointAction) — the generous fixed timeout below stays as a
+ * belt-and-suspenders floor so a dropped message can never wedge dragging off forever.
  */
 let dropGuardActive = false;
 let dropGuardTimer: ReturnType<typeof setTimeout> | null = null;
@@ -147,9 +150,10 @@ const dndCallbacks: DndCallbacks = {
   },
   onRepointDrop(ghostId, targetId) {
     // Task 15: repointAction (host) has no interactive prompt like mergeHeadsAction's
-    // showInputBox, so its "busy" post follows almost immediately — but arming the same guard
-    // here anyway costs nothing (it's disarmed the instant "busy"/"toast" arrives) and keeps this
-    // callback's shape identical to onMergeDrop's rather than special-casing one drag kind.
+    // showInputBox, so its terminal "busy" post follows almost immediately — but arming the same
+    // guard here anyway costs nothing (it's disarmed by repoint's busy:false moments later) and
+    // keeps this callback's shape identical to onMergeDrop's rather than special-casing one drag
+    // kind.
     armDropGuard();
     post({ type: "repoint", ghostId, targetId });
   },
@@ -191,9 +195,10 @@ onMessage((msg) => {
       }
       break;
     case "toast":
-      // A toast is one of the possible signals that a drop's mergeHeadsAction round trip has
-      // progressed past its interactive input box — see dropGuardActive's doc comment.
-      clearDropGuard();
+      // Deliberately does NOT touch the drop guard (Task 16): an unrelated operation's toast
+      // (e.g. an upgrade finishing) arriving inside the drop→busy window must not reopen the
+      // double-drop race. The guard clears only on merge/repoint busy:false — see the "busy"
+      // case below and dropGuardActive's doc comment.
       showToast(msg.level, msg.text);
       break;
     case "selectNode": {
@@ -209,7 +214,14 @@ onMessage((msg) => {
       break;
     }
     case "busy": {
-      clearDropGuard();
+      // Drop-guard clearing is scoped (Task 16) to the two DRAG-initiated operations' terminal
+      // busy:false — the definitive "that drop's host-side transaction is over" signal. While a
+      // merge/repoint is actually running, busy:true keeps drags gated via store.busyOps anyway,
+      // so not clearing on it loses nothing; an unrelated op's busy traffic (upgrade/sql/...)
+      // must leave the guard alone entirely.
+      if (!msg.active && (msg.operation === "merge" || msg.operation === "repoint")) {
+        clearDropGuard();
+      }
       if (msg.active) store.busyOps.add(msg.operation);
       else store.busyOps.delete(msg.operation);
       renderStore();

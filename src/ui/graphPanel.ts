@@ -6,7 +6,14 @@
  */
 import * as vscode from "vscode";
 import { buildWebviewHtml } from "./html";
-import { mergeHeadsAction, repointAction, type ActionContext, type RepointActionContext } from "./actions";
+import {
+  mergeHeadsAction,
+  repointAction,
+  upgradeAction,
+  previewSqlAction,
+  type ActionContext,
+  type RepointActionContext,
+} from "./actions";
 import { getCli } from "../extension";
 import type { MigrationService } from "../services/migrationService";
 import type { HostToWebviewMessage, WebviewToHostMessage } from "../protocol/messages";
@@ -35,6 +42,12 @@ export class GraphPanelManager {
     private readonly context: vscode.ExtensionContext,
     private readonly service: MigrationService,
     private readonly log: (line: string) => void,
+    /** ActionContext.broadcast (Task 16): posts busy/toast to this panel AND the sidebar view —
+     * injected by extension.ts (which owns both managers) rather than built here, so the actions
+     * this panel dispatches reach the sidebar's busy-disabled upgrade button too. Late-bound: the
+     * closure extension.ts passes reads the sidebar provider at call time, so constructing this
+     * manager before the sidebar exists is fine. */
+    private readonly broadcast: (msg: HostToWebviewMessage) => void,
   ) {}
 
   /** Reveals the existing panel, or creates + attaches a fresh one. */
@@ -88,11 +101,25 @@ export class GraphPanelManager {
     this.panel?.dispose();
   }
 
-  /** Posts `msg` to the currently open graph panel's webview; a no-op if no panel is open. This is
-   * the `ActionContext.postToPanel` implementation (src/ui/actions.ts) — host-side actions (merge,
-   * later upgrade/downgrade/...) never need to know whether the panel exists. */
+  /** Posts `msg` to the currently open graph panel's webview; a no-op if no panel is open. One of
+   * the two legs of `ActionContext.broadcast` (src/ui/actions.ts — the other is
+   * SidebarViewProvider.postMessage) — host-side actions (merge, upgrade, ...) never need to know
+   * whether the panel exists. */
   postMessage(msg: HostToWebviewMessage): void {
     void this.panel?.webview.postMessage(msg);
+  }
+
+  /** Builds the ActionContext for a CLI-backed action dispatched from this panel's webview, or
+   * null (logged) when no CLI is available. `getCli()` is extension.ts's accessor for the active
+   * project's AlembicCli (Task 13), read fresh per message — this panel doesn't own one directly
+   * since it's constructed before activate() knows whether a CLI will ever be buildable. */
+  private buildActionContext(what: string): ActionContext | null {
+    const cli = getCli();
+    if (!cli) {
+      this.log(`graph panel: ${what} requested but no active alembic CLI is available`);
+      return null;
+    }
+    return { cli, service: this.service, log: this.log, broadcast: this.broadcast };
   }
 
   private webviewOptions(): vscode.WebviewOptions {
@@ -199,20 +226,9 @@ export class GraphPanelManager {
         break;
       }
       case "merge": {
-        // Task 14: drag-to-merge drop. `getCli()` is extension.ts's accessor for the active
-        // project's AlembicCli (Task 13) — this panel doesn't own one directly since it's
-        // constructed before activate() knows whether a CLI will ever be buildable.
-        const cli = getCli();
-        if (!cli) {
-          this.log("graph panel: merge requested but no active alembic CLI is available");
-          break;
-        }
-        const ctx: ActionContext = {
-          cli,
-          service: this.service,
-          log: this.log,
-          postToPanel: (m) => this.postMessage(m),
-        };
+        // Task 14: drag-to-merge drop.
+        const ctx = this.buildActionContext("merge");
+        if (!ctx) break;
         // mergeHeadsAction never throws in practice (see its own doc comment) — the .catch is
         // defensive only, per the brief.
         mergeHeadsAction(ctx, msg.a, msg.b).catch((err) => {
@@ -221,17 +237,38 @@ export class GraphPanelManager {
         break;
       }
       case "repoint": {
-        // Task 15: ghost-drag repoint drop. Unlike "merge" this never needs getCli() — a repoint
-        // is pure text surgery via vscode's own WorkspaceEdit, no `alembic` subprocess involved.
+        // Task 15: ghost-drag repoint drop. Unlike the CLI-backed actions this never needs
+        // getCli() — a repoint is pure text surgery via vscode's own WorkspaceEdit, no `alembic`
+        // subprocess involved.
         const ctx: RepointActionContext = {
           service: this.service,
           log: this.log,
-          postToPanel: (m) => this.postMessage(m),
+          broadcast: this.broadcast,
         };
         // repointAction never throws in practice (see its own doc comment) — the .catch is
         // defensive only, per the brief.
         repointAction(ctx, msg.ghostId, msg.targetId).catch((err) => {
           this.log(`graph panel: repointAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
+        });
+        break;
+      }
+      case "upgrade": {
+        // Task 16: toolbar/card-initiated upgrade-to-heads (plural: multi-head-safe — `head`
+        // errors when more than one head exists). The modal confirm lives in upgradeAction.
+        const ctx = this.buildActionContext("upgrade");
+        if (!ctx) break;
+        upgradeAction(ctx, "heads").catch((err) => {
+          this.log(`graph panel: upgradeAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
+        });
+        break;
+      }
+      case "previewSql": {
+        // Task 16: offline SQL dry run — a null id means "preview up to head(s)", per the
+        // protocol comment on the message type.
+        const ctx = this.buildActionContext("previewSql");
+        if (!ctx) break;
+        previewSqlAction(ctx, msg.id ?? "heads").catch((err) => {
+          this.log(`graph panel: previewSqlAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
         });
         break;
       }

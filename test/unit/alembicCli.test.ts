@@ -353,4 +353,76 @@ describe.skipIf(!existsSync(VENV_PYTHON))("AlembicCli real-fixture integration (
       }
     }, 30000);
   });
+
+  describe("6f. upgrade integration (Task 16 — real alembic, tmp copy)", () => {
+    // Same golden rule as 6d/6e: `upgrade heads` writes a real sqlite fixture.db — never run it
+    // against HEALTHY_PROJECT directly. Copy to os.tmpdir() first, mutate the copy, clean up.
+    let tmpDir: string | undefined;
+
+    afterAll(() => {
+      if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("6f. upgrade heads against a tmp copy: ok, and current() then reports BOTH head ids applied", async () => {
+      tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-upgrade-"));
+      const projectDir = path.join(tmpDir, "healthy-project");
+      cpSync(HEALTHY_PROJECT, projectDir, { recursive: true });
+
+      const cli = makeFixtureCli(projectDir);
+
+      // Plural `heads` (what every Task 16 call site passes): with 2 heads, singular `head`
+      // errors out — this is the multi-head-safe upgrade-all.
+      const result = await cli.run(["upgrade", "heads"]);
+      expect(result.ok).toBe(true);
+
+      // The DB now exists and BOTH branches' heads are current — the same current() round trip
+      // upgradeAction's follow-up service.refresh() enrichment performs. Order isn't guaranteed
+      // by alembic, hence the Set comparison.
+      const current = await cli.current();
+      expect(current.dbReachable).toBe(true);
+      if (current.dbReachable) {
+        expect(new Set(current.currentIds)).toEqual(new Set(["3aebf1885b7d", "4bfc02996c8e"]));
+        expect(current.currentIds).toHaveLength(2);
+      }
+    }, 30000);
+  });
+
+  describe("6g. offline SQL preview integration (Task 16 — real alembic, FRESH tmp copy)", () => {
+    // A fresh copy, separate from 6f's (which really upgrades its DB): the whole point here is
+    // proving `--sql` NEVER touches a database — an already-created fixture.db would make that
+    // proof meaningless.
+    let tmpDir: string | undefined;
+
+    afterAll(() => {
+      if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("6g. upgrade heads --sql: ok, stdout is the DDL (CREATE TABLE), and NO sqlite db file is created (offline proof)", async () => {
+      tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-sqlpreview-"));
+      const projectDir = path.join(tmpDir, "healthy-project");
+      cpSync(HEALTHY_PROJECT, projectDir, { recursive: true });
+
+      // alembic.ini: sqlite:///fixture.db (cwd-relative). The checked-in fixture never SHIPS one
+      // (gitignored), but earlier tests in this suite (6a/6b's `current()`) auto-create it there
+      // and only the suite-level afterAll deletes it — so a mid-suite copy can inherit it. Scrub
+      // it from the copy so the absence assertion below actually proves --sql created nothing.
+      const dbPath = path.join(projectDir, "fixture.db");
+      rmSync(dbPath, { force: true });
+      expect(existsSync(dbPath)).toBe(false);
+
+      const cli = makeFixtureCli(projectDir);
+      const result = await cli.run(["upgrade", "heads", "--sql"]);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        // The SQL script lands on stdout (alembic's INFO chatter goes to stderr) — this is
+        // exactly what previewSqlAction opens in the untitled sql editor.
+        expect(result.stdout).toContain("CREATE TABLE");
+        expect(result.stdout).toContain("alembic_version");
+      }
+
+      // Offline proof: sqlite auto-creates its file on ANY real connection (6b relies on that),
+      // so the file still being absent means --sql never opened one.
+      expect(existsSync(dbPath)).toBe(false);
+    }, 30000);
+  });
 });

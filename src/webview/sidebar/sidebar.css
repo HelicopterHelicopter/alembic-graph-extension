@@ -216,3 +216,12 @@ body {
   cursor: pointer;
   user-select: none;
 }
+
+/* Task 16: any host-side operation in flight (busy broadcast) — dim, no pointer, and
+   pointer-events:none so a real click never even reaches the listener (main.ts's onUpgrade guard
+   additionally covers synthesized clicks). */
+.alx-side-upgrade-btn--disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
