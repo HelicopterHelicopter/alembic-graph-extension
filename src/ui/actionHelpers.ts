@@ -25,14 +25,27 @@ export function mergeSuccessText(stdout: string, message: string): string {
   return `Merge revision created — ${generating ?? message}`;
 }
 
-/** Error-toast text for a failed CLI run — alembic's own stderr if it said anything, else the
- * run's own `error` field (e.g. a spawn failure with no child process to produce stderr at all) —
- * truncated to 200 chars so a runaway traceback can't blow out the toast. Shared by every
- * actions.ts flow that runs a real `alembic` subprocess and reports its failure as a toast (merge,
- * upgrade, offline SQL preview) — repointAction is the one exception, since applyRepoint's own
- * `reason` string is already toast-ready and involves no subprocess. */
-export function cliErrorText(result: { error: string; stderr: string }): string {
-  const raw = result.stderr.trim().length > 0 ? result.stderr.trim() : result.error;
+/** Error-toast text for a failed CLI run — alembic's own stderr if it said anything; else (Task
+ * 17) alembic's `FAILED: …` refusal line if one landed on STDOUT (alembic's util.messaging prints
+ * some refusals there with stderr completely empty — e.g. `revision -m` on a multi-head project
+ * says "FAILED: Multiple heads are present…" on stdout, and without this fallback the toast would
+ * show Node's unreadable generic "Command failed: <full command line>" instead — proven by the
+ * 7b integration test in test/unit/alembicCli.test.ts); else the run's own `error` field (e.g. a
+ * spawn failure with no child process to produce any output at all). Truncated to 200 chars so a
+ * runaway traceback can't blow out the toast. Shared by every actions.ts flow that runs a real
+ * `alembic` subprocess and reports its failure as a toast (merge, upgrade, downgrade, revision,
+ * offline SQL preview) — repointAction is the one exception, since applyRepoint's own `reason`
+ * string is already toast-ready and involves no subprocess. `stdout` is optional (and only its
+ * FAILED line is ever used — never arbitrary stdout, which for e.g. a failed `upgrade --sql` is
+ * half-emitted SQL, not an error message) so callers passing a full RunResult pick the fallback
+ * up automatically while error-only shapes keep working unchanged. */
+export function cliErrorText(result: { error: string; stderr: string; stdout?: string }): string {
+  const stderrText = result.stderr.trim();
+  const failedLine = (result.stdout ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.startsWith("FAILED"));
+  const raw = stderrText.length > 0 ? stderrText : (failedLine ?? result.error);
   return raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
 }
 

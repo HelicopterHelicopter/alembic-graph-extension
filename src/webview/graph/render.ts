@@ -33,6 +33,9 @@ export interface Handlers {
   onExpandCollapse(): void;
   onCloseDetail(): void;
   onOpenFile(id: string): void;
+  /** Task 17: toolbar "+ New revision" button — `showInputBox`/QuickPick flow lives host-side
+   * (newRevisionAction), this just posts the request. */
+  onNewRevision(): void;
 }
 
 interface Pos {
@@ -155,9 +158,17 @@ function buildToolbar(state: AppState, handlers: Handlers, busy: boolean): HTMLE
     makeToggle("Compact", state.ui.density === "compact", () => handlers.onToggleDensity("compact")),
   );
 
+  // Task 17: right of the density toggles, design's plain (never active-colored) toggleBtn style
+  // — disabled (dim, pointer-events:none, same convention as the sidebar's footer button) while
+  // any host-side operation is in flight.
+  const newRevisionBtn = document.createElement("div");
+  newRevisionBtn.className = busy ? "alx-toggle alx-toggle--disabled" : "alx-toggle";
+  newRevisionBtn.textContent = "+ New revision";
+  newRevisionBtn.addEventListener("click", () => handlers.onNewRevision());
+
   toolbar.append(label, sep, headsChip, revCount, spacer);
   if (busyIndicator) toolbar.append(busyIndicator);
-  toolbar.append(orderLabel, orderGroup, densityGroup);
+  toolbar.append(orderLabel, orderGroup, densityGroup, newRevisionBtn);
   return toolbar;
 }
 

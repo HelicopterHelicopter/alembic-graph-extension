@@ -10,6 +10,7 @@ import type { AppState, RevisionDetail, UiPrefs } from "../../protocol/messages"
 import { render, showToast, type Handlers, type ViewState } from "./render";
 import { nodeSize, nodeXY } from "./metrics";
 import { attachDnd, type DndCallbacks } from "./dnd";
+import { attachContextMenu, closeContextMenu, type MenuHandlers } from "./contextMenu";
 
 const appRoot = document.getElementById("app");
 if (!appRoot) throw new Error("alembic graph webview: missing #app root element");
@@ -136,6 +137,34 @@ const handlers: Handlers = {
   onOpenFile(id) {
     post({ type: "openFile", id });
   },
+  onNewRevision() {
+    // Belt-and-suspenders with render.ts's --disabled styling (pointer-events:none) — same
+    // convention as the sidebar's onUpgrade guard (src/webview/sidebar/main.ts).
+    if (store.busyOps.size > 0) return;
+    post({ type: "newRevision" });
+  },
+};
+
+/** contextMenu.ts's per-item handlers — each just posts the corresponding typed message; the
+ * confirm modal / QuickPick / clipboard write all live host-side (src/ui/actions.ts,
+ * src/ui/graphPanel.ts). `onOpenFile` intentionally reuses the exact same handler as the detail
+ * panel's file row (`handlers.onOpenFile` above) rather than a second copy. */
+const menuHandlers: MenuHandlers = {
+  onUpgradeTo(id) {
+    post({ type: "upgradeTo", id });
+  },
+  onDowngradeTo(id) {
+    post({ type: "downgradeTo", id });
+  },
+  onPreviewSql(id) {
+    post({ type: "previewSql", id });
+  },
+  onCopyId(id) {
+    post({ type: "copyId", id });
+  },
+  onOpenFile(id) {
+    handlers.onOpenFile(id);
+  },
 };
 
 /** dnd.ts's hooks into this store — see the module doc comments on `dragActive`/`dropGuardActive`
@@ -205,6 +234,10 @@ onMessage((msg) => {
       // Task 12: a click in the sidebar heads list routes here via GraphPanelManager.
       // revealAndSelect() — same selection side effects as clicking the card directly (onSelect
       // above), plus centering the canvas on the node since it may be scrolled out of view.
+      // Task 17: also dismiss any open context menu — selection just moved somewhere else
+      // entirely (and the centering scroll below may be a no-op, so the menu's own
+      // scroll-dismiss listener can't be relied on to fire).
+      closeContextMenu();
       store.selectedId = msg.id;
       store.detail = null;
       store.detailOpen = true;
@@ -224,6 +257,9 @@ onMessage((msg) => {
       }
       if (msg.active) store.busyOps.add(msg.operation);
       else store.busyOps.delete(msg.operation);
+      // Task 17: an open context menu must not outlive the busy gate coming down — its items
+      // would post actions the isEnabled() check at open time could no longer veto.
+      if (msg.active) closeContextMenu();
       renderStore();
       break;
     }
@@ -252,6 +288,12 @@ function applyState(state: AppState): void {
   const isFirstState = !firstStateHandled;
   firstStateHandled = true;
   store.state = state;
+
+  // Task 17: a state push can move/remove the card an open context menu was opened on — dismiss
+  // it (the brief's "dismiss on state re-render"). Scoped here rather than renderStore(): the
+  // re-renders renderStore() performs for detail arrivals (including the one the menu's own
+  // right-click-select triggers) must NOT dismiss — see closeContextMenu's doc comment.
+  closeContextMenu();
 
   // One-time restore reconciliation: only meaningful the first time we have a real layout to
   // check the persisted selectedId against.
@@ -303,6 +345,12 @@ function renderStore(): void {
     // dnd.ts (Task 14): re-attach every render since the viewport (and every card in it) is a
     // fresh DOM subtree each time — same reason attachScrollListener above is re-run.
     attachDnd(nextViewport, store.state, dndCallbacks);
+    // contextMenu.ts (Task 17): same re-attach-every-render reasoning; reuses the exact same
+    // busy/drop-guard gate a drag start checks (dndCallbacks.isEnabled), PLUS !dragActive: a
+    // right-click while a left-button drag is mid-flight must not open a menu — its select side
+    // effect re-renders the canvas, which would orphan the card currently holding pointer
+    // capture (the very thing the "state"-message deferral protects against).
+    attachContextMenu(nextViewport, () => dndCallbacks.isEnabled() && !dragActive, menuHandlers);
   }
 
   persist();

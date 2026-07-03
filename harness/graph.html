@@ -55,6 +55,13 @@
   sources: the ghost `deadbeef0000` and its one broken child `5c0d13aa7d9f`, which is ALSO a head
   (`3aebf1885b7d`/`4bfc02996c8e` are the other two) — so dragging the ghost card is a repoint drag,
   while dragging the `5c0d13aa7d9f` card is still a merge drag (heads win — see dnd.ts).
+
+  Task 17 (context menu + new revision): every posted upgradeTo/downgradeTo/previewSql/copyId/
+  openFile/newRevision message lands, whole, in `window.__postedActions` — one shared array (the
+  menu items are exercised one at a time, so per-type arrays would add nothing) that a Playwright
+  test reads directly, same as __postedMerges/__postedRepoints. No host behavior (modal, QuickPick,
+  clipboard write, busy round trip) is synthesized — `window.__sendBusy` remains the way to
+  exercise the busy-gates-the-menu / busy-disables-"+ New revision" paths.
 -->
 <html lang="en">
 <head>
@@ -75,6 +82,10 @@
   window.__postedMerges = [];
   // Task 15: same idea, for ghost-drag repoint drops.
   window.__postedRepoints = [];
+  // Task 17: same idea, for context-menu items + the "+ New revision" toolbar button — one shared
+  // array of whole messages (see the file header comment).
+  window.__postedActions = [];
+  const RECORDED_ACTION_TYPES = new Set(["upgradeTo", "downgradeTo", "previewSql", "copyId", "openFile", "newRevision"]);
   window.acquireVsCodeApi = () => ({
     postMessage: (message) => {
       console.log("[harness] postMessage from webview:", message);
@@ -93,6 +104,8 @@
         window.__postedMerges.push({ a: message.a, b: message.b });
       } else if (message && message.type === "repoint") {
         window.__postedRepoints.push({ ghostId: message.ghostId, targetId: message.targetId });
+      } else if (message && RECORDED_ACTION_TYPES.has(message.type)) {
+        window.__postedActions.push(message);
       }
     },
     getState: () => vsState,

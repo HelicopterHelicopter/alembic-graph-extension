@@ -12,6 +12,7 @@ import {
 } from "../../src/services/alembicCli";
 import { parseRevisionSource } from "../../src/core/parser";
 import { computeRepointedSource } from "../../src/core/repoint";
+import { cliErrorText } from "../../src/ui/actionHelpers";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(here, "../..");
@@ -383,6 +384,104 @@ describe.skipIf(!existsSync(VENV_PYTHON))("AlembicCli real-fixture integration (
       if (current.dbReachable) {
         expect(new Set(current.currentIds)).toEqual(new Set(["3aebf1885b7d", "4bfc02996c8e"]));
         expect(current.currentIds).toHaveLength(2);
+      }
+    }, 30000);
+  });
+
+  describe("7a. downgrade integration (Task 17 — real alembic, tmp copy)", () => {
+    // Same golden rule as 6d–6f: `upgrade`/`downgrade` write a real sqlite fixture.db — never run
+    // them against HEALTHY_PROJECT directly. Copy to os.tmpdir() first, mutate the copy, clean up.
+    let tmpDir: string | undefined;
+
+    afterAll(() => {
+      if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("7a. upgrade heads then downgrade 8f2a1c9d4e07: ok, and current() = exactly the downgrade target", async () => {
+      tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-downgrade-"));
+      const projectDir = path.join(tmpDir, "healthy-project");
+      cpSync(HEALTHY_PROJECT, projectDir, { recursive: true });
+
+      const cli = makeFixtureCli(projectDir);
+
+      // Apply everything first (same as 6f) so there's real DB state to walk back down from.
+      const up = await cli.run(["upgrade", "heads"]);
+      expect(up.ok).toBe(true);
+
+      // The exact call downgradeToAction makes: `alembic downgrade <full id>`. 8f2a1c9d4e07 is
+      // the fixture's single root, so after downgrading to it BOTH branches' revisions are
+      // unapplied and it is the one and only current revision — no Set/order caveat needed.
+      const down = await cli.run(["downgrade", "8f2a1c9d4e07"]);
+      expect(down.ok).toBe(true);
+
+      const current = await cli.current();
+      expect(current).toEqual({ dbReachable: true, currentIds: ["8f2a1c9d4e07"] });
+    }, 30000);
+  });
+
+  describe("7b. new-revision integration (Task 17 — real alembic, tmp copy)", () => {
+    // Same golden rule as 6d–6g: `revision -m` writes a new versions/*.py file — never run it
+    // against HEALTHY_PROJECT directly. Copy to os.tmpdir() first, mutate the copy, clean up.
+    let tmpDir: string | undefined;
+
+    afterAll(() => {
+      if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("7b. revision -m against a tmp copy: multi-head refusal is readable; after a merge it succeeds and the new file parses with the right message", async () => {
+      tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-revision-"));
+      const projectDir = path.join(tmpDir, "healthy-project");
+      cpSync(HEALTHY_PROJECT, projectDir, { recursive: true });
+
+      const cli = makeFixtureCli(projectDir);
+      const versionsDir = path.join(projectDir, "alembic/versions");
+
+      // Deviation from the Task 17 brief (noted in the task report): on a MULTI-head project,
+      // bare `alembic revision -m <msg>` — the exact args newRevisionAction runs — REFUSES to
+      // guess a parent and exits non-zero ("Multiple heads are present..."), so the brief's
+      // "run(['revision','-m',...]) ok" can't happen on this 2-head fixture as-is, and no head
+      // count ever "grows by 1" (a new revision replaces its parent as head; only `--head=base`,
+      // which newRevisionAction never passes, would add one). Assert the refusal is READABLE
+      // first — this is a NORMAL failure mode the action's error toast must surface legibly, same
+      // as autogenerate-without-a-db. Alembic prints this particular refusal on STDOUT with
+      // stderr completely empty, which is exactly why cliErrorText grew its stdout-FAILED-line
+      // fallback (see src/ui/actionHelpers.ts) — assert the actual toast text end to end.
+      const refused = await cli.run(["revision", "-m", "test revision"]);
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) {
+        expect(refused.stdout).toContain("Multiple heads are present");
+        expect(cliErrorText(refused)).toMatch(/^FAILED: Multiple heads are present/);
+      }
+
+      // Collapse to a single head (the same real `merge` 6d exercises), then run the action's
+      // exact args again — the success path a single-head project (the common case) would hit
+      // directly.
+      const merged = await cli.run(["merge", "-m", "collapse heads for revision test", "3aebf1885b7d", "4bfc02996c8e"]);
+      expect(merged.ok).toBe(true);
+      const afterMerge = new Set(readdirSync(versionsDir).filter((f) => f.endsWith(".py")));
+
+      const result = await cli.run(["revision", "-m", "test revision"]);
+      expect(result.ok).toBe(true);
+
+      // A new versions file exists and the REAL parser reads back the message we passed.
+      const newFiles = readdirSync(versionsDir).filter((f) => f.endsWith(".py") && !afterMerge.has(f));
+      expect(newFiles).toHaveLength(1);
+      const newFilePath = path.join(versionsDir, newFiles[0]);
+      const parsed = parseRevisionSource(readFileSync(newFilePath, "utf-8"), newFilePath);
+      expect(parsed).not.toBeNull();
+      expect(parsed?.message).toBe("test revision");
+
+      // The new revision took over as the single head (its parent — the merge revision — no
+      // longer is one).
+      const heads = await cli.run(["heads"]);
+      expect(heads.ok).toBe(true);
+      if (heads.ok) {
+        const headIds = heads.stdout
+          .split("\n")
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0)
+          .map((l) => l.split(/\s+/)[0]);
+        expect(headIds).toEqual([parsed?.revision]);
       }
     }, 30000);
   });

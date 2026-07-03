@@ -82,6 +82,28 @@ describe("cliErrorText", () => {
     const exact = "y".repeat(200);
     expect(cliErrorText({ error: "", stderr: exact })).toBe(exact);
   });
+
+  it("3e. blank stderr + a stdout FAILED line -> the FAILED line wins over error (Task 17: alembic's `revision -m` multi-head refusal prints there)", () => {
+    expect(
+      cliErrorText({
+        error: "Command failed: /long/path/python -m alembic revision -m x",
+        stderr: "",
+        stdout: "FAILED: Multiple heads are present; please specify the head revision.\n",
+      }),
+    ).toBe("FAILED: Multiple heads are present; please specify the head revision.");
+  });
+
+  it("3f. non-FAILED stdout is never used (e.g. half-emitted SQL from a failed --sql run) -> error fallback", () => {
+    expect(
+      cliErrorText({ error: "exit code 1", stderr: "", stdout: "CREATE TABLE products (\n  id INTEGER\n" }),
+    ).toBe("exit code 1");
+  });
+
+  it("3g. stderr still wins over a stdout FAILED line", () => {
+    expect(cliErrorText({ error: "exit code 1", stderr: "real traceback", stdout: "FAILED: something else\n" })).toBe(
+      "real traceback",
+    );
+  });
 });
 
 describe("repointSuccessText", () => {

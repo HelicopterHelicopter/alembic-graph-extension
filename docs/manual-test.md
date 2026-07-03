@@ -500,3 +500,73 @@ handing off.
    steps 2–4.
 10. Final cleanup: `git checkout -- fixtures/`, delete `fixtures/*/fixture.db`, confirm
     `git status` is clean, and remove the `alembicCommand` override setting.
+
+## Task 17: revision context menu + downgrade + new revision + copy id
+
+`harness/graph.html` (after `npm run build`, served over http) covers the webview-side mechanics
+in isolation: the right-click menu's 5 items + separator, item clicks posting
+`upgradeTo`/`downgradeTo`/`previewSql`/`copyId`/`openFile` (recorded in `window.__postedActions`),
+Escape/click-elsewhere/scroll/state-push dismissal, no menu on ghost cards or while busy
+(`window.__sendBusy`), right-click never arming a drag, position clamping at the window edge, and
+the `+ New revision` toolbar button (posts `newRevision`, disabled while busy). The steps below are
+the F5-only checks the harness can't cover: the real modal/QuickPick/input box, a real
+`alembic downgrade`/`alembic revision` subprocess, the OS clipboard, and the file watcher picking
+up a generated revision file.
+
+Setup: same override as Task 13–16 — in the Extension Development Host, **Preferences: Open
+Workspace Settings (JSON)** →
+`"alembicGraph.alembicCommand": "<absolute repo path>/.venv/bin/python -m alembic"`. **A real
+Downgrade writes `fixtures/healthy-project/fixture.db`, and a real New revision writes a new
+`versions/*.py` file** — when done, run `git checkout -- fixtures/`, delete any untracked
+`fixtures/*/alembic/versions/*.py` leftovers (`git clean -n fixtures/` to preview), and delete
+`fixtures/*/fixture.db` before committing or handing off.
+
+1. Press F5, select **Run Extension (healthy fixture)**, set the override, then **Alembic Graph:
+   Open Migration Graph**. Right-click any revision card (e.g. `d4c7f5309b2e` **add password reset
+   flow**): the card gets the blue selected ring + its detail panel opens (same as a left click),
+   and a dark VS Code-style context menu appears at the pointer with, in order: **Upgrade to this
+   revision**, **Downgrade to this revision**, **Preview SQL**, a separator, **Copy revision id**,
+   **Open file**. Press **Escape**: the menu closes, nothing runs.
+2. Right-click near the window's right/bottom edge: the menu stays fully inside the window
+   (clamped), never cut off.
+3. **Copy revision id**: right-click `d4c7f5309b2e` → **Copy revision id**. An info toast `Copied
+   d4c7f5309b2e` appears bottom-right; paste anywhere (Cmd+V) and confirm the full id landed on
+   the OS clipboard.
+4. **Open file**: right-click a card → **Open file**: the revision's real source file opens in an
+   editor tab (same handler as the detail panel's file row).
+5. **Preview SQL**: right-click `d4c7f5309b2e` → **Preview SQL**: an untitled `sql` editor opens
+   with the DDL up to THAT revision only (`create products/users/sessions/password_reset` — no
+   statements from revisions above it). No `fixture.db` is created (offline mode). Close the tab.
+6. **Upgrade to this revision**: right-click `d4c7f5309b2e` → **Upgrade to this revision**: the
+   Task 16 modal appears naming the target (`Run alembic upgrade d4c7f5309b2e? ...`) with
+   **Upgrade** / **Preview SQL** buttons. Click **Upgrade**: busy spinner → green toast `Upgraded
+   to d4c7f5309b2e` → the four base cards (`8f2a…`, `b2e5…`, `c3d6…`, `d4c7…`) gain filled applied
+   dots and `d4c7f5309b2e` gains the CURRENT badge.
+7. **Downgrade**: right-click `8f2a1c9d4e07` **create products table** → **Downgrade to this
+   revision**. A MODAL warning appears: `Run alembic downgrade 8f2a1c9d? This modifies the
+   database.` with a single **Downgrade** button (no Preview SQL here — offline downgrade needs a
+   range, out of scope). Press **Escape** first: nothing happens (no toast, no busy, nothing
+   logged). Repeat and click **Downgrade**: busy spinner → green toast `Downgraded to 8f2a1c9d` →
+   only `8f2a1c9d4e07` keeps the applied dot + CURRENT badge, everything newer shows `not applied`.
+8. Busy gating: while a downgrade/upgrade is in flight (the `⟳ working…` spinner), right-click a
+   card: no menu appears (the browser default menu is also suppressed on cards); the `+ New
+   revision` button is dimmed and ignores clicks. Both recover when the toast lands.
+9. **New revision (empty)**: click the toolbar's **+ New revision** button (right of the density
+   toggles). An input box prompts "New revision message" — confirm empty input is rejected
+   ("Revision message is required") and **Escape** cancels silently. Enter `manual test revision`,
+   then in the QuickPick pick **Empty revision**. NOTE: on this 2-head fixture alembic refuses
+   with a red toast `FAILED: Multiple heads are present; ...` (readable, not a generic "Command
+   failed") — that's the expected multi-head behavior. To see the success path, first merge the
+   two heads (Task 14 drag), then repeat: green toast `Revision created`, a new file appears under
+   `versions/`, and the graph re-renders with the new revision as head (file watcher, no manual
+   refresh).
+10. **New revision (autogenerate failure path)**: click **+ New revision** again, same message,
+    pick **Autogenerate from models (--autogenerate)**. The fixture has no target metadata/env
+    configured for autogenerate against an out-of-date DB, so expect the NORMAL failure: a red
+    error toast with alembic's own readable message (e.g. `Target database is not up to date.` —
+    not a bare exit code), a modal "alembic revision failed — see Alembic Graph output", and the
+    full stderr in the Output channel. No file is created.
+11. Open webview DevTools and confirm no errors/CSP violations while repeating steps 1–10.
+12. Final cleanup: `git checkout -- fixtures/`, `git clean -f fixtures/` (removes any generated
+    merge/revision files), delete `fixtures/*/fixture.db`, confirm `git status` is clean, and
+    remove the `alembicCommand` override setting.

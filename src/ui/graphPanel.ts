@@ -11,6 +11,8 @@ import {
   repointAction,
   upgradeAction,
   previewSqlAction,
+  downgradeToAction,
+  newRevisionAction,
   type ActionContext,
   type RepointActionContext,
 } from "./actions";
@@ -272,7 +274,45 @@ export class GraphPanelManager {
         });
         break;
       }
+      case "upgradeTo": {
+        // Task 17: context menu "Upgrade to this revision" — reuses upgradeAction wholesale (its
+        // modal already names the target and offers Preview SQL), just with a specific id instead
+        // of the toolbar's "heads".
+        const ctx = this.buildActionContext("upgradeTo");
+        if (!ctx) break;
+        upgradeAction(ctx, msg.id).catch((err) => {
+          this.log(`graph panel: upgradeAction (upgradeTo) threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
+        });
+        break;
+      }
+      case "downgradeTo": {
+        // Task 17: context menu "Downgrade to this revision".
+        const ctx = this.buildActionContext("downgradeTo");
+        if (!ctx) break;
+        downgradeToAction(ctx, msg.id).catch((err) => {
+          this.log(`graph panel: downgradeToAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
+        });
+        break;
+      }
+      case "copyId": {
+        // Task 17: context menu "Copy revision id" — no CLI/action involved, just the clipboard +
+        // a confirmation toast broadcast to both webviews (same as every other toast).
+        void vscode.env.clipboard.writeText(msg.id);
+        this.broadcast({ type: "toast", level: "info", text: `Copied ${msg.id}` });
+        break;
+      }
+      case "newRevision": {
+        // Task 17: toolbar "+ New revision".
+        const ctx = this.buildActionContext("newRevision");
+        if (!ctx) break;
+        newRevisionAction(ctx).catch((err) => {
+          this.log(`graph panel: newRevisionAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
+        });
+        break;
+      }
       default:
+        // Reachable only for message types this panel deliberately doesn't handle:
+        // "exportSvg" (Task 20) and "openGraph" (sidebar-only — the graph webview never posts it).
         this.log(`graph panel: message not implemented yet: ${msg.type}`);
     }
   }

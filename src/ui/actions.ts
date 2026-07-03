@@ -213,3 +213,100 @@ export async function previewSqlAction(ctx: ActionContext, to: string): Promise<
     ctx.log(`previewSqlAction: unexpected error: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
+
+/**
+ * Per-revision DB-mutating downgrade flow (Task 17's context menu "Downgrade to this revision").
+ * Unlike upgradeAction there's no Preview SQL escape hatch offered here — an offline downgrade
+ * dry run needs a *range* (alembic's `downgrade --sql <from>:<to>`), not just a target, which is
+ * out of scope for this modal (see the Task 17 brief) — so the confirmation is a single-button
+ * "Downgrade" or cancel/Escape (silent, nothing was ever broadcast). `id` is always the FULL
+ * revision id (the modal text and success toast truncate it to 8 chars for display only; the
+ * actual `alembic downgrade` call always gets the full id). Never throws — same golden rule as
+ * every action above.
+ */
+export async function downgradeToAction(ctx: ActionContext, id: string): Promise<void> {
+  try {
+    const short = id.slice(0, 8);
+    const choice = await vscode.window.showWarningMessage(
+      `Run alembic downgrade ${short}? This modifies the database.`,
+      { modal: true },
+      "Downgrade",
+    );
+    if (choice !== "Downgrade") return; // cancelled — silent, nothing was ever broadcast
+
+    ctx.broadcast({ type: "busy", operation: "downgrade", active: true });
+    try {
+      const result: RunResult = await ctx.cli.run(["downgrade", id]);
+      if (result.ok) {
+        ctx.broadcast({ type: "toast", level: "success", text: `Downgraded to ${short}` });
+        void ctx.service.refresh();
+      } else {
+        ctx.broadcast({ type: "toast", level: "error", text: cliErrorText(result) });
+        void vscode.window.showErrorMessage("alembic downgrade failed — see Alembic Graph output");
+        ctx.log(`downgradeToAction: alembic downgrade ${id} failed: ${result.error}`);
+      }
+    } finally {
+      ctx.broadcast({ type: "busy", operation: "downgrade", active: false });
+    }
+  } catch (err) {
+    // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
+    // is documented never-throw.
+    ctx.log(`downgradeToAction: unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** QuickPick label for newRevisionAction's autogenerate choice — a named constant (not inlined
+ * twice) since both the QuickPick item itself and the branch that reacts to it need the exact
+ * same string. */
+const AUTOGENERATE_LABEL = "Autogenerate from models (--autogenerate)";
+
+/**
+ * `alembic revision -m <message> [--autogenerate]` flow (Task 17's toolbar "+ New revision"
+ * button): prompts for a revision message, then asks empty-vs-autogenerate via QuickPick, runs
+ * the CLI, and toasts the result. Both prompts degrade to a silent return on cancel/Escape —
+ * nothing is broadcast until the QuickPick resolves, so unlike mergeHeadsAction there's no
+ * drop-guard/busy state to clear on an early exit. Autogenerate failing (no configured
+ * `env.py`/target metadata/DB) is the NORMAL failure mode for this button, not a rare edge case —
+ * the error toast (cliErrorText's stderr excerpt) must stay legible for it, not just for a genuine
+ * crash. Success schedules a refresh even though the new versions file landing on disk will also
+ * trip the workspace file watcher on its own (belt-and-suspenders: scheduleRefresh is a cheap,
+ * idempotent debounce, not a second real scan). Never throws — same golden rule as every action
+ * above.
+ */
+export async function newRevisionAction(ctx: ActionContext): Promise<void> {
+  try {
+    const message = await vscode.window.showInputBox({
+      prompt: "New revision message",
+      placeHolder: "add products table",
+      validateInput: (value) => (value.trim().length === 0 ? "Revision message is required" : undefined),
+    });
+    if (message === undefined) return; // cancelled — silent
+
+    const choice = await vscode.window.showQuickPick(["Empty revision", AUTOGENERATE_LABEL], {
+      placeHolder: "Revision type",
+    });
+    if (choice === undefined) return; // cancelled — silent
+
+    const args = ["revision", "-m", message];
+    if (choice === AUTOGENERATE_LABEL) args.push("--autogenerate");
+
+    ctx.broadcast({ type: "busy", operation: "revision", active: true });
+    try {
+      const result: RunResult = await ctx.cli.run(args);
+      if (result.ok) {
+        ctx.broadcast({ type: "toast", level: "success", text: "Revision created" });
+        ctx.service.scheduleRefresh();
+      } else {
+        ctx.broadcast({ type: "toast", level: "error", text: cliErrorText(result) });
+        void vscode.window.showErrorMessage("alembic revision failed — see Alembic Graph output");
+        ctx.log(`newRevisionAction: alembic revision failed: ${result.error}`);
+      }
+    } finally {
+      ctx.broadcast({ type: "busy", operation: "revision", active: false });
+    }
+  } catch (err) {
+    // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
+    // is documented never-throw.
+    ctx.log(`newRevisionAction: unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}

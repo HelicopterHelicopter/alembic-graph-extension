@@ -41,6 +41,12 @@
   --alx-detail-title: var(--vscode-descriptionForeground, #bbbbbb);
   --alx-detail-close: var(--vscode-icon-foreground, #9d9d9d);
   --alx-detail-message: var(--vscode-foreground, #e0e0e0);
+
+  /* Context menu (Task 17) — VS Code's own menu tokens, matching the native right-click menu look. */
+  --alx-menu-bg: var(--vscode-menu-background, #252526);
+  --alx-menu-border: var(--vscode-menu-border, #3a3d41);
+  --alx-menu-fg: var(--vscode-menu-foreground, #cccccc);
+  --alx-menu-hover-bg: var(--vscode-menu-selectionBackground, #094771);
 }
 
 * {
@@ -189,6 +195,14 @@ body {
   border-color: var(--alx-btn);
   background: var(--alx-toggle-active-bg);
   color: #ffffff;
+}
+/* Task 17: the "+ New revision" toolbar button while any host-side operation is in flight — same
+   dim/no-pointer/pointer-events:none convention as the sidebar's footer button
+   (src/webview/sidebar/sidebar.css's --disabled class). */
+.alx-toggle--disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
 }
 
 /* ---------- busy indicator (Task 14) ---------- */
@@ -511,6 +525,35 @@ body {
   pointer-events: none;
   animation: alxpulse 2s ease-in-out infinite;
   z-index: 2;
+}
+
+/* ---------- context menu (Task 17) ---------- */
+.alx-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 190px;
+  background: var(--alx-menu-bg);
+  border: 1px solid var(--alx-menu-border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+  user-select: none;
+}
+.alx-menu-item {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--alx-menu-fg);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.alx-menu-item:hover {
+  background: var(--alx-menu-hover-bg);
+}
+.alx-menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--alx-menu-border);
 }
 
 /* ---------- revision detail panel ---------- */
