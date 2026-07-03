@@ -21,7 +21,8 @@
       { "command": "alembicGraph.refresh",      "title": "Refresh",                 "category": "Alembic Graph", "icon": "$(refresh)" },
       { "command": "alembicGraph.upgradeHead",  "title": "Upgrade to Head",         "category": "Alembic Graph" },
       { "command": "alembicGraph.mergeHeads",   "title": "Merge Heads…",            "category": "Alembic Graph" },
-      { "command": "alembicGraph.selectProject","title": "Select Alembic Project…", "category": "Alembic Graph" }
+      { "command": "alembicGraph.selectProject","title": "Select Alembic Project…", "category": "Alembic Graph" },
+      { "command": "alembicGraph.showInGraph",  "title": "Show in Migration Graph", "category": "Alembic Graph" }
     ],
     "menus": {
       "view/title": [

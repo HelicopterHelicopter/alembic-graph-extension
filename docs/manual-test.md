@@ -570,3 +570,58 @@ Downgrade writes `fixtures/healthy-project/fixture.db`, and a real New revision 
 12. Final cleanup: `git checkout -- fixtures/`, `git clean -f fixtures/` (removes any generated
     merge/revision files), delete `fixtures/*/fixture.db`, confirm `git status` is clean, and
     remove the `alembicCommand` override setting.
+
+## Task 18: Problems-panel diagnostics + "Show in Migration Graph" CodeLens
+
+`buildFileDiagnostics` (src/core/diagnostics.ts) is fully covered by
+`test/unit/diagnostics.test.ts`; the CodeLens provider's line-finding reuses the already-tested
+`parseRevisionSource`. The steps below are the F5-only checks that need a real Problems panel, a
+real CodeLens, and a real file-watcher-triggered clear — nothing here is reachable from vitest.
+
+1. Press F5, select **Run Extension (broken fixture)**, then **Alembic Graph: Open Migration
+   Graph** (not required for diagnostics, but useful for step 5's drag).
+2. Open **View → Problems** (or `Cmd+Shift+M`). Expect exactly one error row: source
+   `alembic-graph`, file `5c0d13aa7d9f_add_audit_log.py`, message
+   `` `5c0d13aa7d9f` revises missing revision `deadbeef0000` — drag the ghost node onto a real
+   revision in the Migration Graph to repair ``. Double-click the row: the file opens with the
+   cursor on the `down_revision = "deadbeef0000"` line (the whole line is underlined/squiggled,
+   not just the value).
+3. In the Explorer, expand `fixtures/broken-project/alembic/versions/` — the same file shows a red
+   underline badge (error count `1`) on its own row, and the `versions` folder/`alembic`/project
+   root each roll up an error badge too (VS Code's own aggregation, nothing this task does
+   directly).
+4. Open `5c0d13aa7d9f_add_audit_log.py` in an editor tab. Just above the `revision = "5c0d13aa7d9f"`
+   line, expect a CodeLens reading `◈ Show in Migration Graph`. Click it: the "Migration Graph"
+   panel opens (or is revealed if already open) with the `5c0d13aa7d9f` card selected (blue
+   ring/background) and the canvas scrolled so it's roughly centered — same round trip as a sidebar
+   head-row click (Task 12).
+5. Open a few other files under the same `versions/` dir (e.g.
+   `8f2a1c9d4e07_create_products_table.py`): each shows its own `◈ Show in Migration Graph` lens
+   above its `revision =` line, clicking selects/centers that card. Open any file OUTSIDE the
+   versions dir (e.g. `fixtures/broken-project/alembic/env.py`, or this repo's own `package.json`):
+   no lens appears there.
+6. With the graph panel open, drag the ghost card (`deadbeef0000`, dashed red) onto a real revision
+   card to repoint it (same drag as Task 15's manual test). Within ~1s of the file-watcher-triggered
+   rescan: the Problems panel's single error row disappears entirely (panel/badge go back to empty),
+   and `5c0d13aa7d9f_add_audit_log.py`'s CodeLens is unaffected (still shows, since the file itself
+   is still a valid revision). Run `git checkout -- fixtures/broken-project` afterward to restore
+   the broken link for future manual-test runs.
+7. Repeat step 6's setup by re-breaking the link (`git checkout` already restored it) — introduce a
+   duplicate id instead: copy `8f2a1c9d4e07_create_products_table.py` to a new file in the same
+   `versions/` dir and leave its `revision = "8f2a1c9d4e07"` line unchanged. Within ~1s: the
+   Problems panel now shows entries for BOTH files at the `revision =` line of each (no drag hint —
+   that suffix is broken-only), and each file's own `◈ Show in Migration Graph` CodeLens still
+   resolves to the SAME `8f2a1c9d4e07` card (first-by-filePath wins, same rule `graph.ts`'s
+   `buildGraph` already applies — see `test/unit/graph.test.ts` test 6). Delete the copy afterward
+   (`git clean -f fixtures/broken-project` or delete the file directly) and confirm `git status` is
+   clean under `fixtures/`.
+8. Repeat steps 1–5 with the **Run Extension (healthy fixture)** launch config: Problems panel is
+   empty (no diagnostics), and every `versions/*.py` file still shows its own
+   `◈ Show in Migration Graph` CodeLens.
+9. Command Palette: run **Alembic Graph: Show in Migration Graph** directly (no CodeLens click).
+   Confirm it does nothing observable (no error, no panel change) — this command is designed to be
+   invoked with a revision id argument (from the CodeLens only), not bare from the palette.
+10. No-project mode: open a workspace with no `alembic.ini` (see Task 12 step 10's setup) and run
+    **Alembic Graph: Show in Migration Graph** from the Command Palette: the friendly stub toast
+    "Alembic Graph: Show in Migration Graph — not implemented yet" appears, same as the other
+    not-yet-resolved commands.

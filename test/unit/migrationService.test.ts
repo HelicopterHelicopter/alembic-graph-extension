@@ -21,7 +21,11 @@ function loadBrokenFiles(): { path: string; content: string }[] {
 
 const DEFAULT_CONFIG = { laneColorA: "#4aa3ff", laneColorB: "#c586c0", showSqlPreview: true, collapseThreshold: 20 };
 const DEFAULT_UI: UiPrefs = { order: "newest-bottom", density: "comfortable", expandCollapsed: false };
+// `state.project` only ever carries label/iniPath (see doRefresh's AppState literal) — kept
+// separate from `DEFAULT_VERSIONS_DIR` below so `expect(state!.project).toEqual(DEFAULT_PROJECT)`
+// isn't broken by a field the emitted state never includes.
 const DEFAULT_PROJECT = { label: "payments-api / alembic", iniPath: "/proj/alembic.ini" };
+const DEFAULT_VERSIONS_DIR = "/proj/versions";
 
 type ServiceConfig = ReturnType<MigrationServiceDeps["getConfig"]>;
 
@@ -45,7 +49,7 @@ function makeDeps(overrides: Partial<MigrationServiceDeps> = {}): FakeDeps {
       ui = prefs;
     }),
     log: vi.fn(),
-    project: { ...DEFAULT_PROJECT },
+    project: { ...DEFAULT_PROJECT, versionsDir: DEFAULT_VERSIONS_DIR },
     ...overrides,
   } as FakeDeps;
   return deps;
@@ -311,6 +315,11 @@ describe("MigrationService edge cases (self-review)", () => {
   it("getState() is null before the first refresh", () => {
     const service = new MigrationService(makeDeps());
     expect(service.getState()).toBeNull();
+  });
+
+  it("getVersionsDir() returns the injected project's versionsDir, even before any refresh (Task 18: codeLens.ts's DocumentSelector)", () => {
+    const service = new MigrationService(makeDeps());
+    expect(service.getVersionsDir()).toBe(DEFAULT_VERSIONS_DIR);
   });
 
   it("onDidChangeState().dispose() stops further notifications", async () => {

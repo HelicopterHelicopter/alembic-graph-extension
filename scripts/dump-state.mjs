@@ -61,7 +61,11 @@ const service = new MigrationService({
     ui = prefs;
   },
   log() {},
-  project: { label: "broken-project / alembic", iniPath: "fixtures/broken-project/alembic.ini" },
+  project: {
+    label: "broken-project / alembic",
+    iniPath: "fixtures/broken-project/alembic.ini",
+    versionsDir: "fixtures/broken-project/alembic/versions",
+  },
 });
 
 await service.refresh();

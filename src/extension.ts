@@ -6,7 +6,9 @@ import { getActivePythonPath } from "./services/pythonEnv";
 import { createStatusBar } from "./ui/statusBar";
 import { GraphPanelManager } from "./ui/graphPanel";
 import { SidebarViewProvider } from "./ui/sidebarView";
+import { createCodeLensProvider } from "./ui/codeLens";
 import { mergeHeadsAction, upgradeAction, type ActionContext } from "./ui/actions";
+import { createDiagnostics } from "./services/diagnostics";
 import type { HostToWebviewMessage, UiPrefs } from "./protocol/messages";
 
 const SIDEBAR_VIEW_ID = "alembicGraph.sidebar";
@@ -70,6 +72,7 @@ function registerRemainingStubs(context: vscode.ExtensionContext, skip: Set<stri
     ["alembicGraph.upgradeHead", "Upgrade to Head"],
     ["alembicGraph.mergeHeads", "Merge Heads…"],
     ["alembicGraph.selectProject", "Select Alembic Project…"],
+    ["alembicGraph.showInGraph", "Show in Migration Graph"],
   ];
   for (const [command, title] of stubs) {
     if (skip.has(command)) continue;
@@ -150,7 +153,7 @@ function buildDeps(context: vscode.ExtensionContext, project: AlembicProject, cl
     log(line) {
       outputChannel.appendLine(line);
     },
-    project: { label: project.label, iniPath: project.iniPath },
+    project: { label: project.label, iniPath: project.iniPath, versionsDir: project.versionsDir },
     async fetchCurrent() {
       const result = await cli.current();
       return result.dbReachable ? { dbReachable: true, currentIds: result.currentIds } : { dbReachable: false, currentIds: [] };
@@ -232,6 +235,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   context.subscriptions.push(vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebarProvider));
 
+  // Task 18: Problems-panel diagnostics + "Show in Migration Graph" CodeLens.
+  context.subscriptions.push(createDiagnostics(service), createCodeLensProvider(service, panelManager));
+  context.subscriptions.push(
+    vscode.commands.registerCommand("alembicGraph.showInGraph", (revisionId?: string) => {
+      // Guards against a missing/malformed argument (e.g. invoked from the Command Palette,
+      // which this command isn't designed to be run from) rather than throwing into VS Code.
+      if (typeof revisionId === "string") panelManager.revealAndSelect(revisionId);
+    }),
+  );
+
   const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(project.versionsDir, "*.py"));
   watcher.onDidCreate(() => service.scheduleRefresh());
   watcher.onDidChange(() => service.scheduleRefresh());
@@ -256,7 +269,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   registerRemainingStubs(
     context,
-    new Set(["alembicGraph.refresh", "alembicGraph.openGraph", "alembicGraph.mergeHeads", "alembicGraph.upgradeHead"]),
+    new Set([
+      "alembicGraph.refresh",
+      "alembicGraph.openGraph",
+      "alembicGraph.mergeHeads",
+      "alembicGraph.upgradeHead",
+      "alembicGraph.showInGraph",
+    ]),
   );
 
   await service.refresh();

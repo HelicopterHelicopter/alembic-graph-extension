@@ -29,7 +29,7 @@ export interface MigrationServiceDeps {
   getUiPrefs(): UiPrefs;
   setUiPrefs(prefs: UiPrefs): void;
   log(line: string): void;
-  project: { label: string; iniPath: string };
+  project: { label: string; iniPath: string; versionsDir: string };
   /**
    * Optional adapter over AlembicCli.current(). Absent in tests/deps that don't care about DB
    * state (state stays `dbReachable: false` forever, exactly as before Task 13). Never expected
@@ -315,6 +315,14 @@ export class MigrationService {
   /** Null before the first refresh. */
   getState(): AppState | null {
     return this.state;
+  }
+
+  /** The active project's `versions/` directory — Task 18's CodeLens provider scopes its
+   * DocumentSelector to this (not every `*.py` file in the workspace). Always set: a
+   * MigrationService only ever exists for a project that was already resolved to have one (see
+   * extension.ts's no-project early return). */
+  getVersionsDir(): string {
+    return this.deps.project.versionsDir;
   }
 
   /**
