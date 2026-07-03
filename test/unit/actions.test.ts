@@ -4,7 +4,7 @@ import { describe, it, expect } from "vitest";
 // resolvable outside a real extension host — even importing an unrelated named export from
 // actions.ts here would fail the whole test file at load time. mergeHeadsAction itself is
 // vscode-coupled and, per the brief, intentionally NOT unit-tested; only the pure helpers are.
-import { bothAreCurrentHeads, mergeSuccessText, mergeErrorText } from "../../src/ui/actionHelpers";
+import { bothAreCurrentHeads, mergeSuccessText, mergeErrorText, repointSuccessText } from "../../src/ui/actionHelpers";
 
 describe("bothAreCurrentHeads", () => {
   const heads = [{ id: "aaa" }, { id: "bbb" }, { id: "ccc" }];
@@ -81,5 +81,15 @@ describe("mergeErrorText", () => {
   it("3d. exactly 200 chars is left untouched (no ellipsis)", () => {
     const exact = "y".repeat(200);
     expect(mergeErrorText({ error: "", stderr: exact })).toBe(exact);
+  });
+});
+
+describe("repointSuccessText", () => {
+  it("4a. target id truncated to 8 chars, matching the design's toast wording", () => {
+    expect(repointSuccessText("4bfc02996c8e")).toBe("Re-pointed down_revision → 4bfc0299 · broken link fixed");
+  });
+
+  it("4b. a shorter id is used verbatim (no padding)", () => {
+    expect(repointSuccessText("abc")).toBe("Re-pointed down_revision → abc · broken link fixed");
   });
 });

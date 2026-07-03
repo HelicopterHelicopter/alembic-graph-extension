@@ -8,7 +8,8 @@
  * end in a toast/log line, never an unhandled rejection back to VS Code or the webview.
  */
 import * as vscode from "vscode";
-import { bothAreCurrentHeads, mergeSuccessText, mergeErrorText } from "./actionHelpers";
+import { bothAreCurrentHeads, mergeSuccessText, mergeErrorText, repointSuccessText } from "./actionHelpers";
+import { applyRepoint } from "../services/repoint";
 import type { AlembicCli, RunResult } from "../services/alembicCli";
 import type { MigrationService } from "../services/migrationService";
 import type { HostToWebviewMessage } from "../protocol/messages";
@@ -20,6 +21,14 @@ export interface ActionContext {
   /** Post to the graph panel if open; no-op otherwise (see GraphPanelManager.postMessage). */
   postToPanel: (msg: HostToWebviewMessage) => void;
 }
+
+/**
+ * repointAction's dependencies — deliberately NOT `ActionContext`: unlike merge, a repoint never
+ * touches `alembic` (there's no CLI for this — see core/repoint.ts's doc comment), so requiring a
+ * live `AlembicCli` here would wrongly gate repoint's availability on Python/alembic being
+ * configured at all.
+ */
+export type RepointActionContext = Pick<ActionContext, "service" | "log" | "postToPanel">;
 
 /**
  * Drag-to-merge / "Merge Heads…" command flow: validates both ids are current heads, prompts for
@@ -60,5 +69,44 @@ export async function mergeHeadsAction(ctx: ActionContext, a: string, b: string)
     // Defensive only — every awaited call above is documented never-throw, but the same golden
     // rule (CLI-adjacent host actions degrade, never throw) applies to this function as a whole.
     ctx.log(`mergeHeadsAction: unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * Ghost-drag repoint drop flow: plans the edit set from the cached graph (cycle-guarded — see
+ * MigrationService.getRepointPlan), applies it (services/repoint.ts's WorkspaceEdit-per-file text
+ * surgery), and toasts the result. Unlike mergeHeadsAction there's no interactive prompt to
+ * confirm — alembic has no CLI for this operation, so the drop itself is the only user gesture —
+ * and no explicit `service.scheduleRefresh()` call on success: the file(s) `applyRepoint` saves
+ * trip the same workspace file watcher a manual edit would, which schedules its own rescan. Never
+ * throws — every failure path (an unknown/invalid plan, a text-surgery rejection, or a write
+ * failure) degrades to a toast/log line and returns.
+ */
+export async function repointAction(ctx: RepointActionContext, ghostId: string, targetId: string): Promise<void> {
+  try {
+    const plan = ctx.service.getRepointPlan(ghostId, targetId);
+    if (!plan.ok) {
+      ctx.postToPanel({ type: "toast", level: "error", text: plan.reason });
+      ctx.log(`repointAction: ${ghostId} -> ${targetId}: ${plan.reason}`);
+      return;
+    }
+
+    ctx.postToPanel({ type: "busy", operation: "repoint", active: true });
+    try {
+      const result = await applyRepoint(plan.edits, ghostId, targetId);
+      if (result.ok) {
+        ctx.postToPanel({ type: "toast", level: "success", text: repointSuccessText(targetId) });
+      } else {
+        ctx.postToPanel({ type: "toast", level: "error", text: result.reason });
+        void vscode.window.showErrorMessage("alembic graph: re-point failed — see Alembic Graph output");
+        ctx.log(`repointAction: applyRepoint failed: ${result.reason}`);
+      }
+    } finally {
+      ctx.postToPanel({ type: "busy", operation: "repoint", active: false });
+    }
+  } catch (err) {
+    // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
+    // is documented never-throw.
+    ctx.log(`repointAction: unexpected error: ${err instanceof Error ? err.message : String(err)}`);
   }
 }

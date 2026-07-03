@@ -145,6 +145,14 @@ const dndCallbacks: DndCallbacks = {
     armDropGuard();
     post({ type: "merge", a, b });
   },
+  onRepointDrop(ghostId, targetId) {
+    // Task 15: repointAction (host) has no interactive prompt like mergeHeadsAction's
+    // showInputBox, so its "busy" post follows almost immediately — but arming the same guard
+    // here anyway costs nothing (it's disarmed the instant "busy"/"toast" arrives) and keeps this
+    // callback's shape identical to onMergeDrop's rather than special-casing one drag kind.
+    armDropGuard();
+    post({ type: "repoint", ghostId, targetId });
+  },
   onDragActiveChange(active) {
     dragActive = active;
     if (!active && pendingState !== null) {

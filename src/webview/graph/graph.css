@@ -313,6 +313,14 @@ body {
     0 0 20px #89d18555;
 }
 
+/* ---------- ghost-drag repoint (Task 15) ---------- */
+.alx-card--repoint-target {
+  border-color: #4aa3ff;
+  box-shadow:
+    0 0 0 2px #4aa3ff,
+    0 0 20px #4aa3ff55;
+}
+
 .alx-stripe {
   position: absolute;
   left: 0;
@@ -455,7 +463,11 @@ body {
   border: 1.5px dashed #f14c4c;
   border-radius: 7px;
   background: rgba(241, 76, 76, 0.08);
-  cursor: default;
+  /* Task 15: a ghost card is always a repoint-drag source (see dnd.ts's
+     [data-repoint-ghost-id] selector) — grab cursor + no browser touch-scroll gestures, same as
+     .alx-card--draggable applies to draggable revision cards. */
+  cursor: grab;
+  touch-action: none;
 }
 .alx-ghost-label {
   display: flex;

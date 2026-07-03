@@ -6,7 +6,7 @@
  */
 import * as vscode from "vscode";
 import { buildWebviewHtml } from "./html";
-import { mergeHeadsAction, type ActionContext } from "./actions";
+import { mergeHeadsAction, repointAction, type ActionContext, type RepointActionContext } from "./actions";
 import { getCli } from "../extension";
 import type { MigrationService } from "../services/migrationService";
 import type { HostToWebviewMessage, WebviewToHostMessage } from "../protocol/messages";
@@ -217,6 +217,21 @@ export class GraphPanelManager {
         // defensive only, per the brief.
         mergeHeadsAction(ctx, msg.a, msg.b).catch((err) => {
           this.log(`graph panel: mergeHeadsAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
+        });
+        break;
+      }
+      case "repoint": {
+        // Task 15: ghost-drag repoint drop. Unlike "merge" this never needs getCli() — a repoint
+        // is pure text surgery via vscode's own WorkspaceEdit, no `alembic` subprocess involved.
+        const ctx: RepointActionContext = {
+          service: this.service,
+          log: this.log,
+          postToPanel: (m) => this.postMessage(m),
+        };
+        // repointAction never throws in practice (see its own doc comment) — the .catch is
+        // defensive only, per the brief.
+        repointAction(ctx, msg.ghostId, msg.targetId).catch((err) => {
+          this.log(`graph panel: repointAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
         });
         break;
       }

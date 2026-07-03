@@ -621,3 +621,125 @@ describe("MigrationService.getDetail", () => {
     expect(service.getDetail("deadbeef0000")).toBeNull();
   });
 });
+
+/** Minimal synthetic versions/*.py content — just enough for parseRevisionSource to find
+ * revision/down_revision/Revises: (see core/repoint.ts's test file for a more elaborate example);
+ * used below to build small ad-hoc broken chains the checked-in fixtures don't have (a ghost with
+ * >1 broken child, a cycle candidate several revisions deep). */
+function pyFile(id: string, down: string | null, message: string): { path: string; content: string } {
+  const downLine = down === null ? "down_revision = None" : `down_revision = '${down}'`;
+  const content = `"""${message}
+
+Revision ID: ${id}
+Revises: ${down ?? ""}
+Create Date: 2026-01-01 00:00:00.000000
+
+"""
+revision = '${id}'
+${downLine}
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    pass
+
+
+def downgrade():
+    pass
+`;
+  return { path: `/tmp/${id}.py`, content };
+}
+
+describe("MigrationService.getRepointPlan", () => {
+  it("no cached graph yet (before any refresh) -> error", () => {
+    const service = new MigrationService(makeDeps());
+    const plan = service.getRepointPlan("deadbeef0000", "3aebf1885b7d");
+    expect(plan.ok).toBe(false);
+  });
+
+  it("happy path: the broken-project fixture's single broken child gets one edit", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    const plan = service.getRepointPlan("deadbeef0000", "3aebf1885b7d");
+    expect(plan.ok).toBe(true);
+    if (plan.ok) {
+      expect(plan.edits).toHaveLength(1);
+      expect(plan.edits[0].revisionId).toBe("5c0d13aa7d9f");
+      expect(plan.edits[0].filePath).toContain("5c0d13aa7d9f_add_audit_log.py");
+    }
+  });
+
+  it("unknown ghost id -> error", async () => {
+    const service = new MigrationService(makeDeps());
+    await service.refresh();
+    expect(service.getRepointPlan("not-a-real-ghost", "3aebf1885b7d").ok).toBe(false);
+  });
+
+  it("target id that isn't a real revision -> error", async () => {
+    const service = new MigrationService(makeDeps());
+    await service.refresh();
+    expect(service.getRepointPlan("deadbeef0000", "not-a-real-revision").ok).toBe(false);
+  });
+
+  it("multi-child ghost: every broken child of the ghost gets its own edit", async () => {
+    const files = [
+      pyFile("a1111111111", null, "root"),
+      pyFile("b2222222222", "ghost0000000", "broken child 1"),
+      pyFile("c3333333333", "ghost0000000", "broken child 2"),
+    ];
+    const deps = makeDeps({ listVersionFiles: vi.fn(async () => files) });
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    const plan = service.getRepointPlan("ghost0000000", "a1111111111");
+    expect(plan.ok).toBe(true);
+    if (plan.ok) {
+      expect(new Set(plan.edits.map((e) => e.revisionId))).toEqual(new Set(["b2222222222", "c3333333333"]));
+      expect(plan.edits).toHaveLength(2);
+    }
+  });
+
+  it("cycle rejection: target is a descendant of the broken child, several hops down", async () => {
+    // ghost -> b (broken) -> c -> d ; re-pointing ghost's link to d would make b (a child of the
+    // ghost) an ancestor of d while d becomes b's new down_revision-of-down_revision — a cycle.
+    const files = [
+      pyFile("b2222222222", "ghost0000000", "b broken"),
+      pyFile("c3333333333", "b2222222222", "c"),
+      pyFile("d4444444444", "c3333333333", "d"),
+    ];
+    const deps = makeDeps({ listVersionFiles: vi.fn(async () => files) });
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    const plan = service.getRepointPlan("ghost0000000", "d4444444444");
+    expect(plan).toEqual({ ok: false, reason: "re-pointing would create a cycle" });
+  });
+
+  it("cycle rejection: target equals the broken child itself", async () => {
+    const files = [pyFile("b2222222222", "ghost0000000", "b broken")];
+    const deps = makeDeps({ listVersionFiles: vi.fn(async () => files) });
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    const plan = service.getRepointPlan("ghost0000000", "b2222222222");
+    expect(plan).toEqual({ ok: false, reason: "re-pointing would create a cycle" });
+  });
+
+  it("a sibling branch (not a descendant of any broken child) is a valid, non-cycle target", async () => {
+    const files = [
+      pyFile("a1111111111", null, "root"),
+      pyFile("b2222222222", "ghost0000000", "broken child"),
+      pyFile("sibling00001", "a1111111111", "unrelated sibling branch"),
+    ];
+    const deps = makeDeps({ listVersionFiles: vi.fn(async () => files) });
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    const plan = service.getRepointPlan("ghost0000000", "sibling00001");
+    expect(plan.ok).toBe(true);
+    if (plan.ok) expect(plan.edits.map((e) => e.revisionId)).toEqual(["b2222222222"]);
+  });
+});

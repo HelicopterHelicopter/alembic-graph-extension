@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterAll } from "vitest";
-import { existsSync, rmSync, mkdtempSync, cpSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, rmSync, mkdtempSync, cpSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +11,7 @@ import {
   type RunResult,
 } from "../../src/services/alembicCli";
 import { parseRevisionSource } from "../../src/core/parser";
+import { computeRepointedSource } from "../../src/core/repoint";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(here, "../..");
@@ -279,6 +280,76 @@ describe.skipIf(!existsSync(VENV_PYTHON))("AlembicCli real-fixture integration (
           .map((l) => l.trim())
           .filter((l) => l.length > 0);
         expect(headLines).toHaveLength(1); // both original heads merged into a single new head
+      }
+    }, 30000);
+  });
+
+  /** Recursively deletes every `__pycache__` dir under `dir`. Python's default bytecode-cache
+   * invalidation stores the source file's mtime with WHOLE-SECOND resolution — copying a fixture
+   * (whose versions/*.py already ship a checked-in __pycache__/*.pyc, see fixtures/broken-project)
+   * and then running `alembic heads` (which compiles + caches a fresh .pyc for whatever content is
+   * on disk at that instant) followed by an in-process rewrite of the SAME file within the same
+   * wall-clock second can leave a stale .pyc whose recorded mtime happens to match the rewritten
+   * file's — Python then silently reuses the STALE (pre-repoint) bytecode instead of re-parsing
+   * the new source, so `alembic` keeps seeing the broken `down_revision` even though the file on
+   * disk is already fixed. Called right after rewriting the repointed file, before the CLI is
+   * asked to read it again, so there is no bytecode cache left to possibly collide with.
+   */
+  function removePycacheDirs(dir: string): void {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const entryPath = path.join(dir, entry.name);
+      if (!entry.isDirectory()) continue;
+      if (entry.name === "__pycache__") {
+        rmSync(entryPath, { recursive: true, force: true });
+      } else {
+        removePycacheDirs(entryPath);
+      }
+    }
+  }
+
+  describe("6e. repoint repair integration (Task 15 — real alembic, tmp copy)", () => {
+    // Same golden rule as 6d: never mutate BROKEN_PROJECT directly — copy first, always clean up.
+    let tmpDir: string | undefined;
+
+    afterAll(() => {
+      if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("6e. computeRepointedSource repairs the broken chain: `alembic heads` goes from crashing to listing exactly 2 real heads", async () => {
+      tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-repoint-"));
+      const projectDir = path.join(tmpDir, "broken-project");
+      cpSync(BROKEN_PROJECT, projectDir, { recursive: true });
+
+      const cli = makeFixtureCli(projectDir);
+
+      // Sanity check: the broken chain really does crash `alembic heads` before the repair (same
+      // proof 6c gives for current(), here for the command repointAction's toast text refers to).
+      const before = await cli.run(["heads"]);
+      expect(before.ok).toBe(false);
+
+      const brokenFilePath = path.join(projectDir, "alembic/versions/5c0d13aa7d9f_add_audit_log.py");
+      const src = readFileSync(brokenFilePath, "utf-8");
+      const result = computeRepointedSource(src, "deadbeef0000", "4bfc02996c8e");
+      expect(result.ok).toBe(true);
+      if (result.ok) writeFileSync(brokenFilePath, result.newSrc);
+      removePycacheDirs(projectDir); // see removePycacheDirs's doc comment — avoids a same-second stale .pyc
+
+      // Use the REAL parser (not a hand-rolled regex) to confirm the on-disk file now down-revises
+      // the real target — same cross-check style 6d uses for its own new file.
+      const parsed = parseRevisionSource(readFileSync(brokenFilePath, "utf-8"), brokenFilePath);
+      expect(parsed?.downRevisions).toEqual(["4bfc02996c8e"]);
+
+      const after = await cli.run(["heads"]);
+      expect(after.ok).toBe(true);
+      if (after.ok) {
+        const headIds = after.stdout
+          .split("\n")
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0)
+          .map((l) => l.split(/\s+/)[0]);
+        // 4bfc02996c8e is no longer a head (5c0d13aa7d9f now revises it); 5c0d13aa7d9f is.
+        expect(new Set(headIds)).toEqual(new Set(["3aebf1885b7d", "5c0d13aa7d9f"]));
+        expect(headIds).toHaveLength(2);
       }
     }, 30000);
   });

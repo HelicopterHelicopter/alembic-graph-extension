@@ -379,3 +379,67 @@ stray `fixtures/*/fixture.db`) once you're done, before committing or handing of
     afterward (`5c0d13aa7d9f` remains). `git checkout -- fixtures/broken-project` afterward.
 14. Final cleanup: confirm `git status` shows no stray changes under `fixtures/` and no
     `fixtures/*/fixture.db` files remain, then remove the `alembicCommand` override setting.
+
+## Task 15: ghost-drag repoint
+
+`harness/graph.html` (after `npm run build`, served over http) covers the pointer mechanics again,
+same as Task 14: the broken-project fixture it's dumped from (`node scripts/dump-state.mjs`) has
+exactly one ghost (`deadbeef0000`) whose only child (`5c0d13aa7d9f`) is ALSO a head, so it exercises
+both drag-source rules at once — dragging the ghost card is a repoint drag (blue ring on every real
+revision card, `window.__postedRepoints`), while dragging the `5c0d13aa7d9f` card is still a MERGE
+drag (green ring, `window.__postedMerges`) because heads win even when broken. The steps below are
+the F5-only checks that harness can't cover: a real text edit landing on disk, the file-watcher-
+triggered rescan, the Problems/diagnostics side effects, and a real `alembic heads` recovering.
+
+Setup: same override as Task 13/14 — in the Extension Development Host, **Preferences: Open
+Workspace Settings (JSON)** →
+`"alembicGraph.alembicCommand": "<absolute repo path>/.venv/bin/python -m alembic"`. **Fixture
+mutations from this section must be reverted** — run `git checkout -- fixtures/` (and delete any
+stray `fixtures/*/fixture.db`) once you're done, before committing or handing off.
+
+1. Press F5, select **Run Extension (broken fixture)** (3 heads: `3aebf1885b7d`, `4bfc02996c8e`,
+   `5c0d13aa7d9f`; 1 problem), set the override, then **Alembic Graph: Open Migration Graph**.
+2. Find the dashed red **⚠ missing revision** ghost card (hash `deadbeef0000`) and the
+   `5c0d13aa7d9f` **add audit log** card just below it — it shows both `HEAD` and `BROKEN` badges
+   and the pulsing hint "⚠ down_revision missing — drag onto a parent to re-point".
+3. Drag the ghost card (grab anywhere on it) toward the `4bfc02996c8e` **search index
+   (experimental)** card. Confirm, while dragging: EVERY real revision card on the canvas (not just
+   the one under the cursor) shows a blue ring/glow (`#4aa3ff`), the ghost card itself gets a drop
+   shadow and follows the cursor exactly, ghosts/collapse cards are never ringed. Drop it onto
+   `4bfc02996c8e` (release over the target).
+4. Expect, with NO input box (unlike merge — there's nothing to confirm): the toolbar shows the
+   `⟳ working…` indicator briefly, then a green success toast reading `Re-pointed down_revision →
+   4bfc0299… · broken link fixed`. The file watcher picks this up with no manual refresh: the ghost
+   card disappears, `5c0d13aa7d9f`'s `BROKEN` badge and hint are gone, the heads count drops from 3
+   to 2 (`4bfc02996c8e` is no longer a head — `5c0d13aa7d9f` now revises it), and the toolbar's
+   heads chip / problems count both update.
+5. In a terminal, from `fixtures/broken-project`, run
+   `../../.venv/bin/python -m alembic heads` — confirm it now SUCCEEDS (no traceback) and lists
+   exactly two heads: `3aebf1885b7d` and `5c0d13aa7d9f`. Inspect
+   `fixtures/broken-project/alembic/versions/5c0d13aa7d9f_add_audit_log.py` in the editor: only the
+   `down_revision` value and the docstring's `Revises:` line changed (now `4bfc02996c8e`) — every
+   other line, including the `upgrade()`/`downgrade()` bodies, is byte-for-byte unchanged.
+6. Run `git checkout -- fixtures/broken-project` in a terminal, then **Alembic Graph: Refresh** —
+   back to 3 heads, 1 problem, ghost card back.
+7. Repeat step 3, but this time press **Escape** while the blue rings are showing instead of
+   releasing normally: the ghost card snaps back to its origin, no toast, no busy spinner, the file
+   on disk is untouched (`git status` shows nothing under `fixtures/`).
+8. Repeat step 3, but drop on empty canvas (not on any real revision card): the ghost card snaps
+   back to its origin cleanly, no toast, no file change.
+9. Drag the `5c0d13aa7d9f` card itself (not the ghost) toward `3aebf1885b7d`: confirm it behaves
+   exactly like Task 14's merge drag — GREEN ring (not blue), a merge input box on drop, NOT a
+   repoint. This is the "heads win" rule: `5c0d13aa7d9f` is broken but also a head, so it's a merge
+   source, and the ghost card is the only handle that can repair `deadbeef0000`.
+10. Cycle-guard failure path: with the graph back to its original broken state (step 6), open
+    `fixtures/broken-project/alembic/versions/5c0d13aa7d9f_add_audit_log.py` and temporarily change
+    its `down_revision` to reference a ghost id whose only child chains back to a real descendant
+    (e.g. point some other revision's `down_revision` at a new fake missing id, then drag that new
+    ghost onto one of ITS OWN broken child's descendants) — expect a red error toast reading
+    `re-pointing would create a cycle` and no file change. (Simpler alternative: trust the unit
+    tests in `test/unit/migrationService.test.ts`'s `getRepointPlan` suite, which cover this guard
+    directly — this step is optional if short on time.) `git checkout -- fixtures/broken-project`
+    afterward regardless.
+11. Open webview DevTools (**Developer: Open Webview Developer Tools**) and confirm the Console has
+    no errors/CSP violations while repeating steps 3–4.
+12. Final cleanup: confirm `git status` shows no stray changes under `fixtures/` and no
+    `fixtures/*/fixture.db` files remain, then remove the `alembicCommand` override setting.

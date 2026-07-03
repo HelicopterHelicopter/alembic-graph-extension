@@ -18,6 +18,10 @@ import { extractFunctionBody, parseRevisionSource } from "../core/parser";
 import type { MigrationGraph } from "../core/types";
 import type { AppState, RevisionDetail, UiPrefs } from "../protocol/messages";
 
+export type RepointPlan =
+  | { ok: true; edits: { revisionId: string; filePath: string }[] }
+  | { ok: false; reason: string };
+
 export interface MigrationServiceDeps {
   /** List and read all *.py files in the versions dir. */
   listVersionFiles(): Promise<{ path: string; content: string }[]>;
@@ -360,6 +364,43 @@ export class MigrationService {
       upgradeBody,
       downgradeBody,
     };
+  }
+
+  /**
+   * Pure over `cachedGraph`: plans a ghost-drag repoint — every broken child of `ghostId` gets an
+   * edit pointing at `targetId` (a real revision). Cycle-guarded: rejects if `targetId` equals one
+   * of those children, or is a DESCENDANT of any of them (walking `children` forward from each
+   * broken child, cycle-safe via a visited-set — same technique `computeAppliedSet`, core/graph.ts,
+   * uses walking the other direction) — repointing onto a node that only exists because of the
+   * very link being fixed would create a cycle in the DAG. Never mutates anything; `applyRepoint`
+   * (services/repoint.ts) is what actually rewrites files from this plan.
+   */
+  getRepointPlan(ghostId: string, targetId: string): RepointPlan {
+    const graph = this.cachedGraph;
+    if (graph === null) return { ok: false, reason: "no migration graph loaded yet" };
+
+    const ghost = graph.ghosts.find((g) => g.id === ghostId);
+    if (!ghost) return { ok: false, reason: `${ghostId.slice(0, 8)} is not a missing revision` };
+
+    if (!(targetId in graph.nodes)) {
+      return { ok: false, reason: `${targetId.slice(0, 8)} is not a real revision` };
+    }
+
+    const children = ghost.childIds;
+    const visited = new Set<string>();
+    const stack = [...children];
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      if (visited.has(id)) continue;
+      visited.add(id);
+      for (const childId of graph.children[id] ?? []) stack.push(childId);
+    }
+    if (visited.has(targetId)) {
+      return { ok: false, reason: "re-pointing would create a cycle" };
+    }
+
+    const edits = children.map((id) => ({ revisionId: id, filePath: graph.nodes[id].filePath }));
+    return { ok: true, edits };
   }
 
   onDidChangeState(listener: (s: AppState) => void): { dispose(): void } {

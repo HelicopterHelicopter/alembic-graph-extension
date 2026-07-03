@@ -32,3 +32,9 @@ export function mergeErrorText(result: { error: string; stderr: string }): strin
   const raw = result.stderr.trim().length > 0 ? result.stderr.trim() : result.error;
   return raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
 }
+
+/** Success-toast text for a completed ghost-drag repoint (matches the design file's `repoint()`
+ * toast wording, `design/Alembic Graph.dc.html`). */
+export function repointSuccessText(targetId: string): string {
+  return `Re-pointed down_revision → ${targetId.slice(0, 8)} · broken link fixed`;
+}

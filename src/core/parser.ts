@@ -171,6 +171,38 @@ function extractDocstring(src: string): { message: string; createDate: string | 
   return { message, createDate };
 }
 
+export interface DownRevisionLocation {
+  /** 0-based index of the line containing `down_revision = ...` (or its annotated form). Line
+   * indices match a CRLF/CR/LF-normalizing split of the (BOM-stripped) source — callers that need
+   * byte-identical reconstruction (core/repoint.ts) must slice their OWN raw text by these
+   * indices, preserving each line's original line-ending characters themselves. */
+  startLine: number;
+  /** 0-based index of the LAST line the (possibly multi-line, bracket-continued) value spans,
+   * inclusive; equals `startLine` for a single-line value. */
+  endLine: number;
+}
+
+/**
+ * Locates the module-level `down_revision` assignment's line range, using the exact same
+ * annotated-form / bracket-continuation detection `parseRevisionSource` uses for its own
+ * `downRevisionMatch`. Exported so `core/repoint.ts` can text-surgically edit the value without
+ * duplicating this detection logic. Returns null if no down_revision assignment is found (mirrors
+ * `parseRevisionSource`'s own `downRevisionMatch === null` case).
+ */
+export function locateDownRevisionAssignment(src: string): DownRevisionLocation | null {
+  const text = stripBOM(src);
+  const lines = splitLines(text);
+
+  for (let i = 0; i < lines.length; i++) {
+    const rhs = matchModuleAssignment(lines[i], "down_revision");
+    if (rhs === null) continue;
+    const resolved = resolveValueListRhs(lines, i, rhs);
+    const spanLines = resolved.split("\n").length; // resolveValueListRhs joins consumed lines with "\n"
+    return { startLine: i, endLine: i + spanLines - 1 };
+  }
+  return null;
+}
+
 export function parseRevisionSource(src: string, filePath: string): ParsedRevision | null {
   const text = stripBOM(src);
   const lines = splitLines(text);

@@ -48,6 +48,13 @@
   leaves it at that; no `busy`/`toast`/`state` follow-up is synthesized automatically. To exercise
   the busy-gates-drag path, a test calls `window.__sendBusy(operation, active)`, which dispatches a
   `busy` message the same shape GraphPanelManager would post for real.
+
+  Task 15 (ghost-drag repoint): same idea — every posted `{type:"repoint", ghostId, targetId}`
+  lands in `window.__postedRepoints` instead of driving a real text edit. state.json (dumped from
+  the broken-project fixture) already has exactly what this needs to exercise both repoint-drag
+  sources: the ghost `deadbeef0000` and its one broken child `5c0d13aa7d9f`, which is ALSO a head
+  (`3aebf1885b7d`/`4bfc02996c8e` are the other two) — so dragging the ghost card is a repoint drag,
+  while dragging the `5c0d13aa7d9f` card is still a merge drag (heads win — see dnd.ts).
 -->
 <html lang="en">
 <head>
@@ -66,6 +73,8 @@
   // Task 14: every posted "merge" message, in order — a Playwright test reads this directly
   // instead of parsing console log lines.
   window.__postedMerges = [];
+  // Task 15: same idea, for ghost-drag repoint drops.
+  window.__postedRepoints = [];
   window.acquireVsCodeApi = () => ({
     postMessage: (message) => {
       console.log("[harness] postMessage from webview:", message);
@@ -82,6 +91,8 @@
         respondToUiPatch({ expandCollapsed: !currentState?.ui.expandCollapsed });
       } else if (message && message.type === "merge") {
         window.__postedMerges.push({ a: message.a, b: message.b });
+      } else if (message && message.type === "repoint") {
+        window.__postedRepoints.push({ ghostId: message.ghostId, targetId: message.targetId });
       }
     },
     getState: () => vsState,

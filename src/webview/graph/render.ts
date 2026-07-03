@@ -222,10 +222,11 @@ function buildCanvasViewport(
 
   canvas.append(buildEdgesSvg(layout, size, positions, state.laneColors));
 
+  const brokenParentByChild = brokenParentByChildMap(state);
   for (const node of layout.nodes) {
     const pos = positions.get(node.id);
     if (!pos) continue;
-    canvas.append(buildNodeElement(node, state, view, handlers, pos, density));
+    canvas.append(buildNodeElement(node, state, view, handlers, pos, density, brokenParentByChild));
   }
 
   const mergeHint = buildMergeHint(state, positions);
@@ -285,6 +286,25 @@ function buildEdgesSvg(
 
 // ---------- node cards ----------
 
+/**
+ * Maps each broken revision's id to the (first) missing parent id it revises — derived from
+ * `state.problems`'s `broken-down-revision` entries (`revisionIds: [childId, missingId]`, see
+ * core/types.ts) rather than re-deriving it from `layout.nodes`, since a ghost's layout node could
+ * in principle be absent from a collapsed view while the problem list always reflects the full,
+ * uncollapsed graph. Used to give a broken NON-head revision card its own repoint-drag handle
+ * (Task 15) — the ghost id it should repoint when dragged is whatever this map says, NOT its own
+ * node id.
+ */
+function brokenParentByChildMap(state: AppState): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const problem of state.problems) {
+    if (problem.kind !== "broken-down-revision") continue;
+    const [childId, missingId] = problem.revisionIds;
+    if (!map.has(childId)) map.set(childId, missingId);
+  }
+  return map;
+}
+
 function buildNodeElement(
   node: LayoutNode,
   state: AppState,
@@ -292,6 +312,7 @@ function buildNodeElement(
   handlers: Handlers,
   pos: Pos,
   density: Density,
+  brokenParentByChild: Map<string, string>,
 ): HTMLElement {
   const wrapper = document.createElement("div");
   wrapper.className = "alx-node";
@@ -317,7 +338,7 @@ function buildNodeElement(
     return wrapper;
   }
 
-  const card = buildRevisionCard(node, view, density, state.laneColors);
+  const card = buildRevisionCard(node, view, density, state.laneColors, brokenParentByChild);
   card.addEventListener("click", () => handlers.onSelect(node.id));
   wrapper.append(card);
 
@@ -335,6 +356,10 @@ function buildGhostCard(node: LayoutNode): HTMLElement {
   const card = document.createElement("div");
   card.className = "alx-ghost";
   card.dataset.nodeId = node.id;
+  // Task 15: a ghost is always a repoint-drag source — its own id IS the missing revision id
+  // dnd.ts needs for the posted `{type:"repoint", ghostId, targetId}` message. See dnd.ts's
+  // `[data-repoint-ghost-id]` selector.
+  card.dataset.repointGhostId = node.id;
 
   const label = document.createElement("div");
   label.className = "alx-ghost-label";
@@ -356,27 +381,41 @@ function buildCollapseCard(node: LayoutNode, handlers: Handlers): HTMLElement {
   return card;
 }
 
-function buildRevisionCard(node: LayoutNode, view: ViewState, density: Density, laneColors: string[]): HTMLElement {
+function buildRevisionCard(
+  node: LayoutNode,
+  view: ViewState,
+  density: Density,
+  laneColors: string[],
+  brokenParentByChild: Map<string, string>,
+): HTMLElement {
   const selected = node.id === view.selectedId;
   const laneColor = laneColors[node.lane] ?? laneColors[0] ?? "#4aa3ff";
+
+  // Task 15: a BROKEN, NON-head card is also a repoint-drag source (dragging it re-points its own
+  // missing parent — same outcome as dragging that ghost directly). A head wins over broken —
+  // dragging a broken HEAD card is still a merge (Task 14), never a repoint — so this is
+  // deliberately gated on `!node.isHead` and only set when the missing-parent lookup actually
+  // resolves (defensive: it always should for a node with isBroken true, see brokenParentByChildMap).
+  const repointGhostId = !node.isHead && node.isBroken ? (brokenParentByChild.get(node.id) ?? null) : null;
 
   const card = document.createElement("div");
   card.className = [
     "alx-card",
     density === "compact" ? "alx-card--compact" : null,
     selected ? "alx-card--selected" : null,
-    // Task 14: only HEAD cards are drag-to-merge sources — ghost/broken-card drag (repoint) is
-    // Task 15's scope. touch-action:none lives on this class too (see graph.css) so it's only
-    // applied where a drag can actually start.
-    node.isHead ? "alx-card--draggable" : null,
+    // Task 14/15: HEAD cards drag-to-merge; broken non-head cards drag-to-repoint. touch-action:
+    // none lives on this class too (see graph.css) so it's only applied where a drag can start.
+    node.isHead || repointGhostId !== null ? "alx-card--draggable" : null,
   ]
     .filter((c): c is string => c !== null)
     .join(" ");
-  // dnd.ts (Task 14) event-delegates off these — data-node-id on every revision card (also set on
-  // ghost/collapse cards above, for Task 15/general hit-testing reuse), data-head only on the
-  // subset that's a legal drag source/drop target for merge.
+  // dnd.ts event-delegates off these — data-node-id on every revision card (also set on
+  // ghost/collapse cards above, for hit-testing reuse), data-head only on the subset that's a
+  // legal drag source/drop target for merge (Task 14), data-repoint-ghost-id only on the subset
+  // that's a legal repoint-drag source (Task 15 — see buildGhostCard for the ghost-card side).
   card.dataset.nodeId = node.id;
   if (node.isHead) card.dataset.head = "true";
+  if (repointGhostId !== null) card.dataset.repointGhostId = repointGhostId;
 
   const stripe = document.createElement("div");
   stripe.className = node.applied === false ? "alx-stripe alx-stripe--dim" : "alx-stripe";
