@@ -172,6 +172,60 @@ body {
   white-space: nowrap;
 }
 
+/* ---------- search (Task 19) ---------- */
+.alx-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+}
+.alx-search-input {
+  width: 200px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  border-radius: 5px;
+  border: 1px solid var(--vscode-input-border, var(--alx-toggle-border));
+  background: var(--vscode-input-background, #3c3c3c);
+  color: var(--vscode-input-foreground, var(--alx-fg));
+  outline: none;
+  font-family: inherit;
+}
+.alx-search-input::placeholder {
+  color: var(--vscode-input-placeholderForeground, var(--alx-dim));
+}
+.alx-search-input:focus {
+  border-color: var(--alx-accent);
+}
+.alx-search-count {
+  font-size: 11px;
+  color: var(--alx-dim);
+  white-space: nowrap;
+  min-width: 44px;
+}
+
+/* ---------- zoom cluster (Task 19) ---------- */
+.alx-zoom-cluster {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 10px;
+}
+.alx-zoom-btn {
+  padding: 4px 9px;
+  font-size: 11px;
+  border-radius: 5px;
+  border: 1px solid var(--alx-toggle-border);
+  background: var(--alx-toggle-bg);
+  color: var(--alx-toggle-fg);
+  cursor: pointer;
+  user-select: none;
+  text-align: center;
+}
+.alx-zoom-pct {
+  min-width: 38px;
+  font-variant-numeric: tabular-nums;
+}
+
 .alx-toggle-group {
   display: flex;
   gap: 4px;
@@ -246,13 +300,22 @@ body {
   overflow-anchor: none;
 }
 
-.alx-canvas {
+/* Task 19 (zoom): `.alx-canvas-scale` is what the viewport actually scrolls — its box is sized to
+   canvasSize * zoom (render.ts), which is what keeps scrollbars correct at any zoom level.
+   `.alx-canvas` keeps its UNSCALED size and is visually scaled via `transform` so every
+   descendant (nodes, edges) stays in metrics.ts's plain, zoom-independent pixel coordinates. */
+.alx-canvas-scale {
   position: relative;
   min-width: 100%;
   min-height: 100%;
   background-image: radial-gradient(circle, var(--alx-dot-grid) 1px, transparent 1px);
   background-size: 23px 23px;
   background-position: 14px 14px;
+}
+
+.alx-canvas {
+  position: relative;
+  transform-origin: 0 0;
 }
 
 .alx-edges {
@@ -309,6 +372,43 @@ body {
   background: var(--alx-sel-bg);
   border-color: var(--alx-accent);
   box-shadow: 0 0 0 1px var(--alx-accent);
+}
+/* Task 19: keyboard-focus ring for tabindex="0" revision cards — :focus-visible so a mouse click
+   (which also focuses the div) doesn't show it, matching native button behavior. */
+.alx-card:focus-visible {
+  outline: 2px solid var(--alx-accent);
+  outline-offset: 2px;
+}
+
+/* ---------- search dimming / ancestry hover (Task 19) ---------- */
+/* Plain opacity fade for dim/lit/faded toggles — separate from the `.alx-node`'s own FLIP
+   transform transition (flip.ts sets that inline, only for the duration of one animation). */
+.alx-card,
+.alx-edge {
+  transition: opacity 120ms ease;
+}
+.alx-card--dimmed {
+  opacity: 0.25;
+}
+.alx-card--faded {
+  opacity: 0.45;
+}
+.alx-card--lit {
+  opacity: 1;
+}
+.alx-edge--faded {
+  opacity: 0.25;
+}
+.alx-edge--lit {
+  opacity: 1;
+  stroke-width: 2.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .alx-card,
+  .alx-edge,
+  .alx-node {
+    transition: none !important;
+  }
 }
 
 /* ---------- drag-to-merge (Task 14) ---------- */

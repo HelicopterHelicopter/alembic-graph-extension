@@ -75,6 +75,12 @@ export function closeContextMenu(): void {
   closeMenu();
 }
 
+/** Task 19: whether a menu is currently open — hover.ts's ancestry highlight is suppressed while
+ * true (per the brief, alongside dragging and active search). */
+export function isContextMenuOpen(): boolean {
+  return menuEl !== null;
+}
+
 function isRevisionCard(card: HTMLElement): boolean {
   return card.classList.contains("alx-card");
 }

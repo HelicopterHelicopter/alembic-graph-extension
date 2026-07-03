@@ -625,3 +625,107 @@ real CodeLens, and a real file-watcher-triggered clear — nothing here is reach
     **Alembic Graph: Show in Migration Graph** from the Command Palette: the friendly stub toast
     "Alembic Graph: Show in Migration Graph — not implemented yet" appears, same as the other
     not-yet-resolved commands.
+
+## Task 19: canvas UX — zoom/fit, search, ancestry hover, FLIP transitions, keyboard nav
+
+All five features are webview-local (no host/protocol changes) and the fiddly math (zoom clamp/
+anchor/fit, search match predicate, ancestor-set walk, keyboard neighbor-finding) is covered by
+`test/unit/uxMath.test.ts`. The steps below are the F5-only checks — real wheel/drag input, real
+focus, real CSS transitions — nothing here is reachable from vitest, and everything was also
+verified directly against the built webview via Playwright (harness) before this pass.
+
+1. Press F5, select **Run Extension (broken fixture)**, then **Alembic Graph: Open Migration
+   Graph**.
+
+### Zoom & fit
+2. In the toolbar, right of **+ New revision**: `−` / `100%` / `+` / `Fit`. Click `+` three times:
+   the button's own label counts up 110% → 120% → 130% and every card visibly grows. Click `100%`:
+   zoom snaps back to 1.0 immediately (no animation needed here).
+3. Hold Ctrl (Cmd on macOS also works via `metaKey`) and scroll the wheel over the canvas: the graph
+   zooms in 0.1 steps per notch, and the point under the cursor stays visually fixed (zoom in on a
+   card's corner — that corner doesn't drift). A plain wheel (no modifier) scrolls the canvas
+   normally, no zoom.
+4. Click `Fit`: the zoom jumps to whatever fits the whole graph in the current panel size (clamped
+   50%–150% — on this 12-revision fixture at a normal panel width the graph is tall enough that Fit
+   lands on the 50% floor and the very top/bottom cards may still clip slightly, which is expected
+   given the clamp), and the canvas re-centers.
+5. **Drag regression at non-1.0 zoom**: set zoom to 80% (`−` twice from 100%). Drag one HEAD card
+   onto another to merge (Task 14) — the dragged card tracks the cursor 1:1 (not faster/slower) and
+   the merge confirmation targets the correct pair. Repeat with the ghost card (`deadbeef0000`) onto
+   a real revision to repoint (Task 15) — same tracking, same correct target. Right-click a card at
+   80% zoom too: the context menu opens at the actual cursor position, not offset.
+6. Resize the panel narrower than the canvas so a horizontal scrollbar appears; zoom in/out via the
+   wheel with the cursor over different parts of the canvas — scrolling stays anchored under the
+   cursor in both directions, never jumping to a random position.
+7. Close and reopen the panel (or reload the window): zoom is restored to whatever it was left at
+   (webview state persistence, same mechanism as Task 11's order/density/selection).
+
+### Search / filter
+8. Toolbar search box (left of **Order**, placeholder `Search revisions…`, themed to match VS
+   Code's input styling). Type `billing`: every card whose hash/message/author/branch doesn't
+   contain "billing" (case-insensitive) dims to ~25% opacity; the three billing-related cards
+   (`f6a9b7241d3c`, `07b8c8552e4a`, `29dae0774a6c`) stay full opacity. A count `1 of 3` appears
+   right of the input.
+9. Press **Enter** repeatedly: the canvas scrolls to center each match in turn, wrapping back to the
+   first after the last (`1 of 3` → `2 of 3` → `3 of 3` → `1 of 3`); **Shift+Enter** cycles
+   backwards. Typing while a query is active keeps typing responsive (no lag/flicker — filtering
+   never rebuilds the toolbar, so the input never loses focus/cursor position mid-keystroke).
+10. Press **Escape** while focused in the search box: the query clears, dimming clears, the count
+    disappears, and focus leaves the input (so a following Tab/arrow-key doesn't re-enter it).
+11. With a query active, toggle **Order** or **Compact/Comfortable**: the canvas re-renders (new
+    positions) but the search box keeps its typed query and the dimming re-applies correctly to the
+    (possibly repositioned) cards.
+
+### Ancestry highlight on hover
+12. Clear the search box. Hover the merge card `29dae0774a6c` ("merge oauth and billing") and hold
+    still for a beat (~150ms): the card plus every ancestor back to the root(s) lights up at full
+    opacity, every unrelated head (`5c0d13aa7d9f`, `4bfc02996c8e`, `3aebf1885b7d`) fades to ~45%, and
+    the edges along the ancestor path thicken/brighten while the rest dim. A quick drive-by hover
+    (mouse passing over a card without stopping) shows no highlight at all — the debounce means only
+    a genuine pause triggers it.
+13. Move the mouse off the canvas entirely: the highlight clears immediately (no lingering fade-out
+    needed — instant per the brief).
+14. While a search query is active (dimming cards), hover a card for the full debounce window: no
+    ancestry highlight appears — search dimming wins, per the brief.
+15. Right-click a card to open the context menu, then hover a different card while the menu stays
+    open: no highlight appears. Start dragging a head card: any highlight active when the drag began
+    clears immediately and stays off for the duration of the drag.
+
+### FLIP layout transitions
+16. Toggle **Compact** ↔ **Comfortable**: existing cards visibly slide (not teleport) from their old
+    row positions to the new ones over about 200ms; the connecting edges crossfade rather than
+    snapping. Toggle **Newest ↓** ↔ **Newest ↑** (reverses row order): same smooth slide, larger
+    movement.
+17. Trigger the "expand collapsed" click (if the fixture has a collapsed run) or drag a merge/repoint
+    to completion: newly-appearing cards fade in rather than popping in at full opacity instantly.
+18. In OS accessibility settings, enable **Reduce motion** (macOS: System Settings → Accessibility →
+    Display → Reduce motion), reload the panel, and repeat step 16: cards jump straight to their
+    final positions with no sliding/fading — the reduced-motion preference is honored.
+19. During a drag (Task 14/15), any FLIP animation from an in-flight host state push is deferred
+    until the drag ends (Task 14's stash) — dragging a card around does not cause other cards to
+    visibly animate mid-drag; once the drop completes, if the resulting state differs, the affected
+    cards animate normally.
+
+### Keyboard navigation + ARIA
+20. Click a revision card, then press **Tab**/**Shift+Tab** from elsewhere in the panel: revision
+    cards are reachable in the normal tab order (ghost/collapse placeholder cards are not — they
+    stay click-only). With a screen reader (or the Accessibility Inspector), confirm a card's
+    announced label reads like `3aebf188 — add rate limiting, head` (hash8, message, then any
+    CURRENT/HEAD/MERGE/BROKEN badges).
+21. With a card focused, press **↓**: selection (blue ring) and focus move to the nearest card in
+    the next row, preferring the same lane; **↑** moves back. Press **→**/**←**: selection moves to
+    the nearest card in the adjacent lane (same row preferred, falling back to the nearest row in
+    that lane). At the edge of the graph (e.g. the root card, or the outermost lane), the
+    unavailable direction does nothing (stays put) rather than erroring.
+22. Confirm keyboard-driven selection behaves exactly like a click: the detail panel's content
+    updates for the newly selected revision, and the sidebar (if visible) doesn't desync.
+23. With a card focused, press **Enter**: the revision's source file opens in an editor tab (same as
+    the detail panel's file row / context menu's "Open file"). Press **Space**: the detail panel
+    toggles closed, then open again on a second press — selection/focus stay on the same card
+    throughout.
+24. Press **Escape** with the detail panel open: it closes, the card stays selected/focused. Press
+    **Escape** again (panel already closed): the selection itself clears (blue ring disappears).
+25. Select a card via keyboard, then click a completely unrelated UI action that causes a re-render
+    shortly after (e.g. nothing needed here — the detail panel's own async load already does this):
+    confirm the very next arrow-key press still moves the selection (focus is preserved across that
+    intervening re-render, not silently dropped).

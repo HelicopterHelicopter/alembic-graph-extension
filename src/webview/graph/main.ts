@@ -8,9 +8,23 @@ import "./graph.css";
 import { onMessage, post, getPersisted, setPersisted } from "../shared/vscodeApi";
 import type { AppState, RevisionDetail, UiPrefs } from "../../protocol/messages";
 import { render, showToast, type Handlers, type ViewState } from "./render";
-import { nodeSize, nodeXY } from "./metrics";
+import { canvasSize, nodeSize, nodeXY } from "./metrics";
 import { attachDnd, type DndCallbacks } from "./dnd";
-import { attachContextMenu, closeContextMenu, type MenuHandlers } from "./contextMenu";
+import { attachContextMenu, closeContextMenu, isContextMenuOpen, type MenuHandlers } from "./contextMenu";
+import { attachSearch, type SearchableCard, type SearchCallbacks } from "./search";
+import { attachHover, clearActiveHover, type HoverCallbacks } from "./hover";
+import { attachKeyboardNav, type KeyboardNavHandlers } from "./keyboardNav";
+import { captureFlipSnapshot, playEdgesFade, playFlip } from "./flip";
+import {
+  ZOOM_DEFAULT,
+  clampZoom,
+  fitScroll,
+  fitZoom,
+  stepZoom,
+  zoomAnchorScroll,
+  type NavNode,
+  type ScrollPoint,
+} from "./uxMath";
 
 const appRoot = document.getElementById("app");
 if (!appRoot) throw new Error("alembic graph webview: missing #app root element");
@@ -29,6 +43,9 @@ interface PersistedUiState {
   detailOpen?: boolean;
   scrollTop?: number;
   scrollLeft?: number;
+  /** Task 19: canvas zoom [0.5, 1.5] — webview-local (never round-tripped through the host's
+   * UiPrefs), unlike order/density/expandCollapsed above. */
+  zoom?: number;
 }
 
 const store: {
@@ -40,7 +57,23 @@ const store: {
    * non-empty disables drag start (dnd.ts's `isEnabled()`) and shows the toolbar's busy
    * indicator. Populated/drained by the "busy" case in onMessage below. */
   busyOps: Set<string>;
-} = { state: null, selectedId: null, detail: null, detailOpen: false, busyOps: new Set() };
+  /** Task 19: canvas scale factor, persisted (see PersistedUiState.zoom) but never sent to the
+   * host — zoom is purely a webview presentation concern. */
+  zoom: number;
+  /** Task 19: search box state, preserved across a re-render (brief: "State re-render preserves
+   * the query") but deliberately NOT persisted via setPersisted/PersistedUiState — the brief marks
+   * cross-reload persistence out of scope, session-only is fine. `index` is the last cycle
+   * position (-1 = none yet, i.e. no Enter press since the query last changed); see search.ts. */
+  search: { query: string; index: number };
+} = {
+  state: null,
+  selectedId: null,
+  detail: null,
+  detailOpen: false,
+  busyOps: new Set(),
+  zoom: ZOOM_DEFAULT,
+  search: { query: "", index: -1 },
+};
 
 /**
  * True from the instant a drag exceeds the pointer-move threshold (dnd.ts) until it fully ends
@@ -102,6 +135,7 @@ if (persisted) {
   store.selectedId = persisted.selectedId ?? null;
   store.detailOpen = persisted.detailOpen ?? false;
   lastScroll = { scrollTop: persisted.scrollTop ?? 0, scrollLeft: persisted.scrollLeft ?? 0 };
+  store.zoom = clampZoom(persisted.zoom ?? ZOOM_DEFAULT);
 }
 
 /** Flips true after the first "state" message is processed — gates the one-time restored-
@@ -143,7 +177,149 @@ const handlers: Handlers = {
     if (store.busyOps.size > 0) return;
     post({ type: "newRevision" });
   },
+  onZoomIn() {
+    applyZoom(stepZoom(store.zoom, 1));
+  },
+  onZoomOut() {
+    applyZoom(stepZoom(store.zoom, -1));
+  },
+  onZoomReset() {
+    applyZoom(ZOOM_DEFAULT);
+  },
+  onZoomFit() {
+    if (!store.state) return;
+    const viewport = document.querySelector<HTMLElement>(".alx-canvas-viewport");
+    if (!viewport) return;
+    const size = canvasSize(store.state.layout, store.state.ui, store.state.ui.density);
+    const viewportSize = { w: viewport.clientWidth, h: viewport.clientHeight };
+    const zoom = fitZoom(size, viewportSize);
+    const scroll = fitScroll(size, viewportSize, zoom);
+    store.zoom = zoom;
+    renderStore(scroll);
+  },
 };
+
+/**
+ * Applies `newZoom` (clamped), preserving the content point at `anchor` (viewport-relative,
+ * unscrolled offset) — or the viewport center if no anchor is given, e.g. a toolbar button click
+ * rather than a cursor-anchored wheel zoom. A no-op if the clamped value doesn't actually change
+ * the current zoom (avoids a pointless re-render at the 0.5/1.5 clamp boundary).
+ */
+function applyZoom(newZoom: number, anchor?: { offsetX: number; offsetY: number }): void {
+  const clamped = clampZoom(newZoom);
+  if (clamped === store.zoom) return;
+
+  const viewport = document.querySelector<HTMLElement>(".alx-canvas-viewport");
+  let scrollOverride: ScrollPoint | undefined;
+  if (viewport) {
+    const resolvedAnchor = anchor ?? { offsetX: viewport.clientWidth / 2, offsetY: viewport.clientHeight / 2 };
+    scrollOverride = zoomAnchorScroll(
+      { scrollLeft: viewport.scrollLeft, scrollTop: viewport.scrollTop },
+      resolvedAnchor,
+      store.zoom,
+      clamped,
+    );
+  }
+  store.zoom = clamped;
+  renderStore(scrollOverride);
+}
+
+/** Ctrl/Cmd+wheel on the viewport zooms, anchored at the cursor; a plain wheel keeps scrolling
+ * (the browser's default). Re-attached every render, same as attachDnd/attachContextMenu below —
+ * the viewport is a fresh element each time. */
+function attachZoomWheel(viewport: HTMLElement): void {
+  viewport.addEventListener(
+    "wheel",
+    (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const direction: 1 | -1 = e.deltaY < 0 ? 1 : -1;
+      const rect = viewport.getBoundingClientRect();
+      applyZoom(stepZoom(store.zoom, direction), { offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top });
+    },
+    { passive: false },
+  );
+}
+
+/** search.ts's callbacks (Task 19) — persists `{query, index}` on the store (so a later
+ * host-driven re-render doesn't lose the in-progress query/cycle position, per the brief) and
+ * reuses the existing centering helper for Enter/Shift+Enter cycling. Deliberately does NOT call
+ * renderStore() itself — see search.ts's header comment for why a full re-render on every
+ * keystroke would break typing. */
+const searchCallbacks: SearchCallbacks = {
+  onStateChange(query, index) {
+    store.search = { query, index };
+  },
+  onNavigate(id) {
+    scrollNodeIntoView(id);
+  },
+};
+
+/** hover.ts's suppression gate (Task 19) — per the brief: dragging, an open context menu, or
+ * active search dimming (search wins) all suppress ancestry highlight. */
+const hoverCallbacks: HoverCallbacks = {
+  isSuppressed() {
+    return dragActive || isContextMenuOpen() || store.search.query.trim() !== "";
+  },
+};
+
+/** keyboardNav.ts's handlers (Task 19). `onNavigate` is the one case that can't just be a typed
+ * post (see keyboardNav.ts's header comment): it needs to select AND, once the resulting
+ * synchronous re-render has replaced the DOM, focus + scroll the FRESH card into view. */
+const keyboardHandlers: KeyboardNavHandlers = {
+  onNavigate(id) {
+    navigateToNode(id);
+  },
+  onOpenFile(id) {
+    handlers.onOpenFile(id);
+  },
+  onToggleDetail() {
+    store.detailOpen = !store.detailOpen;
+    renderStore();
+  },
+  onEscape() {
+    if (store.detailOpen) {
+      store.detailOpen = false;
+      renderStore();
+      return;
+    }
+    if (store.selectedId !== null) {
+      store.selectedId = null;
+      store.detail = null;
+      post({ type: "select", id: null });
+      renderStore();
+    }
+  },
+};
+
+/** Selects `id` exactly like a click (post + detail fetch + re-render — `handlers.onSelect` is
+ * synchronous, so the DOM is already rebuilt by the time it returns), then focuses and centers the
+ * FRESH card. Re-queries the viewport/card from `document` rather than closing over anything from
+ * before the select — the pre-select viewport is detached the instant `renderStore()` runs inside
+ * `onSelect` (render.ts replaces the canvas wholesale on every call). */
+function navigateToNode(id: string): void {
+  handlers.onSelect(id);
+  scrollNodeIntoView(id);
+  const viewport = document.querySelector<HTMLElement>(".alx-canvas-viewport");
+  const card = viewport?.querySelector<HTMLElement>(`.alx-card[data-node-id="${CSS.escape(id)}"]`);
+  card?.focus({ preventScroll: true });
+}
+
+/** Revision (kind === "revision") nodes adapted to search.ts's `SearchableCard` shape. Ghost/
+ * collapse placeholders are never search targets — the brief's match rules (hash/message/author/
+ * branchLabel) are revision-card fields. */
+function searchableCards(state: AppState): SearchableCard[] {
+  return state.layout.nodes
+    .filter((n) => n.kind === "revision")
+    .map((n) => ({ id: n.id, hash: n.hash, message: n.message, author: n.author, branchLabel: n.branchLabel }));
+}
+
+/** Revision nodes adapted to uxMath's `NavNode` shape for keyboardNav.ts — same revision-only
+ * scoping as `searchableCards` (ghost/collapse cards get no tabindex, see render.ts, so they're
+ * never a keyboard-nav origin or destination). */
+function navNodes(state: AppState): NavNode[] {
+  return state.layout.nodes.filter((n) => n.kind === "revision").map((n) => ({ id: n.id, lane: n.lane, row: n.row }));
+}
 
 /** contextMenu.ts's per-item handlers — each just posts the corresponding typed message; the
  * confirm modal / QuickPick / clipboard write all live host-side (src/ui/actions.ts,
@@ -188,6 +364,10 @@ const dndCallbacks: DndCallbacks = {
   },
   onDragActiveChange(active) {
     dragActive = active;
+    // Task 19: dragging doesn't re-render the canvas (see dnd.ts's header comment), so an
+    // already-applied ancestry highlight needs this explicit hook to tear down — otherwise it'd
+    // sit there, stale, until the drag ends and something else happens to re-render.
+    if (active) clearActiveHover();
     if (!active && pendingState !== null) {
       const next = pendingState;
       pendingState = null;
@@ -319,24 +499,48 @@ function applyState(state: AppState): void {
  * covers order/density/expandCollapsed (mirrored from state.ui), selection, and detailOpen —
  * every change funnels through here except scroll-only movement (see attachScrollListener).
  *
+ * `scrollOverride` (Task 19) lets a zoom change (wheel, toolbar buttons, Fit) apply a freshly
+ * computed anchor/fit-centered scroll instead of the default "preserve whatever's on screen right
+ * now" behavior — those raw scrollTop/Left pixels mean a different content position once the
+ * canvas' scale has changed, so blindly reapplying them would visibly jump the view.
+ *
  * Never called while `dragActive` (see the "state" case in onMessage and
  * dndCallbacks.onDragActiveChange) — render() rebuilds the canvas wholesale, which would orphan
  * the card currently holding pointer capture mid-drag. */
-function renderStore(): void {
+function renderStore(scrollOverride?: ScrollPoint): void {
   if (!store.state) return;
   const viewport = document.querySelector<HTMLElement>(".alx-canvas-viewport");
-  const scrollTop = viewport?.scrollTop ?? lastScroll.scrollTop;
-  const scrollLeft = viewport?.scrollLeft ?? lastScroll.scrollLeft;
+  const scrollTop = scrollOverride?.scrollTop ?? viewport?.scrollTop ?? lastScroll.scrollTop;
+  const scrollLeft = scrollOverride?.scrollLeft ?? viewport?.scrollLeft ?? lastScroll.scrollLeft;
+
+  // FLIP (Task 19, flip.ts): snapshot the OLD canvas' node positions before render() replaces it.
+  // `viewport === null` (no previous canvas at all, e.g. the very first render) is the "nothing to
+  // animate from" case both captureFlipSnapshot and playFlip/playEdgesFade already treat as a
+  // no-op via their own null/hasPrevious checks.
+  const flipSnapshot = captureFlipSnapshot(viewport);
+  const hadPreviousCanvas = viewport !== null;
+
+  // Task 19: preserve keyboard focus across the rebuild too, same idea as scroll above. Without
+  // this, ANY re-render while a card is keyboard-focused (not just keyboard nav's own — e.g. the
+  // "detail" response that follows a couple ms after every select, click or keyboard alike) drops
+  // focus back to nothing, silently breaking the very next arrow-key press (keyboardNav.ts only
+  // acts "when a card has focus"). navigateToNode's own explicit .focus() call on the NEW target
+  // still wins for the arrow-key-move render itself; this is what keeps it sticky through whatever
+  // re-render happens after.
+  const focusedNodeId = document.activeElement?.closest<HTMLElement>(".alx-card[data-node-id]")?.dataset.nodeId;
 
   const view: ViewState = {
     selectedId: store.selectedId,
     detail: store.detail,
     detailOpen: store.detailOpen,
     busy: store.busyOps.size > 0,
+    zoom: store.zoom,
+    search: store.search,
   };
   render(app, store.state, view, handlers);
 
   const nextViewport = document.querySelector<HTMLElement>(".alx-canvas-viewport");
+  const toolbarEl = document.querySelector<HTMLElement>(".alx-toolbar");
   if (nextViewport) {
     nextViewport.scrollTop = scrollTop;
     nextViewport.scrollLeft = scrollLeft;
@@ -344,13 +548,26 @@ function renderStore(): void {
     attachScrollListener(nextViewport);
     // dnd.ts (Task 14): re-attach every render since the viewport (and every card in it) is a
     // fresh DOM subtree each time — same reason attachScrollListener above is re-run.
-    attachDnd(nextViewport, store.state, dndCallbacks);
+    attachDnd(nextViewport, store.state, store.zoom, dndCallbacks);
     // contextMenu.ts (Task 17): same re-attach-every-render reasoning; reuses the exact same
     // busy/drop-guard gate a drag start checks (dndCallbacks.isEnabled), PLUS !dragActive: a
     // right-click while a left-button drag is mid-flight must not open a menu — its select side
     // effect re-renders the canvas, which would orphan the card currently holding pointer
     // capture (the very thing the "state"-message deferral protects against).
     attachContextMenu(nextViewport, () => dndCallbacks.isEnabled() && !dragActive, menuHandlers);
+    // Task 19: same re-attach-every-render pattern for zoom/hover/keyboard nav.
+    attachZoomWheel(nextViewport);
+    attachHover(nextViewport, store.state.layout, hoverCallbacks);
+    attachKeyboardNav(nextViewport, navNodes(store.state), store.state.ui.order, keyboardHandlers);
+    if (toolbarEl) {
+      attachSearch(toolbarEl, nextViewport, searchableCards(store.state), store.search.query, store.search.index, searchCallbacks);
+    }
+    playFlip(nextViewport, flipSnapshot);
+    playEdgesFade(nextViewport, hadPreviousCanvas);
+
+    if (focusedNodeId !== undefined) {
+      nextViewport.querySelector<HTMLElement>(`.alx-card[data-node-id="${CSS.escape(focusedNodeId)}"]`)?.focus({ preventScroll: true });
+    }
   }
 
   persist();
@@ -420,6 +637,7 @@ function persist(): void {
     detailOpen: store.detailOpen,
     scrollTop: lastScroll.scrollTop,
     scrollLeft: lastScroll.scrollLeft,
+    zoom: store.zoom,
   };
   setPersisted(snapshot);
 }

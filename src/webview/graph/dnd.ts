@@ -23,6 +23,14 @@
  * host — MigrationService.getRepointPlan — is what actually enforces the cycle guard, on drop; the
  * webview doesn't try to predict it) — merge's single-hovered-target ring is unchanged.
  *
+ * Task 19 (zoom): the dragged `.alx-node` wrapper lives INSIDE `.alx-canvas`, which now carries a
+ * `transform: scale(zoom)` (render.ts). A `translate(dx, dy)` set on a descendant of a scaled
+ * ancestor is interpreted in that ancestor's LOCAL (pre-scale) coordinate space, so visually it
+ * renders as `(dx*zoom, dy*zoom)` on screen — dividing the raw client-pixel pointer delta by
+ * `zoom` before applying it as the translate is what makes the dragged card track the cursor 1:1
+ * at any zoom level. Hit-testing (`getBoundingClientRect()` below) needs NO such adjustment: it
+ * already reflects each candidate's real, post-transform on-screen rect regardless of zoom.
+ *
  * Drag-source classification (mutually exclusive, set by render.ts's data attributes):
  *  - `[data-head="true"]` → merge. A head wins even if it's also broken — see render.ts's
  *    `buildRevisionCard` — so this check runs first.
@@ -76,9 +84,11 @@ interface DragState {
  * re-render, same as main.ts's scroll listener). `state` is used only to validate that a
  * `data-head="true"` card's id is still a real current head (defensive — render.ts's own
  * `node.isHead` is the source of truth for the attribute, this just guards against a stale/
- * mismatched DOM in case a future change ever decouples the two).
+ * mismatched DOM in case a future change ever decouples the two). `zoom` is the canvas's current
+ * scale factor (Task 19) — see the module doc comment's zoom note for why the drag translate
+ * divides by it.
  */
-export function attachDnd(viewport: HTMLElement, state: AppState, cb: DndCallbacks): void {
+export function attachDnd(viewport: HTMLElement, state: AppState, zoom: number, cb: DndCallbacks): void {
   const headIds = new Set(state.heads.map((h) => h.id));
   let drag: DragState | null = null;
   let suppressNextClick = false;
@@ -199,7 +209,9 @@ export function attachDnd(viewport: HTMLElement, state: AppState, cb: DndCallbac
     }
 
     e.preventDefault();
-    drag.originWrapper.style.transform = `translate(${dx}px, ${dy}px)`;
+    // Divide by zoom: see the module doc comment's Task 19 note — dx/dy are raw client-pixel
+    // deltas, but the wrapper sits inside a `transform: scale(zoom)` ancestor.
+    drag.originWrapper.style.transform = `translate(${dx / zoom}px, ${dy / zoom}px)`;
 
     const candidates = drag.kind === "merge" ? headCards() : drag.repointTargets;
     let hit: HTMLElement | null = null;

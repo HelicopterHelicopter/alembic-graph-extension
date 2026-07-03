@@ -24,6 +24,14 @@ export interface ViewState {
    * upgrade/downgrade/...) is in flight. Drives the toolbar's busy indicator; drag gating itself
    * lives in dnd.ts's `isEnabled()` callback, not here. */
   busy: boolean;
+  /** Task 19: canvas scale factor [0.5, 1.5] — applied as `transform: scale()` on `.alx-canvas`
+   * (see `buildCanvasViewport`). Webview-local state (main.ts's store), never sent to the host. */
+  zoom: number;
+  /** Task 19: current search box contents + cycle position — only consulted here to seed the
+   * `<input>`'s initial `.value` (so a host-driven re-render doesn't blank an in-progress query)
+   * and the `N of M` count's starting point; live filtering/cycling is search.ts's job, wired
+   * post-render (see its header comment for why it can't go through a `render()` call). */
+  search: { query: string; index: number };
 }
 
 export interface Handlers {
@@ -36,6 +44,11 @@ export interface Handlers {
   /** Task 17: toolbar "+ New revision" button — `showInputBox`/QuickPick flow lives host-side
    * (newRevisionAction), this just posts the request. */
   onNewRevision(): void;
+  /** Task 19: toolbar zoom cluster (−/100%/+/Fit), right of "+ New revision". */
+  onZoomIn(): void;
+  onZoomOut(): void;
+  onZoomReset(): void;
+  onZoomFit(): void;
 }
 
 interface Pos {
@@ -64,7 +77,7 @@ export function render(root: HTMLElement, state: AppState, view: ViewState, hand
   }
 
   const positions = computePositions(state);
-  const toolbar = buildToolbar(state, handlers, view.busy);
+  const toolbar = buildToolbar(state, view, handlers);
   const canvasViewport = buildCanvasViewport(state, view, handlers, positions);
 
   const canvasRow = document.createElement("div");
@@ -112,7 +125,8 @@ function ensureToastLayer(root: HTMLElement): HTMLElement {
 
 // ---------- toolbar ----------
 
-function buildToolbar(state: AppState, handlers: Handlers, busy: boolean): HTMLElement {
+function buildToolbar(state: AppState, view: ViewState, handlers: Handlers): HTMLElement {
+  const busy = view.busy;
   const toolbar = document.createElement("div");
   toolbar.className = "alx-toolbar";
 
@@ -140,6 +154,21 @@ function buildToolbar(state: AppState, handlers: Handlers, busy: boolean): HTMLE
 
   const busyIndicator = buildBusyIndicator(busy);
 
+  // Task 19: search box, left of "Order". Live filtering/cycling is wired post-render by
+  // search.ts (see its header comment) — this just builds the bare input/count elements it looks
+  // for, seeded from the last known query so a host-driven re-render doesn't blank it.
+  const searchWrap = document.createElement("div");
+  searchWrap.className = "alx-search-wrap";
+  const searchInput = document.createElement("input");
+  searchInput.type = "text";
+  searchInput.className = "alx-search-input";
+  searchInput.placeholder = "Search revisions…";
+  searchInput.value = view.search.query;
+  searchInput.spellcheck = false;
+  const searchCount = document.createElement("span");
+  searchCount.className = "alx-search-count";
+  searchWrap.append(searchInput, searchCount);
+
   const orderLabel = document.createElement("span");
   orderLabel.className = "alx-order-label";
   orderLabel.textContent = "Order";
@@ -166,10 +195,46 @@ function buildToolbar(state: AppState, handlers: Handlers, busy: boolean): HTMLE
   newRevisionBtn.textContent = "+ New revision";
   newRevisionBtn.addEventListener("click", () => handlers.onNewRevision());
 
+  const zoomCluster = buildZoomCluster(view.zoom, handlers);
+
   toolbar.append(label, sep, headsChip, revCount, spacer);
   if (busyIndicator) toolbar.append(busyIndicator);
-  toolbar.append(orderLabel, orderGroup, densityGroup, newRevisionBtn);
+  toolbar.append(searchWrap, orderLabel, orderGroup, densityGroup, newRevisionBtn, zoomCluster);
   return toolbar;
+}
+
+/** Task 19: `−` / `100%`(current zoom%, click resets to 1.0) / `+` / `Fit`, right of "+ New
+ * revision". */
+function buildZoomCluster(zoom: number, handlers: Handlers): HTMLElement {
+  const cluster = document.createElement("div");
+  cluster.className = "alx-zoom-cluster";
+
+  const zoomOut = document.createElement("div");
+  zoomOut.className = "alx-zoom-btn";
+  zoomOut.textContent = "−";
+  zoomOut.title = "Zoom out";
+  zoomOut.addEventListener("click", () => handlers.onZoomOut());
+
+  const reset = document.createElement("div");
+  reset.className = "alx-zoom-btn alx-zoom-pct";
+  reset.textContent = `${Math.round(zoom * 100)}%`;
+  reset.title = "Reset zoom to 100%";
+  reset.addEventListener("click", () => handlers.onZoomReset());
+
+  const zoomIn = document.createElement("div");
+  zoomIn.className = "alx-zoom-btn";
+  zoomIn.textContent = "+";
+  zoomIn.title = "Zoom in";
+  zoomIn.addEventListener("click", () => handlers.onZoomIn());
+
+  const fit = document.createElement("div");
+  fit.className = "alx-zoom-btn";
+  fit.textContent = "Fit";
+  fit.title = "Fit whole graph in view";
+  fit.addEventListener("click", () => handlers.onZoomFit());
+
+  cluster.append(zoomOut, reset, zoomIn, fit);
+  return cluster;
 }
 
 /** Subtle "an action is running" indicator (Task 14: shown while `store.busyOps` — main.ts — is
@@ -222,14 +287,25 @@ function buildCanvasViewport(
   const { layout, ui } = state;
   const density = ui.density;
   const size = canvasSize(layout, ui, density);
+  const zoom = view.zoom;
 
   const viewport = document.createElement("div");
   viewport.className = "alx-canvas-viewport";
+
+  // Task 19 (zoom): `scaleWrapper` is what actually determines the viewport's scrollable extent
+  // (its own box is sized to canvasSize * zoom) — `canvas` keeps its UNSCALED size and is visually
+  // scaled via `transform`, so every descendant position (nodes, edges) stays in the same simple
+  // pixel coordinate space metrics.ts already computes, at any zoom level.
+  const scaleWrapper = document.createElement("div");
+  scaleWrapper.className = "alx-canvas-scale";
+  scaleWrapper.style.width = `${size.w * zoom}px`;
+  scaleWrapper.style.height = `${size.h * zoom}px`;
 
   const canvas = document.createElement("div");
   canvas.className = "alx-canvas";
   canvas.style.width = `${size.w}px`;
   canvas.style.height = `${size.h}px`;
+  canvas.style.transform = `scale(${zoom})`;
 
   canvas.append(buildEdgesSvg(layout, size, positions, state.laneColors));
 
@@ -243,7 +319,8 @@ function buildCanvasViewport(
   const mergeHint = buildMergeHint(state, positions);
   if (mergeHint) canvas.append(mergeHint);
 
-  viewport.append(canvas);
+  scaleWrapper.append(canvas);
+  viewport.append(scaleWrapper);
   return viewport;
 }
 
@@ -276,6 +353,10 @@ function buildEdgesSvg(
 
     const path = document.createElementNS(SVG_NS, "path");
     path.setAttribute("d", `M ${sx} ${sy} C ${sx} ${mid} ${ex} ${mid} ${ex} ${ey}`);
+    // Task 19: hover.ts reads these to decide whether an edge sits on the hovered ancestor path —
+    // `edge.from`/`.to` are already the parent/child node ids (see LayoutEdge in core/types.ts).
+    path.dataset.from = edge.from;
+    path.dataset.to = edge.to;
 
     const classes = ["alx-edge"];
     if (edge.kind === "broken") classes.push("alx-edge--broken");
@@ -327,6 +408,9 @@ function buildNodeElement(
 ): HTMLElement {
   const wrapper = document.createElement("div");
   wrapper.className = "alx-node";
+  // Task 19: FLIP (flip.ts) diffs `.alx-node[data-node-id]` positions across re-renders — set here
+  // (not just on the card/ghost/collapse child) so it's uniform across all three node kinds.
+  wrapper.dataset.nodeId = node.id;
   wrapper.style.left = `${pos.x}px`;
   wrapper.style.top = `${pos.y}px`;
   wrapper.style.width = `${pos.w}px`;
@@ -428,6 +512,12 @@ function buildRevisionCard(
   if (node.isHead) card.dataset.head = "true";
   if (repointGhostId !== null) card.dataset.repointGhostId = repointGhostId;
 
+  // Task 19: keyboard navigation (keyboardNav.ts) — only revision cards are focusable (ghost/
+  // collapse cards keep their plain click-only affordance; see the brief's "Cards" scoping).
+  card.tabIndex = 0;
+  card.setAttribute("role", "button");
+  card.setAttribute("aria-label", buildAriaLabel(node));
+
   const stripe = document.createElement("div");
   stripe.className = node.applied === false ? "alx-stripe alx-stripe--dim" : "alx-stripe";
   stripe.style.background = laneColor; // lane color: the one dynamic value here -> inline style
@@ -482,6 +572,20 @@ function buildRevisionCard(
 
   card.append(stripe, head, message, metaRow);
   return card;
+}
+
+/** Task 19: `<hash8> — <message>, <badges>` (e.g. "3aebf188 — add rate limiting, head") — badges
+ * in the same CURRENT/HEAD/MERGE/BROKEN order as `buildBadgeItems` (badges.ts), comma-joined and
+ * appended only when at least one applies (no trailing comma for a plain card). */
+function buildAriaLabel(node: LayoutNode): string {
+  const hash8 = node.hash.slice(0, 8);
+  const badgeLabels: string[] = [];
+  if (node.isCurrent) badgeLabels.push("current");
+  if (node.isHead) badgeLabels.push("head");
+  if (node.isMerge) badgeLabels.push("merge");
+  if (node.isBroken) badgeLabels.push("broken");
+  const suffix = badgeLabels.length > 0 ? `, ${badgeLabels.join(", ")}` : "";
+  return `${hash8} — ${node.message}${suffix}`;
 }
 
 /** `author · date`, dim; author null -> just date; both null -> empty; applied===false appends
