@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import { pickProject, type AlembicProject } from "./services/discovery";
 import { MigrationService, type MigrationServiceDeps } from "./services/migrationService";
+import { AlembicCli, resolveCommand } from "./services/alembicCli";
+import { getActivePythonPath } from "./services/pythonEnv";
 import { createStatusBar } from "./ui/statusBar";
 import { GraphPanelManager } from "./ui/graphPanel";
 import { SidebarViewProvider } from "./ui/sidebarView";
@@ -13,10 +15,42 @@ const DEFAULT_UI_PREFS: UiPrefs = { order: "newest-bottom", density: "comfortabl
 
 let outputChannel: vscode.OutputChannel;
 let currentService: MigrationService | undefined;
+let currentCli: AlembicCli | undefined;
 
 /** Minimal accessor for later tasks (status bar, graph panel, sidebar) to hook onDidChangeState. */
 export function getService(): MigrationService | undefined {
   return currentService;
+}
+
+/** Accessor for later tasks (14/16/17: merge/upgrade/downgrade/revision actions) that need to run
+ * alembic CLI commands beyond `current` against the active project. */
+export function getCli(): AlembicCli | undefined {
+  return currentCli;
+}
+
+/**
+ * Resolves the alembic command to run, fresh on every call (both the override setting and the
+ * active Python interpreter can change between calls — this must never be cached). Precedence:
+ * a non-empty `alembicGraph.alembicCommand` override wins outright; otherwise fall back to the
+ * ms-python extension's active interpreter (`python -m alembic`), then a bare `alembic` on PATH.
+ */
+async function resolveAlembicCommand() {
+  const override = vscode.workspace.getConfiguration("alembicGraph").get<string>("alembicCommand", "");
+  if (override.trim().length > 0) {
+    return resolveCommand({ override, pythonPath: null });
+  }
+  const pythonPath = await getActivePythonPath();
+  return resolveCommand({ override: "", pythonPath });
+}
+
+/** Builds the AlembicCli for `project`, rooted at its alembic.ini directory (the cwd alembic
+ * itself expects to run from). */
+function buildAlembicCli(project: AlembicProject): AlembicCli {
+  return new AlembicCli({
+    cwd: project.iniDir,
+    resolve: resolveAlembicCommand,
+    log: (line) => outputChannel.appendLine(line),
+  });
 }
 
 function registerStubCommand(context: vscode.ExtensionContext, command: string, title: string): void {
@@ -43,7 +77,7 @@ function registerRemainingStubs(context: vscode.ExtensionContext, skip: Set<stri
 }
 
 /** Builds the vscode-backed MigrationServiceDeps for `project`. */
-function buildDeps(context: vscode.ExtensionContext, project: AlembicProject): MigrationServiceDeps {
+function buildDeps(context: vscode.ExtensionContext, project: AlembicProject, cli: AlembicCli): MigrationServiceDeps {
   return {
     async listVersionFiles() {
       const dirUri = vscode.Uri.file(project.versionsDir);
@@ -77,6 +111,10 @@ function buildDeps(context: vscode.ExtensionContext, project: AlembicProject): M
       outputChannel.appendLine(line);
     },
     project: { label: project.label, iniPath: project.iniPath },
+    async fetchCurrent() {
+      const result = await cli.current();
+      return result.dbReachable ? { dbReachable: true, currentIds: result.currentIds } : { dbReachable: false, currentIds: [] };
+    },
   };
 }
 
@@ -98,13 +136,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   outputChannel.appendLine(`using project: ${project.label} (${project.iniPath})`);
 
-  const deps = buildDeps(context, project);
+  const cli = buildAlembicCli(project);
+  currentCli = cli;
+
+  const deps = buildDeps(context, project, cli);
   const service = new MigrationService(deps);
   currentService = service;
   context.subscriptions.push({
     dispose: () => {
       service.dispose();
       if (currentService === service) currentService = undefined;
+      if (currentCli === cli) currentCli = undefined;
     },
   });
 

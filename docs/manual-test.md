@@ -261,3 +261,56 @@ collapse/expand lifecycle, and the real cross-webview hand-off into the graph pa
     `workspaceContains` activation event never fires on its own). The sidebar shows the client-side
     empty state: "No alembic.ini found in this workspace" + the dim hint line, with no console
     errors.
+
+## Task 13: alembic CLI runner + async applied-state enrichment
+
+Setup: the Extension Development Host resolves the alembic command as override setting →
+ms-python active interpreter (`python -m alembic`) → bare `alembic` on PATH. Unless you have the
+ms-python extension pointed at this repo's `.venv` inside the fixture workspace, the simplest
+deterministic setup is the override: in the Extension Development Host, open **Preferences: Open
+Workspace Settings (JSON)** and set
+
+```json
+"alembicGraph.alembicCommand": "<absolute repo path>/.venv/bin/python -m alembic"
+```
+
+(the override is whitespace-split, so it must not contain paths with spaces). Remove it when done.
+`alembic current` against the sqlite fixtures auto-creates a `fixtures/*/fixture.db` — it's
+gitignored, but delete it after testing so future runs start from "nothing applied".
+
+1. Press F5, select **Run Extension (healthy fixture)**, set the override (above), run **Alembic
+   Graph: Refresh**, and watch the **Alembic Graph** Output channel. After the usual `scan:` +
+   JSON pair, expect a `$ …/.venv/bin/python -m alembic current (<path>/fixtures/healthy-project)`
+   line, an `  exit 0`, alembic's INFO stderr lines, and a SECOND JSON state dump with
+   `"dbReachable":true` (phase-2 enrichment). No revisions are applied yet (fresh DB), so:
+   status bar still has no `current:` item, sidebar CURRENT REVISION still shows hollow-dot
+   `unknown`-style empty state, and every graph card now shows a dim stripe + `not applied` in its
+   meta row (applied is a definite *false* now, not unknown).
+2. In a terminal at `fixtures/healthy-project`, run
+   `../../.venv/bin/python -m alembic upgrade heads`, then run **Alembic Graph: Refresh** in the
+   Extension Development Host. Expect:
+   - Status bar gains a `current: <hash>` item showing the first of the two current heads
+     (`4bfc02996c` or `3aebf1885b` — alembic's output order isn't guaranteed).
+   - Graph cards: filled applied dots / bright hashes on ALL cards (everything is an ancestor of
+     the two heads), and a green **CURRENT** badge on both `3aebf1885b7d` and `4bfc02996c8e`.
+   - Click a card: the detail panel's `status` row reads **Applied** (not `Unknown`), and
+     **Applied · Current** styling on the two head cards' details (`isCurrent: true`).
+   - Sidebar: CURRENT REVISION section shows a filled dot + the same first-current-head hash as
+     the status bar.
+3. Downgrade partially: `../../.venv/bin/python -m alembic downgrade d4c7f5309b2e`, then Refresh.
+   The four base cards (`8f2a…`, `b2e5…`, `c3d6…`, `d4c7…`) keep filled dots, `d4c7f5309b2e` gains
+   the CURRENT badge, and everything newer shows `not applied` + dim stripe.
+4. The refresh is two-phase and never blocked by the CLI: immediately after clicking Refresh the
+   graph re-renders instantly (dbReachable false for a beat), then the enriched state lands a
+   moment later when `alembic current` returns. With a slow/hung alembic this would simply stay in
+   phase 1 — the graph must never wait on it.
+5. Broken fixture degradation (the golden rule): switch to **Run Extension (broken fixture)** (set
+   the override in that workspace too). Everything renders exactly as before Task 13 — 13 layout
+   nodes, ghost card, badges, sidebar problems — with hollow applied dots (`applied: null`,
+   detail `status Unknown`), NO `current:` status bar item, and NO error toast/modal anywhere.
+   The Output channel shows the `$ … alembic current` attempt followed by alembic's own crash
+   traceback (KeyError: 'deadbeef0000') — logged, silent, `"dbReachable":false` in the state dump.
+6. Bad override degradation: set `"alembicGraph.alembicCommand": "definitely-not-a-real-binary"`
+   and Refresh on either fixture. Same silent degradation: graph renders, Output shows the
+   attempted command + an ENOENT error, no user-facing error.
+7. Cleanup: remove the override settings and delete `fixtures/*/fixture.db`.

@@ -352,6 +352,166 @@ describe("MigrationService edge cases (self-review)", () => {
   });
 });
 
+/** A promise plus its out-of-band resolve/reject handles, for hand-sequencing async fetches. */
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Lets the microtask queue drain so an un-awaited phase-2 enrichment .then() can run. */
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+}
+
+type FetchCurrentResult = { dbReachable: boolean; currentIds: string[] };
+
+describe("MigrationService DB-state enrichment (fetchCurrent)", () => {
+  // d4c7f5309b2e's ancestry in the fixture: c3d6e4b721a8 -> b2e5d3a10f66 -> 8f2a1c9d4e07 (root).
+  const CURRENT_ID = "d4c7f5309b2e";
+  const ANCESTOR_IDS = ["c3d6e4b721a8", "b2e5d3a10f66", "8f2a1c9d4e07"];
+
+  it("7. a reachable fetchCurrent triggers a SECOND emit with dbReachable, applied, and isCurrent set", async () => {
+    const fetch = deferred<FetchCurrentResult>();
+    const fetchCurrent = vi.fn((): Promise<FetchCurrentResult> => fetch.promise);
+    const deps = makeDeps({ fetchCurrent });
+    const service = new MigrationService(deps);
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+
+    await service.refresh();
+
+    // Phase 1 emitted by refresh() itself: static state, DB unknown — NOT blocked on the CLI
+    // (the fetch is still unresolved here and refresh() has already settled).
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener.mock.calls[0][0].dbReachable).toBe(false);
+    expect(listener.mock.calls[0][0].currentIds).toEqual([]);
+
+    fetch.resolve({ dbReachable: true, currentIds: [CURRENT_ID] });
+    await flushMicrotasks(); // let the un-awaited enrichment land
+
+    expect(listener).toHaveBeenCalledTimes(2);
+    const enriched = listener.mock.calls[1][0];
+    expect(enriched.dbReachable).toBe(true);
+    expect(enriched.currentIds).toEqual([CURRENT_ID]);
+
+    const byId = new Map(enriched.layout.nodes.map((n: { id: string }) => [n.id, n]));
+    expect(byId.get(CURRENT_ID)).toMatchObject({ applied: true, isCurrent: true });
+    for (const id of ANCESTOR_IDS) {
+      expect(byId.get(id)).toMatchObject({ applied: true, isCurrent: false });
+    }
+    // Everything outside the current node's ancestry is explicitly applied:false (not null).
+    for (const node of enriched.layout.nodes) {
+      if (node.kind !== "revision") continue;
+      if (node.id === CURRENT_ID || ANCESTOR_IDS.includes(node.id)) continue;
+      expect(node.applied).toBe(false);
+      expect(node.isCurrent).toBe(false);
+    }
+    expect(service.getState()).toBe(enriched);
+  });
+
+  it("7b. getDetail reflects the enriched state automatically (applied + isCurrent)", async () => {
+    const fetch = deferred<FetchCurrentResult>();
+    const deps = makeDeps({ fetchCurrent: vi.fn((): Promise<FetchCurrentResult> => fetch.promise) });
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    // Before enrichment lands: DB state unknown.
+    expect(service.getDetail(CURRENT_ID)).toMatchObject({ applied: null, isCurrent: false });
+
+    fetch.resolve({ dbReachable: true, currentIds: [CURRENT_ID] });
+    await flushMicrotasks();
+
+    expect(service.getDetail(CURRENT_ID)).toMatchObject({ applied: true, isCurrent: true });
+    expect(service.getDetail(ANCESTOR_IDS[0])).toMatchObject({ applied: true, isCurrent: false });
+    expect(service.getDetail("5c0d13aa7d9f")).toMatchObject({ applied: false, isCurrent: false });
+  });
+
+  it("8a. fetchCurrent resolving dbReachable:false -> exactly ONE emit total", async () => {
+    const deps = makeDeps({
+      fetchCurrent: vi.fn(async (): Promise<FetchCurrentResult> => ({ dbReachable: false, currentIds: [] })),
+    });
+    const service = new MigrationService(deps);
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+
+    await service.refresh();
+    await flushMicrotasks();
+
+    expect(listener).toHaveBeenCalledTimes(1); // phase 1 only; unreachable adds nothing new
+    expect(service.getState()!.dbReachable).toBe(false);
+    expect(service.getState()!.currentIds).toEqual([]);
+  });
+
+  it("8b. fetchCurrent rejecting -> exactly ONE emit total, error logged, nothing thrown", async () => {
+    const deps = makeDeps({
+      fetchCurrent: vi.fn(async (): Promise<FetchCurrentResult> => {
+        throw new Error("adapter exploded unexpectedly");
+      }),
+    });
+    const service = new MigrationService(deps);
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+
+    await service.refresh();
+    await flushMicrotasks();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(service.getState()!.dbReachable).toBe(false);
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("adapter exploded unexpectedly"));
+  });
+
+  it("9. generation guard: a slow fetch from refresh#1 resolving after refresh#2 started is DISCARDED", async () => {
+    const fetch1 = deferred<FetchCurrentResult>();
+    const fetch2 = deferred<FetchCurrentResult>();
+    const fetches = [fetch1.promise, fetch2.promise];
+    const fetchCurrent = vi.fn((): Promise<FetchCurrentResult> => fetches.shift()!);
+
+    const deps = makeDeps({ fetchCurrent });
+    const service = new MigrationService(deps);
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+
+    await service.refresh(); // scan #1; fetch #1 in flight
+    await service.refresh(); // scan #2; fetch #2 in flight
+    expect(fetchCurrent).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledTimes(2); // two phase-1 emits
+
+    // The STALE response from scan #1 arrives only now, after scan #2 has started -> discarded.
+    fetch1.resolve({ dbReachable: true, currentIds: ["8f2a1c9d4e07"] });
+    await flushMicrotasks();
+    expect(listener).toHaveBeenCalledTimes(2); // no third emit with stale data
+    expect(service.getState()!.dbReachable).toBe(false);
+    expect(service.getState()!.currentIds).toEqual([]);
+
+    // Scan #2's own response lands normally.
+    fetch2.resolve({ dbReachable: true, currentIds: [CURRENT_ID] });
+    await flushMicrotasks();
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(service.getState()!.dbReachable).toBe(true);
+    expect(service.getState()!.currentIds).toEqual([CURRENT_ID]);
+  });
+
+  it("9b. setExpandCollapsed after enrichment keeps applied/current state (no revert to unknown)", async () => {
+    const deps = makeDeps({
+      fetchCurrent: vi.fn(async (): Promise<FetchCurrentResult> => ({ dbReachable: true, currentIds: [CURRENT_ID] })),
+    });
+    const service = new MigrationService(deps);
+    await service.refresh();
+    await flushMicrotasks();
+    expect(service.getState()!.dbReachable).toBe(true);
+
+    await service.setExpandCollapsed(true); // re-lays out from the cached graph
+
+    const node = service.getState()!.layout.nodes.find((n) => n.id === CURRENT_ID);
+    expect(node).toMatchObject({ applied: true, isCurrent: true });
+  });
+});
+
 describe("MigrationService.getDetail", () => {
   it("returns null before any refresh has completed", () => {
     const service = new MigrationService(makeDeps());

@@ -5,12 +5,15 @@
  * configuration, persisted UI prefs, logging) are injected via `MigrationServiceDeps` so this
  * class is fully vitest-testable in isolation. Only discovery.ts and extension.ts touch vscode.
  *
- * Task 13 will extend `refresh()` to enrich the layout with alembic-CLI `current`/`applied`
- * state (currently hardcoded to `dbReachable: false`, `currentIds: []`, `appliedSet: null`) —
- * that seam is the `appliedSet`/`currentIds` fields passed into `layoutGraph` below.
+ * DB current/applied state (Task 13): `refresh()` is two-phase. Phase 1 (synchronous, everything
+ * above) always emits the static scan with `dbReachable: false, appliedSet: null` — the CLI must
+ * never block or fail this. Phase 2, only if `deps.fetchCurrent` is provided, fires the CLI async
+ * (not awaited by refresh()'s own promise) and, if it resolves reachable before a newer scan has
+ * started, re-lays out and emits a second time with real applied/current state. See `enrichment`
+ * + `applyEnrichment` + `layoutOptsFor` below.
  */
-import { buildGraph } from "../core/graph";
-import { layoutGraph } from "../core/layout";
+import { buildGraph, computeAppliedSet } from "../core/graph";
+import { layoutGraph, type LayoutOptions } from "../core/layout";
 import { extractFunctionBody, parseRevisionSource } from "../core/parser";
 import type { MigrationGraph } from "../core/types";
 import type { AppState, RevisionDetail, UiPrefs } from "../protocol/messages";
@@ -23,6 +26,12 @@ export interface MigrationServiceDeps {
   setUiPrefs(prefs: UiPrefs): void;
   log(line: string): void;
   project: { label: string; iniPath: string };
+  /**
+   * Optional adapter over AlembicCli.current(). Absent in tests/deps that don't care about DB
+   * state (state stays `dbReachable: false` forever, exactly as before Task 13). Never expected
+   * to throw (AlembicCli.current() never does) but refresh() guards against a rejection anyway.
+   */
+  fetchCurrent?(): Promise<{ dbReachable: boolean; currentIds: string[] }>;
 }
 
 const DEBOUNCE_MS = 300;
@@ -47,6 +56,17 @@ export class MigrationService {
   /** Set by a refresh() call that arrives while a cycle is in flight; consumed by the cycle loop
    * to run exactly one trailing refresh once the current one finishes. */
   private queued = false;
+
+  /** Bumped once per doRefresh() call (i.e. per scan, including trailing ones). A phase-2
+   * fetchCurrent() response tags itself with the value at the time it was fired; if the counter
+   * has moved on by the time it resolves, a newer scan has started and the response is stale —
+   * see applyEnrichment. */
+  private scanGeneration = 0;
+  /** Last DB state phase 2 actually confirmed (vs. `state.dbReachable`, which phase 1 always
+   * resets to false at the start of every scan). Re-layout call sites that don't re-scan
+   * (setExpandCollapsed, applyUiPrefs) read this via layoutOptsFor so toggling a display option
+   * after a successful enrichment doesn't revert applied dots to "unknown". */
+  private enrichment: { dbReachable: boolean; currentIds: string[] } = { dbReachable: false, currentIds: [] };
 
   constructor(deps: MigrationServiceDeps) {
     this.deps = deps;
@@ -78,6 +98,13 @@ export class MigrationService {
   }
 
   private async doRefresh(): Promise<void> {
+    // A newer scan has started as of this line, full stop — see applyEnrichment's generation
+    // check. Bumped unconditionally (even if listVersionFiles below fails) so a slow phase-2
+    // response from an older, still-successful scan can never resurrect stale currentIds/
+    // appliedSet onto whatever state a later doRefresh() call leaves in place.
+    this.scanGeneration += 1;
+    const myGeneration = this.scanGeneration;
+
     let files: { path: string; content: string }[];
     try {
       files = await this.deps.listVersionFiles();
@@ -97,20 +124,20 @@ export class MigrationService {
       const config = this.deps.getConfig();
       const ui = this.deps.getUiPrefs();
 
-      const layout = layoutGraph(graph, {
-        collapseThreshold: config.collapseThreshold,
-        expandCollapsed: ui.expandCollapsed,
-        appliedSet: null, // DB current/applied enrichment arrives in Task 13
-        currentIds: [],
-      });
+      // Phase 1: every scan starts from "DB state unknown", regardless of what a previous scan's
+      // enrichment last confirmed — a stale "current" badge surviving into a freshly-scanned
+      // graph (whose nodes may no longer match) would be worse than a momentary "unknown".
+      this.enrichment = { dbReachable: false, currentIds: [] };
+
+      const layout = layoutGraph(graph, this.layoutOptsFor(graph, config, ui.expandCollapsed));
 
       const state: AppState = {
         project: { label: this.deps.project.label, iniPath: this.deps.project.iniPath },
         layout,
         heads: graph.heads.map((id) => ({ id, message: graph.nodes[id].message })),
-        currentIds: [],
+        currentIds: this.enrichment.currentIds,
         problems: graph.problems,
-        dbReachable: false,
+        dbReachable: this.enrichment.dbReachable,
         laneColors: laneColorsFor(layout.laneCount, config.laneColorA, config.laneColorB),
         counts: {
           revisions: Object.keys(graph.nodes).length,
@@ -131,11 +158,73 @@ export class MigrationService {
       this.deps.log(JSON.stringify(state));
 
       this.emit(state);
+
+      // Phase 2: async DB-state enrichment, deliberately NOT awaited here — refresh() must
+      // resolve as soon as phase 1 is emitted, never blocked on an external `alembic` process
+      // (the golden rule: CLI failures degrade silently and never hold up the graph). Tagged with
+      // this scan's generation so a response landing after a newer scan has started is discarded.
+      if (this.deps.fetchCurrent) {
+        this.deps
+          .fetchCurrent()
+          .then((result) => this.applyEnrichment(myGeneration, graph, result))
+          .catch((err) => {
+            // fetchCurrent's adapter (AlembicCli.current()) never rejects in practice, but a
+            // custom test/deps implementation might — degrade the same as any other CLI failure:
+            // log it, keep the phase-1 dbReachable:false already emitted, no throw.
+            this.deps.log(`error fetching current revision: ${err instanceof Error ? err.message : String(err)}`);
+          });
+      }
     } catch (err) {
       // Defensive: parser/graph/layout are pure and don't throw on any known-broken input, but
       // don't let an unexpected exception here leave the previous state's consumers unaware.
       this.deps.log(`error building migration graph: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  /**
+   * Applies a resolved fetchCurrent() result to the graph that was current when it was fired.
+   * Discards silently (no emit) if: a newer scan has started (`generation` stale), the DB wasn't
+   * reachable (state already says so from phase 1 — nothing new to show), or there's no state to
+   * enrich (shouldn't happen: phase 1 always sets one before phase 2 is fired).
+   */
+  private applyEnrichment(
+    generation: number,
+    graph: MigrationGraph,
+    result: { dbReachable: boolean; currentIds: string[] },
+  ): void {
+    if (generation !== this.scanGeneration) return; // stale: a newer scan has since started
+    if (!result.dbReachable || this.state === null) return; // nothing new to emit
+
+    this.enrichment = { dbReachable: true, currentIds: result.currentIds };
+
+    const config = this.deps.getConfig();
+    const layout = layoutGraph(graph, this.layoutOptsFor(graph, config, this.state.ui.expandCollapsed));
+
+    this.state = {
+      ...this.state,
+      layout,
+      currentIds: result.currentIds,
+      dbReachable: true,
+      laneColors: laneColorsFor(layout.laneCount, config.laneColorA, config.laneColorB),
+    };
+    this.emit(this.state);
+  }
+
+  /** LayoutOptions for `graph`, folding in the last confirmed DB enrichment (if any) alongside
+   * the given collapse/expand settings. Shared by doRefresh, applyEnrichment, setExpandCollapsed,
+   * and applyUiPrefs so every re-layout call site — not just a full re-scan — reflects the latest
+   * known applied/current state instead of silently reverting it to "unknown". */
+  private layoutOptsFor(
+    graph: MigrationGraph,
+    config: { collapseThreshold: number },
+    expandCollapsed: boolean,
+  ): LayoutOptions {
+    return {
+      collapseThreshold: config.collapseThreshold,
+      expandCollapsed,
+      appliedSet: this.enrichment.dbReachable ? computeAppliedSet(graph, this.enrichment.currentIds) : null,
+      currentIds: this.enrichment.currentIds,
+    };
   }
 
   /** Debounced refresh — repeated calls within the window coalesce into ONE refresh. */
@@ -175,12 +264,7 @@ export class MigrationService {
     if (this.state === null || this.cachedGraph === null) return;
 
     const config = this.deps.getConfig();
-    const layout = layoutGraph(this.cachedGraph, {
-      collapseThreshold: config.collapseThreshold,
-      expandCollapsed: v,
-      appliedSet: null,
-      currentIds: [],
-    });
+    const layout = layoutGraph(this.cachedGraph, this.layoutOptsFor(this.cachedGraph, config, v));
 
     this.state = {
       ...this.state,
@@ -211,12 +295,7 @@ export class MigrationService {
 
     if (expandChanged && this.cachedGraph !== null) {
       const config = this.deps.getConfig();
-      const layout = layoutGraph(this.cachedGraph, {
-        collapseThreshold: config.collapseThreshold,
-        expandCollapsed: ui.expandCollapsed,
-        appliedSet: null,
-        currentIds: [],
-      });
+      const layout = layoutGraph(this.cachedGraph, this.layoutOptsFor(this.cachedGraph, config, ui.expandCollapsed));
       this.state = {
         ...this.state,
         layout,
