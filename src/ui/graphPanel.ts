@@ -5,6 +5,8 @@
  * seam other tasks extend.
  */
 import * as vscode from "vscode";
+import { homedir } from "node:os";
+import * as path from "node:path";
 import { buildWebviewHtml } from "./html";
 import {
   mergeHeadsAction,
@@ -310,10 +312,56 @@ export class GraphPanelManager {
         });
         break;
       }
-      default:
-        // Reachable only for message types this panel deliberately doesn't handle:
-        // "exportSvg" (Task 20) and "openGraph" (sidebar-only — the graph webview never posts it).
-        this.log(`graph panel: message not implemented yet: ${msg.type}`);
+      case "exportSvg": {
+        // Task 20: toolbar "Export SVG" — the webview already built the full SVG string
+        // (svgExport.ts, a pure/DOM-free builder); this host side is just the save-dialog +
+        // filesystem write. No CLI/ActionContext needed, unlike every action above.
+        this.exportSvg(msg.svg).catch((err) => {
+          this.log(`graph panel: exportSvg threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
+        });
+        break;
+      }
+      case "openGraph":
+        // Sidebar-only (SidebarViewProvider routes it to GraphPanelManager.open()) — the graph
+        // webview's own main.ts never posts this message type. Kept as an explicit case (rather
+        // than falling into `default`) purely so the `never` exhaustiveness check below stays
+        // meaningful: every message type this panel intentionally leaves unhandled is named here,
+        // not just silently absorbed by a catch-all log line.
+        break;
+      default: {
+        // Exhaustiveness guard, not a runtime log fallback (see the Task 8 log's dead default this
+        // replaces, per the Task 20 brief): every WebviewToHostMessage variant now has an explicit
+        // case above, so `msg` is `never` here. If a future message type is added to the union
+        // without a matching case, this line fails to compile instead of silently logging at
+        // runtime.
+        const exhaustive: never = msg;
+        this.log(`graph panel: unhandled message type: ${JSON.stringify(exhaustive)}`);
+      }
+    }
+  }
+
+  /** Task 20: `showSaveDialog` -> `workspace.fs.writeFile`. Cancelling the dialog (`uri ===
+   * undefined`) is silent, per the brief. Never throws — a write failure (permissions, a bad path)
+   * degrades to an error toast + modal, same golden rule as every CLI-backed action in actions.ts,
+   * even though this path never touches the CLI. */
+  private async exportSvg(svg: string): Promise<void> {
+    try {
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri;
+      const defaultDir = workspaceFolder ?? vscode.Uri.file(homedir());
+      const defaultUri = vscode.Uri.joinPath(defaultDir, "migration-graph.svg");
+      const uri = await vscode.window.showSaveDialog({
+        filters: { "SVG image": ["svg"] },
+        defaultUri,
+      });
+      if (!uri) return; // cancelled — silent
+
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(svg, "utf8"));
+      this.broadcast({ type: "toast", level: "success", text: `Exported ${path.basename(uri.fsPath)}` });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log(`graph panel: exportSvg failed: ${message}`);
+      this.broadcast({ type: "toast", level: "error", text: "Failed to export SVG" });
+      void vscode.window.showErrorMessage(`Alembic Graph: failed to export SVG — ${message}`);
     }
   }
 }

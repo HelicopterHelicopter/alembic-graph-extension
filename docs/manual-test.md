@@ -729,3 +729,57 @@ verified directly against the built webview via Playwright (harness) before this
     shortly after (e.g. nothing needed here — the detail panel's own async load already does this):
     confirm the very next arrow-key press still moves the selection (focus is preserved across that
     intervening re-render, not silently dropped).
+
+## Task 20: export graph as standalone SVG
+
+`buildGraphSvg` (`src/webview/graph/svgExport.ts`) is a pure, DOM-free string builder covered by
+`test/unit/svgExport.test.ts` (structure/counts, XML escaping, truncation, order-flip — all against
+the real broken-fixture `harness/state.json`), and was separately verified end-to-end via
+Playwright: click **Export SVG** in `harness/graph.html`, capture the posted `svg` string, write it
+to disk, and render it standalone in a real browser (no VS Code, no `graph.css`) — 13 `<g>` card
+groups, 12 `<path>` edges (exactly 1 dashed-red), HEAD/MERGE/BROKEN badges, and the ghost card all
+present in the parsed DOM, zero console errors. The steps below are the F5-only checks that need a
+real save dialog and a real file on disk.
+
+1. Press F5, select **Run Extension (broken fixture)**, then **Alembic Graph: Open Migration
+   Graph**.
+2. In the toolbar, right of the zoom cluster (`−`/`100%`/`+`/`Fit`): an **Export SVG** button, same
+   plain toggleBtn style as **+ New revision**. Click it. A native **Save** dialog appears,
+   defaulting to `migration-graph.svg` inside the workspace folder (`fixtures/broken-project/`),
+   with the file-type filter set to **SVG image**.
+3. Accept the default location and save. A green success toast `Exported migration-graph.svg`
+   appears bottom-right (the toast shows just the chosen file's basename, not the full path).
+4. Open the saved file directly in a regular web browser (double-click it, or drag it into a
+   browser tab — NOT inside VS Code): it renders standalone — dark `#1e1e1e` background, the
+   project label + `12 revisions · 3 heads` title top-left, all 12 revision cards with lane-colored
+   stripes, HEAD (green)/MERGE (purple)/BROKEN (red) badges, the dashed red **⚠ missing revision**
+   ghost card (`deadbeef0000`), and the dashed red bezier edge into it — a visual match for the
+   graph panel's canvas at the moment of export (current order/density; no search dimming, hover
+   highlight, or card selection — none of that is exported, per the brief).
+5. Cancel the save dialog instead (Escape, or the dialog's own Cancel): confirm nothing happens —
+   no toast, no file written, no error.
+6. Click **Newest ↑** and **Compact**, then **Export SVG** again, save to a different filename.
+   Open the new file in a browser: card order is mirrored top-to-bottom vs. step 4's file, and
+   cards are visibly shorter/tighter (compact density) — the export reflects whatever order/density
+   the toolbar is currently showing, not always the default.
+7. Scroll the canvas away from the top-left and zoom out/in (Task 19's `−`/`+`/`Fit`) before
+   exporting: the saved SVG is unaffected by scroll position or zoom — it always contains the FULL
+   graph at its natural (unzoomed) size, matching `canvasSize`'s math.
+8. Start a busy operation (e.g. drag one head onto another to merge — Task 14 — and let the input
+   box sit open, or watch for the `⟳ working…` toolbar indicator during any real CLI call): while
+   busy, **Export SVG** is dimmed and does nothing on click, same convention as **+ New revision**.
+   It re-enables the instant the busy indicator clears.
+9. Open a revision message containing characters like `<`, `&`, or `"` (e.g. temporarily edit a
+   fixture file's docstring first line, or trust `test/unit/svgExport.test.ts`'s escaping test if
+   short on time — the fixture files don't naturally contain any): confirm the exported SVG still
+   opens correctly in a browser (no "not well-formed" XML parse error) and the message renders with
+   the literal characters, not mangled or truncated early. Revert any fixture edit afterward.
+10. Failure path: make the default save location unwritable (e.g. point the save dialog at a
+    read-only path, or a filename inside a directory you don't have write access to) and attempt to
+    save: expect a red error toast + a modal error message, and the Output channel (**Alembic
+    Graph**) logs the failure — never a silent hang or an unhandled exception in the Extension
+    Development Host's own console.
+11. Open webview DevTools (**Developer: Open Webview Developer Tools**) and confirm the Console has
+    no errors/CSP violations while repeating steps 2–4.
+12. Repeat steps 1–4 with the **Run Extension (healthy fixture)** launch config: exports the same
+    way with no ghost/broken card (2 heads, no BROKEN badge, no dashed red anywhere).

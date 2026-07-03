@@ -68,3 +68,31 @@ export function canvasSize(
   const h = PAD_Y + maxRow * rowGap(density) + cardH(density) + 60;
   return { w, h };
 }
+
+/** Corners of a positioned node that the edge-path math needs — the subset of render.ts's `Pos`
+ * (and svgExport.ts's mirrored `Pos`) common to both canvas renderers. */
+export interface EdgeAnchor {
+  cx: number;
+  top: number;
+  bottom: number;
+}
+
+/**
+ * SVG `<path>` `d` string for one parent→child edge: a cubic bezier from the visually-upper card's
+ * bottom-center to the visually-lower card's top-center (control points held at the vertical
+ * midpoint, directly under/above each anchor, for a symmetric S-curve). Orders by `top` rather than
+ * trusting `a`/`b` to already be parent/child in draw order, since layout order flips under
+ * newest-top vs newest-bottom (see `nodeXY`) and either endpoint can end up physically above the
+ * other. Shared by the live DOM canvas (render.ts's `buildEdgesSvg`) and the standalone SVG export
+ * (svgExport.ts) so the two renderers can never draw visibly different curves for the same layout.
+ */
+export function edgePathD(a: EdgeAnchor, b: EdgeAnchor): string {
+  const upper = a.top <= b.top ? a : b;
+  const lower = a.top <= b.top ? b : a;
+  const sx = upper.cx;
+  const sy = upper.bottom;
+  const ex = lower.cx;
+  const ey = lower.top;
+  const mid = (sy + ey) / 2;
+  return `M ${sx} ${sy} C ${sx} ${mid} ${ex} ${mid} ${ex} ${ey}`;
+}

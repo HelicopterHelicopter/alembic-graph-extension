@@ -10,7 +10,7 @@ import type { GraphLayout, LayoutNode } from "../../core/types";
 import type { AppState, RevisionDetail, UiPrefs } from "../../protocol/messages";
 import { buildBadgeItems } from "./badges";
 import { buildDetailPanel, type DetailHandlers } from "./detail";
-import { canvasSize, nodeSize, nodeXY, type Density } from "./metrics";
+import { canvasSize, edgePathD, nodeSize, nodeXY, type Density } from "./metrics";
 
 export interface ViewState {
   selectedId: string | null;
@@ -49,6 +49,11 @@ export interface Handlers {
   onZoomOut(): void;
   onZoomReset(): void;
   onZoomFit(): void;
+  /** Task 20: toolbar "Export SVG" — builds the standalone SVG string (svgExport.ts) from the
+   * CURRENT store and posts it to the host for a save-dialog write. Building the string is main.ts's
+   * job (it owns `store`), not render.ts's — this handler is a plain, parameterless trigger like
+   * `onNewRevision`. */
+  onExportSvg(): void;
 }
 
 interface Pos {
@@ -197,9 +202,18 @@ function buildToolbar(state: AppState, view: ViewState, handlers: Handlers): HTM
 
   const zoomCluster = buildZoomCluster(view.zoom, handlers);
 
+  // Task 20: right of the zoom cluster, same busy-disabled toggleBtn convention as "+ New
+  // revision" above — exporting mid-operation risks nothing correctness-wise (it's a pure read of
+  // the current store), but the disabled styling keeps every toolbar action consistently gated
+  // while something else is in flight, matching the brief.
+  const exportSvgBtn = document.createElement("div");
+  exportSvgBtn.className = busy ? "alx-toggle alx-toggle--disabled" : "alx-toggle";
+  exportSvgBtn.textContent = "Export SVG";
+  exportSvgBtn.addEventListener("click", () => handlers.onExportSvg());
+
   toolbar.append(label, sep, headsChip, revCount, spacer);
   if (busyIndicator) toolbar.append(busyIndicator);
-  toolbar.append(searchWrap, orderLabel, orderGroup, densityGroup, newRevisionBtn, zoomCluster);
+  toolbar.append(searchWrap, orderLabel, orderGroup, densityGroup, newRevisionBtn, zoomCluster, exportSvgBtn);
   return toolbar;
 }
 
@@ -342,17 +356,10 @@ function buildEdgesSvg(
     const b = positions.get(edge.to);
     if (!a || !b) continue;
 
-    // Anchor = upper card's bottom-center -> lower card's top-center.
-    const upper = a.top <= b.top ? a : b;
-    const lower = a.top <= b.top ? b : a;
-    const sx = upper.cx;
-    const sy = upper.bottom;
-    const ex = lower.cx;
-    const ey = lower.top;
-    const mid = (sy + ey) / 2;
-
+    // Anchor = upper card's bottom-center -> lower card's top-center (metrics.ts's edgePathD,
+    // shared with svgExport.ts so the standalone export draws identical curves).
     const path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", `M ${sx} ${sy} C ${sx} ${mid} ${ex} ${mid} ${ex} ${ey}`);
+    path.setAttribute("d", edgePathD(a, b));
     // Task 19: hover.ts reads these to decide whether an edge sits on the hovered ancestor path —
     // `edge.from`/`.to` are already the parent/child node ids (see LayoutEdge in core/types.ts).
     path.dataset.from = edge.from;

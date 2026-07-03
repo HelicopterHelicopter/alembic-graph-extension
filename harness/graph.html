@@ -62,6 +62,13 @@
   test reads directly, same as __postedMerges/__postedRepoints. No host behavior (modal, QuickPick,
   clipboard write, busy round trip) is synthesized — `window.__sendBusy` remains the way to
   exercise the busy-gates-the-menu / busy-disables-"+ New revision" paths.
+
+  Task 20 (export SVG): every posted `{type:"exportSvg", svg}` message's `svg` string lands in
+  `window.__exportedSvgs` (an array, in post order — a Playwright test reads the last entry) rather
+  than being written anywhere; there's no host filesystem here to hand a real save dialog to. The
+  webview builds the ENTIRE svg string itself (svgExport.ts is a pure, DOM-free builder — no host
+  round trip needed to produce it), so this stub's only job is to capture what was posted for the
+  test to inspect/write to a temp file for the standalone-render check.
 -->
 <html lang="en">
 <head>
@@ -85,10 +92,12 @@
   // Task 17: same idea, for context-menu items + the "+ New revision" toolbar button — one shared
   // array of whole messages (see the file header comment).
   window.__postedActions = [];
+  // Task 20: every posted "exportSvg" message's `svg` string, in order.
+  window.__exportedSvgs = [];
   const RECORDED_ACTION_TYPES = new Set(["upgradeTo", "downgradeTo", "previewSql", "copyId", "openFile", "newRevision"]);
   window.acquireVsCodeApi = () => ({
     postMessage: (message) => {
-      console.log("[harness] postMessage from webview:", message);
+      console.log("[harness] postMessage from webview:", message && message.type === "exportSvg" ? { type: "exportSvg", svgLength: message.svg.length } : message);
       if (message && message.type === "ready") {
         respondToReady(message.restored);
       } else if (message && message.type === "select") {
@@ -104,6 +113,8 @@
         window.__postedMerges.push({ a: message.a, b: message.b });
       } else if (message && message.type === "repoint") {
         window.__postedRepoints.push({ ghostId: message.ghostId, targetId: message.targetId });
+      } else if (message && message.type === "exportSvg") {
+        window.__exportedSvgs.push(message.svg);
       } else if (message && RECORDED_ACTION_TYPES.has(message.type)) {
         window.__postedActions.push(message);
       }

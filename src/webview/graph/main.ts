@@ -9,6 +9,7 @@ import { onMessage, post, getPersisted, setPersisted } from "../shared/vscodeApi
 import type { AppState, RevisionDetail, UiPrefs } from "../../protocol/messages";
 import { render, showToast, type Handlers, type ViewState } from "./render";
 import { canvasSize, nodeSize, nodeXY } from "./metrics";
+import { buildGraphSvg } from "./svgExport";
 import { attachDnd, type DndCallbacks } from "./dnd";
 import { attachContextMenu, closeContextMenu, isContextMenuOpen, type MenuHandlers } from "./contextMenu";
 import { attachSearch, type SearchableCard, type SearchCallbacks } from "./search";
@@ -197,6 +198,19 @@ const handlers: Handlers = {
     const scroll = fitScroll(size, viewportSize, zoom);
     store.zoom = zoom;
     renderStore(scroll);
+  },
+  onExportSvg() {
+    // Belt-and-suspenders with render.ts's --disabled styling (pointer-events:none), same
+    // convention as onNewRevision above — a stray click during a busy window is a silent no-op.
+    if (!store.state || store.busyOps.size > 0) return;
+    const svg = buildGraphSvg({
+      layout: store.state.layout,
+      laneColors: store.state.laneColors,
+      ui: store.state.ui,
+      counts: store.state.counts,
+      projectLabel: store.state.project?.label ?? "",
+    });
+    post({ type: "exportSvg", svg });
   },
 };
 
