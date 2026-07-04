@@ -45,7 +45,8 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "check": "tsc --noEmit -p . && tsc --noEmit -p src/webview",
-    "test:unit": "vitest run"
+    "test:unit": "vitest run",
+    "vscode:prepublish": "node esbuild.mjs --production"
   },
   "devDependencies": {
     "@types/node": "^20",

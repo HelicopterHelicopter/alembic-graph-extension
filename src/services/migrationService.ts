@@ -13,9 +13,10 @@
  * + `applyEnrichment` + `layoutOptsFor` below.
  */
 import { buildGraph, computeAppliedSet } from "../core/graph";
+import { DEFAULT_LANE_COLOR_A, DEFAULT_LANE_COLOR_B, isValidHex, rotateHue } from "../core/color";
 import { layoutGraph, type LayoutOptions } from "../core/layout";
 import { extractFunctionBody, parseRevisionSource } from "../core/parser";
-import type { MigrationGraph } from "../core/types";
+import type { GraphLayout, MigrationGraph } from "../core/types";
 import type { AppState, RevisionDetail, UiPrefs } from "../protocol/messages";
 
 export type RepointPlan =
@@ -36,6 +37,13 @@ export interface MigrationServiceDeps {
    * to throw (AlembicCli.current() never does) but refresh() guards against a rejection anyway.
    */
   fetchCurrent?(): Promise<{ dbReachable: boolean; currentIds: string[] }>;
+  /**
+   * Optional adapter over a git author provider (Task 21's gitAuthor.ts `AuthorProvider.lookup`).
+   * Absent in tests/deps that don't care about authors (nodes/detail stay `author: null` forever).
+   * Never expected to throw (the provider's own golden rule) but refresh() guards against a
+   * rejection anyway, same treatment as `fetchCurrent`.
+   */
+  fetchAuthors?(filePaths: string[]): Promise<Map<string, string>>;
 }
 
 const DEBOUNCE_MS = 300;
@@ -71,6 +79,23 @@ export class MigrationService {
    * (setExpandCollapsed, applyUiPrefs) read this via layoutOptsFor so toggling a display option
    * after a successful enrichment doesn't revert applied dots to "unknown". */
   private enrichment: { dbReachable: boolean; currentIds: string[] } = { dbReachable: false, currentIds: [] };
+
+  /** Last confirmed git-author batch (Task 21), keyed by revision file path — populated by
+   * `applyAuthors` once `deps.fetchAuthors` resolves, and re-applied onto every subsequent
+   * re-layout (`buildLayout`) so a later DB-state enrichment or a display-option toggle never wipes
+   * out authors already known. Persists across scans on purpose (a repeat lookup for the same path
+   * is free — see gitAuthor.ts's own cache); a file that disappears from the graph simply stops
+   * matching any node, harmlessly. */
+  private authorsByPath: Map<string, string> = new Map();
+
+  /** Set once by `dispose()`. Task 21 made `dispose()` reachable mid-session (a project switch
+   * disposes the previous project's service while it may still be mid-`refresh()`), whereas
+   * before it only ever ran at full extension deactivation — where nobody cared if an in-flight
+   * scan kept running to completion. Now that a disposed service's owning pipeline may already be
+   * gone (its Output channel lines misattributed to whatever project replaced it, its CLI/git
+   * calls wasted work for a project nobody's looking at anymore), `doRefresh()` checks this after
+   * its one real await point and bails before building/emitting/logging anything further. */
+  private disposed = false;
 
   constructor(deps: MigrationServiceDeps) {
     this.deps = deps;
@@ -117,6 +142,11 @@ export class MigrationService {
       return; // keep previous state, no emit
     }
 
+    // Task 21: this service may have been disposed (a project switch) while the read above was in
+    // flight — never build/emit/log against a torn-down service, and never fire the CLI/git
+    // enrichment calls below for a project nobody's looking at anymore.
+    if (this.disposed) return;
+
     try {
       const revisions = [];
       for (const file of files) {
@@ -133,7 +163,7 @@ export class MigrationService {
       // graph (whose nodes may no longer match) would be worse than a momentary "unknown".
       this.enrichment = { dbReachable: false, currentIds: [] };
 
-      const layout = layoutGraph(graph, this.layoutOptsFor(graph, config, ui.expandCollapsed));
+      const layout = this.buildLayout(graph, config, ui.expandCollapsed);
 
       const state: AppState = {
         project: { label: this.deps.project.label, iniPath: this.deps.project.iniPath },
@@ -178,6 +208,24 @@ export class MigrationService {
             this.deps.log(`error fetching current revision: ${err instanceof Error ? err.message : String(err)}`);
           });
       }
+
+      // Phase 2b: async git-author enrichment, same NOT-awaited/generation-guarded treatment as
+      // phase 2 above — a slow `git log` batch must never block refresh(), and a response landing
+      // after a newer scan has started is discarded. Independent of fetchCurrent: both can be in
+      // flight at once, and each applies its own patch to whatever `this.state` is live when it
+      // resolves (see applyAuthors + buildLayout's reapplication of `authorsByPath`), so the two
+      // never tear each other's half of the state.
+      if (this.deps.fetchAuthors) {
+        const filePaths = files.map((file) => file.path);
+        this.deps
+          .fetchAuthors(filePaths)
+          .then((result) => this.applyAuthors(myGeneration, result))
+          .catch((err) => {
+            // The gitAuthor provider's own golden rule means this never actually rejects, but
+            // degrade the same as any other best-effort enrichment if a custom deps impl does.
+            this.deps.log(`error fetching git authors: ${err instanceof Error ? err.message : String(err)}`);
+          });
+      }
     } catch (err) {
       // Defensive: parser/graph/layout are pure and don't throw on any known-broken input, but
       // don't let an unexpected exception here leave the previous state's consumers unaware.
@@ -202,7 +250,7 @@ export class MigrationService {
     this.enrichment = { dbReachable: true, currentIds: result.currentIds };
 
     const config = this.deps.getConfig();
-    const layout = layoutGraph(graph, this.layoutOptsFor(graph, config, this.state.ui.expandCollapsed));
+    const layout = this.buildLayout(graph, config, this.state.ui.expandCollapsed);
 
     this.state = {
       ...this.state,
@@ -211,6 +259,23 @@ export class MigrationService {
       dbReachable: true,
       laneColors: laneColorsFor(layout.laneCount, config.laneColorA, config.laneColorB),
     };
+    this.emit(this.state);
+  }
+
+  /**
+   * Applies a resolved fetchAuthors() batch (Task 21) to whatever state is CURRENTLY live —
+   * deliberately not the graph/layout captured when the fetch was fired, since a dbReachable
+   * enrichment may have already re-laid things out in the meantime (see `buildLayout`, which is
+   * what keeps that re-layout from wiping these authors right back out again). Discards silently
+   * if a newer scan has started, or there's no state yet to patch.
+   */
+  private applyAuthors(generation: number, result: Map<string, string>): void {
+    if (generation !== this.scanGeneration) return; // stale: a newer scan has since started
+    if (this.state === null) return; // nothing to patch onto
+
+    this.authorsByPath = result;
+    const nodes = this.applyAuthorsToNodes(this.state.layout.nodes);
+    this.state = { ...this.state, layout: { ...this.state.layout, nodes } };
     this.emit(this.state);
   }
 
@@ -229,6 +294,32 @@ export class MigrationService {
       appliedSet: this.enrichment.dbReachable ? computeAppliedSet(graph, this.enrichment.currentIds) : null,
       currentIds: this.enrichment.currentIds,
     };
+  }
+
+  /** `layoutGraph` + the last confirmed author batch (if any) re-applied on top — every re-layout
+   * call site (doRefresh, applyEnrichment, setExpandCollapsed, applyUiPrefs) goes through this
+   * instead of `layoutGraph` directly, so none of them can silently revert an already-known author
+   * back to null just because THEY didn't just re-run the author fetch themselves. */
+  private buildLayout(
+    graph: MigrationGraph,
+    config: { collapseThreshold: number },
+    expandCollapsed: boolean,
+  ): GraphLayout {
+    const layout = layoutGraph(graph, this.layoutOptsFor(graph, config, expandCollapsed));
+    return { ...layout, nodes: this.applyAuthorsToNodes(layout.nodes) };
+  }
+
+  /** Patches `author` onto every node whose `filePath` has a known entry in `authorsByPath` — a
+   * no-op (same array reference) when nothing is known yet, so a pre-enrichment re-layout doesn't
+   * even allocate a new node array for nothing. Ghost/collapse nodes (`filePath: null`) never
+   * match, same as they never had an author to begin with. */
+  private applyAuthorsToNodes(nodes: GraphLayout["nodes"]): GraphLayout["nodes"] {
+    if (this.authorsByPath.size === 0) return nodes;
+    return nodes.map((n) => {
+      if (n.filePath === null) return n;
+      const author = this.authorsByPath.get(n.filePath);
+      return author !== undefined ? { ...n, author } : n;
+    });
   }
 
   /** Debounced refresh — repeated calls within the window coalesce into ONE refresh. */
@@ -259,6 +350,37 @@ export class MigrationService {
     this.emit(this.state);
   }
 
+  /**
+   * Task 21's config live-reload path: re-derives `laneColors`, `config.showSqlPreview`, and the
+   * collapse layout from the CACHED graph and a fresh `deps.getConfig()` read — no file re-read, no
+   * DB (`fetchCurrent`)/git (`fetchAuthors`) enrichment re-fired, and (via `buildLayout` folding in
+   * `this.enrichment`/`this.authorsByPath` same as every other re-layout call site) no reset of
+   * already-known applied/current/author state. A no-op before the first successful `refresh()`
+   * (nothing cached yet to re-derive from).
+   *
+   * This exists because `laneColorA`/`laneColorB`/`showSqlPreview`/`collapseThreshold` changing is
+   * the ONLY thing extension.ts's `onDidChangeConfiguration` handler needs to react to, and the
+   * obvious-looking alternative — just calling `refresh()` — is deceptively expensive: it re-reads
+   * every `versions/*.py` file, resets DB/author enrichment to "unknown" for a moment (a visible
+   * flicker of every applied/current badge and every author disappearing and reappearing), and
+   * re-fires a real `alembic` subprocess and a full git-log batch, all for a change that has
+   * nothing to do with file contents.
+   */
+  applyConfigChange(): void {
+    if (this.state === null || this.cachedGraph === null) return;
+
+    const config = this.deps.getConfig();
+    const layout = this.buildLayout(this.cachedGraph, config, this.state.ui.expandCollapsed);
+
+    this.state = {
+      ...this.state,
+      layout,
+      laneColors: laneColorsFor(layout.laneCount, config.laneColorA, config.laneColorB),
+      config: { showSqlPreview: config.showSqlPreview },
+    };
+    this.emit(this.state);
+  }
+
   /** Re-lays out from the cached graph (no file re-read) + emits. */
   async setExpandCollapsed(v: boolean): Promise<void> {
     const base = this.state?.ui ?? this.deps.getUiPrefs();
@@ -268,7 +390,7 @@ export class MigrationService {
     if (this.state === null || this.cachedGraph === null) return;
 
     const config = this.deps.getConfig();
-    const layout = layoutGraph(this.cachedGraph, this.layoutOptsFor(this.cachedGraph, config, v));
+    const layout = this.buildLayout(this.cachedGraph, config, v);
 
     this.state = {
       ...this.state,
@@ -299,7 +421,7 @@ export class MigrationService {
 
     if (expandChanged && this.cachedGraph !== null) {
       const config = this.deps.getConfig();
-      const layout = layoutGraph(this.cachedGraph, this.layoutOptsFor(this.cachedGraph, config, ui.expandCollapsed));
+      const layout = this.buildLayout(this.cachedGraph, config, ui.expandCollapsed);
       this.state = {
         ...this.state,
         layout,
@@ -359,7 +481,9 @@ export class MigrationService {
       id,
       hash: id,
       message: node.message,
-      author: null, // git-blame enrichment arrives in Task 21
+      // Task 21: keyed off `authorsByPath` directly (not the layout node) so getDetail reflects a
+      // just-landed author batch even the instant before its own re-emit lands on `state`.
+      author: this.authorsByPath.get(node.filePath) ?? null,
       date: node.createDate,
       applied,
       isCurrent: state.currentIds.includes(id),
@@ -422,6 +546,7 @@ export class MigrationService {
 
   /** Cancels any pending debounce. */
   dispose(): void {
+    this.disposed = true;
     if (this.debounceTimer !== null) {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
@@ -430,8 +555,29 @@ export class MigrationService {
   }
 }
 
-/** array of length max(laneCount, 1): index 0 = laneColorA, all others laneColorB. */
-function laneColorsFor(laneCount: number, laneColorA: string, laneColorB: string): string[] {
+/** Hue-rotation step (degrees) between each lane >= 2's color and lane 1's — see `rotateHue`. */
+const LANE_HUE_STEP_DEG = 40;
+
+/**
+ * Array of length max(laneCount, 1): lane 0 = laneColorA, lane 1 = laneColorB, every lane after
+ * that hue-rotates laneColorB by `LANE_HUE_STEP_DEG` more per lane (Task 21) — so a graph with many
+ * concurrent branches gets a visually distinct (if not infinitely distinguishable) color per lane
+ * instead of every branch past the first two silently reusing laneColorB.
+ *
+ * Exported (not just for `laneColorsFor` call sites inside this class) so it's directly
+ * unit-testable without needing a fixture graph with >= 3 lanes. Independently re-validates both
+ * colors against `isValidHex` (falling back to the hardcoded defaults, matching the setting
+ * declarations in package.json) even though extension.ts's config read already does the same at
+ * the source — belt and suspenders: this function must never propagate a NaN-producing string
+ * into a hue rotation, regardless of what validation any particular caller did or didn't do.
+ */
+export function laneColorsFor(laneCount: number, laneColorA: string, laneColorB: string): string[] {
+  const a = isValidHex(laneColorA) ? laneColorA : DEFAULT_LANE_COLOR_A;
+  const b = isValidHex(laneColorB) ? laneColorB : DEFAULT_LANE_COLOR_B;
   const length = Math.max(laneCount, 1);
-  return Array.from({ length }, (_, i) => (i === 0 ? laneColorA : laneColorB));
+  return Array.from({ length }, (_, i) => {
+    if (i === 0) return a;
+    if (i === 1) return b;
+    return rotateHue(b, LANE_HUE_STEP_DEG * (i - 1));
+  });
 }

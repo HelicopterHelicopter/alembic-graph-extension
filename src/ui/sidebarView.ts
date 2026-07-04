@@ -23,23 +23,94 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
   /** The currently resolved (live) webview view, if any — see postMessage(). A WebviewView can be
    * torn down and re-resolved by VS Code at will, so this tracks whichever instance is current. */
   private view: vscode.WebviewView | undefined;
+  /** The state-change subscription posting into `this.view`, if any — always installed via
+   * `subscribeState` (the only writer), which is what keeps this in lockstep with `this.view`
+   * across both the initial `resolveWebviewView` bind and any later `rebind()` project switch. */
+  private stateSub: { dispose(): void } | undefined;
+
+  private service: MigrationService | null;
+  private panelManager: GraphPanelManager | null;
+  /** Shared ActionContext built by extension.ts (Task 16) — null in no-project mode, where the
+   * upgrade button's post degrades to a log line. Late-bound broadcast inside, same note as
+   * GraphPanelManager's constructor. */
+  private actionCtx: ActionContext | null;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly service: MigrationService | null,
-    private readonly panelManager: GraphPanelManager | null,
+    service: MigrationService | null,
+    panelManager: GraphPanelManager | null,
     private readonly log: (line: string) => void,
-    /** Shared ActionContext built by extension.ts (Task 16) — null in no-project mode, where the
-     * upgrade button's post degrades to a log line. Late-bound broadcast inside, same note as
-     * GraphPanelManager's constructor. */
-    private readonly actionCtx: ActionContext | null,
-  ) {}
+    actionCtx: ActionContext | null,
+  ) {
+    this.service = service;
+    this.panelManager = panelManager;
+    this.actionCtx = actionCtx;
+  }
 
   /** Posts `msg` to the currently resolved sidebar webview; a no-op when the view isn't resolved
    * (never opened, or currently torn down). The sidebar leg of `ActionContext.broadcast`
    * (src/ui/actions.ts) — mirrors GraphPanelManager.postMessage. */
   postMessage(msg: HostToWebviewMessage): void {
     void this.view?.webview.postMessage(msg);
+  }
+
+  /**
+   * (Re-)subscribes `view` to `service`'s state changes, disposing whatever the previous
+   * subscription was first. Shared by `resolveWebviewView` (first bind) and `rebind` (a later
+   * project switch) so "swap the live subscription" has exactly one implementation — the two
+   * callers differ only in whether they push an immediate snapshot afterward (resolveWebviewView
+   * defers that to the webview's own "ready" handshake; rebind's target view already completed
+   * that handshake long ago, so it pushes right away — see rebind's doc comment).
+   *
+   * Deliberately keeps no local capture of the subscription: `this.stateSub` is always the ONE
+   * subscription currently posting into `this.view`, kept true by every caller of this method
+   * (both go through it, never assign `this.stateSub` directly), which is what lets
+   * `onDidDispose` below dispose+clear it correctly with nothing fancier than `this.view ===
+   * webviewView` — see that comment for the cross-instance leak this replaced.
+   */
+  private subscribeState(view: vscode.WebviewView, service: MigrationService | null): void {
+    this.stateSub?.dispose();
+    this.stateSub = service?.onDidChangeState((state) => {
+      void view.webview.postMessage({ type: "state", state });
+    });
+  }
+
+  /**
+   * Task 21's `selectProject` in-place project switch: rebinds this SAME sidebar instance to a
+   * different (or absent) project's service/panelManager/actionCtx, without re-registering the
+   * webview view provider. Re-registering isn't an option — VS Code calls `resolveWebviewView`
+   * once per view lifetime, and there's no supported way to hand an already-resolved view off to a
+   * second provider registration — so this instance has to stay the single, stable owner of the
+   * `alembicGraph.sidebar` view for the life of the extension, and just swap what it's backed by.
+   *
+   * If the webview happens to not be resolved yet (never opened), there's nothing to push — the
+   * next `resolveWebviewView` call (or the `ready` handler within it) picks up these new refs
+   * naturally. If it IS resolved, tears down the old state subscription, wires a new one, and
+   * immediately re-pushes: the new service's current state if it has one yet, or `noProject` if
+   * switching to a project-less state. (A brand new project's service has no state until its first
+   * `refresh()` lands a moment later — that brief window is covered the same way the initial
+   * "Scanning migrations…" placeholder covers it on first load: no message posted yet.)
+   */
+  rebind(service: MigrationService | null, panelManager: GraphPanelManager | null, actionCtx: ActionContext | null): void {
+    this.service = service;
+    this.panelManager = panelManager;
+    this.actionCtx = actionCtx;
+
+    const view = this.view;
+    if (view === undefined) {
+      this.stateSub?.dispose();
+      this.stateSub = undefined;
+      return; // not currently resolved — nothing to push yet; the next resolve picks up these refs
+    }
+
+    this.subscribeState(view, service);
+
+    if (service) {
+      const state = service.getState();
+      if (state) void view.webview.postMessage({ type: "state", state });
+    } else {
+      void view.webview.postMessage({ type: "noProject" });
+    }
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -60,9 +131,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     // it's already live during the pre-state window between "ready" and the first scan landing —
     // the webview's neutral "Scanning migrations…" placeholder (renderScanning()) is what covers
     // that window, replaced the moment this fires.
-    const stateSub = this.service?.onDidChangeState((state) => {
-      void webviewView.webview.postMessage({ type: "state", state });
-    });
+    this.subscribeState(webviewView, this.service);
 
     // Belt-and-suspenders re-push for the case where the webview instance survives a hide (no
     // guarantee either way for WebviewView) and state changed while it was hidden.
@@ -74,12 +143,18 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.onDidDispose(() => {
       messageSub.dispose();
-      stateSub?.dispose();
       visibilitySub.dispose();
-      // Only clear if WE are still the current instance — a re-resolve may already have replaced
-      // `this.view` with a fresh one whose messages must keep flowing (same guard pattern as
-      // GraphPanelManager's onDidDispose).
-      if (this.view === webviewView) this.view = undefined;
+      // Only touch shared instance fields if WE are still the current view — a re-resolve may
+      // already have replaced `this.view` with a fresh one, whose (possibly since-`rebind()`-ed)
+      // subscription must keep flowing untouched. When we ARE still current, `this.stateSub` is
+      // guaranteed (by `subscribeState` being the only writer) to be exactly the subscription
+      // posting into US, whether it's the one installed right above or a later one a `rebind()`
+      // swapped in since — either way it's ours to dispose here, and nothing else's.
+      if (this.view === webviewView) {
+        this.stateSub?.dispose();
+        this.view = undefined;
+        this.stateSub = undefined;
+      }
     });
   }
 

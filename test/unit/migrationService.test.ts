@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { MigrationService, type MigrationServiceDeps } from "../../src/services/migrationService";
+import { MigrationService, laneColorsFor, type MigrationServiceDeps } from "../../src/services/migrationService";
 import { extractFunctionBody } from "../../src/core/parser";
 import type { UiPrefs } from "../../src/protocol/messages";
 
@@ -75,6 +75,18 @@ describe("MigrationService.refresh", () => {
     expect(state!.laneColors).toEqual(["#4aa3ff", "#c586c0"]);
     expect(state!.project).toEqual(DEFAULT_PROJECT);
     expect(state!.ui).toEqual(DEFAULT_UI);
+  });
+
+  it("1b. invalid laneColorA/laneColorB from getConfig fall back to hardcoded defaults in emitted state", async () => {
+    const deps = makeDeps({
+      getConfig: vi.fn(() => ({ ...DEFAULT_CONFIG, laneColorA: "javascript:alert(1)", laneColorB: "<script>" })),
+    });
+    const service = new MigrationService(deps);
+
+    await service.refresh();
+    const state = service.getState();
+
+    expect(state!.laneColors).toEqual(["#4aa3ff", "#c586c0"]);
   });
 
   it("2. skips an env.py-like file in the list without throwing", async () => {
@@ -203,6 +215,147 @@ describe("MigrationService.setExpandCollapsed", () => {
     const newState = listener.mock.calls[0][0];
     expect(newState.ui.expandCollapsed).toBe(true);
     expect(deps.setUiPrefs).toHaveBeenCalledWith(expect.objectContaining({ expandCollapsed: true }));
+  });
+});
+
+describe("MigrationService.applyConfigChange (Task 21 config live-reload)", () => {
+  const CURRENT_ID = "d4c7f5309b2e";
+
+  it("a. no-op before any refresh: no throw, no emit", () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+
+    service.applyConfigChange();
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(service.getState()).toBeNull();
+  });
+
+  it("b. re-derives laneColors/config.showSqlPreview from a fresh getConfig() read, WITHOUT re-reading files", async () => {
+    let config = { ...DEFAULT_CONFIG };
+    const deps = makeDeps({ getConfig: vi.fn(() => ({ ...config })) });
+    const service = new MigrationService(deps);
+    await service.refresh();
+    expect(deps.listVersionFiles).toHaveBeenCalledTimes(1);
+
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+
+    config = { ...config, laneColorA: "#ff8800", showSqlPreview: false };
+    service.applyConfigChange();
+
+    expect(deps.listVersionFiles).toHaveBeenCalledTimes(1); // unchanged: no re-read
+    expect(listener).toHaveBeenCalledTimes(1);
+    const newState = listener.mock.calls[0][0];
+    expect(newState.laneColors).toEqual(["#ff8800", "#c586c0"]);
+    expect(newState.config).toEqual({ showSqlPreview: false });
+    expect(service.getState()).toBe(newState);
+  });
+
+  it("c. does NOT reset already-known dbReachable/applied/current state (unlike a full refresh())", async () => {
+    const deps = makeDeps({
+      fetchCurrent: vi.fn(async () => ({ dbReachable: true, currentIds: [CURRENT_ID] })),
+    });
+    const service = new MigrationService(deps);
+    await service.refresh();
+    await flushMicrotasks();
+    expect(service.getState()!.dbReachable).toBe(true);
+
+    service.applyConfigChange();
+
+    const state = service.getState()!;
+    expect(state.dbReachable).toBe(true);
+    expect(state.currentIds).toEqual([CURRENT_ID]);
+    const node = state.layout.nodes.find((n) => n.id === CURRENT_ID);
+    expect(node).toMatchObject({ applied: true, isCurrent: true });
+  });
+
+  it("d. does NOT re-fire fetchCurrent or fetchAuthors (cheap: no CLI/git work for a config-only change)", async () => {
+    const fetchCurrent = vi.fn(async () => ({ dbReachable: true, currentIds: [] }));
+    const fetchAuthors = vi.fn(async () => new Map<string, string>());
+    const deps = makeDeps({ fetchCurrent, fetchAuthors });
+    const service = new MigrationService(deps);
+    await service.refresh();
+    await flushMicrotasks();
+    expect(fetchCurrent).toHaveBeenCalledTimes(1);
+    expect(fetchAuthors).toHaveBeenCalledTimes(1);
+
+    service.applyConfigChange();
+    await flushMicrotasks();
+
+    expect(fetchCurrent).toHaveBeenCalledTimes(1); // still just the one from refresh()
+    expect(fetchAuthors).toHaveBeenCalledTimes(1);
+  });
+
+  it("e. preserves already-known authors across a config change", async () => {
+    const ROOT_FILE_PATH = path.join(BROKEN_VERSIONS_DIR, "8f2a1c9d4e07_create_products_table.py");
+    const deps = makeDeps({
+      fetchAuthors: vi.fn(async () => new Map([[ROOT_FILE_PATH, "Ada Lovelace"]])),
+    });
+    const service = new MigrationService(deps);
+    await service.refresh();
+    await flushMicrotasks();
+    expect(service.getState()!.layout.nodes.find((n) => n.id === "8f2a1c9d4e07")!.author).toBe("Ada Lovelace");
+
+    service.applyConfigChange();
+
+    expect(service.getState()!.layout.nodes.find((n) => n.id === "8f2a1c9d4e07")!.author).toBe("Ada Lovelace");
+  });
+
+  it("f. a changed collapseThreshold re-collapses the layout from the cached graph", async () => {
+    let config = { ...DEFAULT_CONFIG };
+    const deps = makeDeps({ getConfig: vi.fn(() => ({ ...config })) });
+    const service = new MigrationService(deps);
+    await service.refresh();
+    const before = service.getState()!.layout.collapsed;
+    expect(before).toBeNull(); // threshold 20, fixture too small to collapse
+
+    config = { ...config, collapseThreshold: 3 };
+    service.applyConfigChange();
+
+    const after = service.getState()!.layout.collapsed;
+    expect(after).not.toBeNull(); // a small threshold now collapses a run
+  });
+});
+
+describe("MigrationService.dispose (Task 21: mid-flight disposal)", () => {
+  it("a scan already in flight when dispose() is called never builds/emits/logs afterward", async () => {
+    const pending = deferred<{ path: string; content: string }[]>();
+    const deps = makeDeps({ listVersionFiles: vi.fn(() => pending.promise) });
+    const service = new MigrationService(deps);
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+
+    const refreshPromise = service.refresh();
+    service.dispose();
+
+    pending.resolve(loadBrokenFiles());
+    await refreshPromise;
+    await flushMicrotasks();
+
+    expect(listener).not.toHaveBeenCalled(); // dispose() cleared listeners anyway, but also...
+    expect(service.getState()).toBeNull(); // ...the scan itself bailed and never built/set state
+    expect(deps.log).not.toHaveBeenCalledWith(expect.stringContaining("scan:"));
+  });
+
+  it("does not fire fetchCurrent/fetchAuthors for a scan that resolves after dispose()", async () => {
+    const pending = deferred<{ path: string; content: string }[]>();
+    const fetchCurrent = vi.fn(async () => ({ dbReachable: true, currentIds: [] }));
+    const fetchAuthors = vi.fn(async () => new Map<string, string>());
+    const deps = makeDeps({ listVersionFiles: vi.fn(() => pending.promise), fetchCurrent, fetchAuthors });
+    const service = new MigrationService(deps);
+
+    const refreshPromise = service.refresh();
+    service.dispose();
+
+    pending.resolve(loadBrokenFiles());
+    await refreshPromise;
+    await flushMicrotasks();
+
+    expect(fetchCurrent).not.toHaveBeenCalled();
+    expect(fetchAuthors).not.toHaveBeenCalled();
   });
 });
 
@@ -518,6 +671,189 @@ describe("MigrationService DB-state enrichment (fetchCurrent)", () => {
 
     const node = service.getState()!.layout.nodes.find((n) => n.id === CURRENT_ID);
     expect(node).toMatchObject({ applied: true, isCurrent: true });
+  });
+});
+
+type FetchAuthorsResult = Map<string, string>;
+
+describe("MigrationService git-author enrichment (fetchAuthors)", () => {
+  const ROOT_ID = "8f2a1c9d4e07";
+  const ROOT_FILE_PATH = path.join(BROKEN_VERSIONS_DIR, "8f2a1c9d4e07_create_products_table.py");
+
+  it("10. a resolved fetchAuthors triggers a SECOND emit with author patched onto the matching node only", async () => {
+    const fetch = deferred<FetchAuthorsResult>();
+    const fetchAuthors = vi.fn((): Promise<FetchAuthorsResult> => fetch.promise);
+    const deps = makeDeps({ fetchAuthors });
+    const service = new MigrationService(deps);
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+
+    await service.refresh();
+
+    // Phase 1: static state, author unknown — NOT blocked on the git batch (still unresolved here).
+    expect(listener).toHaveBeenCalledTimes(1);
+    const phase1Root = listener.mock.calls[0][0].layout.nodes.find((n: { id: string }) => n.id === ROOT_ID);
+    expect(phase1Root.author).toBeNull();
+    expect(fetchAuthors).toHaveBeenCalledWith(expect.arrayContaining([ROOT_FILE_PATH]));
+
+    fetch.resolve(new Map([[ROOT_FILE_PATH, "Ada Lovelace"]]));
+    await flushMicrotasks();
+
+    expect(listener).toHaveBeenCalledTimes(2);
+    const enriched = listener.mock.calls[1][0];
+    const enrichedRoot = enriched.layout.nodes.find((n: { id: string }) => n.id === ROOT_ID);
+    expect(enrichedRoot.author).toBe("Ada Lovelace");
+
+    // Every other revision node (no entry in the resolved map) stays null, not overwritten.
+    const others = enriched.layout.nodes.filter((n: { id: string; kind: string }) => n.kind === "revision" && n.id !== ROOT_ID);
+    expect(others.length).toBeGreaterThan(0);
+    for (const n of others) expect(n.author).toBeNull();
+    expect(service.getState()).toBe(enriched);
+  });
+
+  it("10b. getDetail reflects the enriched author automatically", async () => {
+    const fetch = deferred<FetchAuthorsResult>();
+    const deps = makeDeps({ fetchAuthors: vi.fn((): Promise<FetchAuthorsResult> => fetch.promise) });
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    expect(service.getDetail(ROOT_ID)!.author).toBeNull();
+
+    fetch.resolve(new Map([[ROOT_FILE_PATH, "Ada Lovelace"]]));
+    await flushMicrotasks();
+
+    expect(service.getDetail(ROOT_ID)!.author).toBe("Ada Lovelace");
+  });
+
+  it("11. fetchAuthors rejecting -> exactly ONE emit total, error logged, nothing thrown", async () => {
+    const deps = makeDeps({
+      fetchAuthors: vi.fn(async (): Promise<FetchAuthorsResult> => {
+        throw new Error("git batch exploded unexpectedly");
+      }),
+    });
+    const service = new MigrationService(deps);
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+
+    await service.refresh();
+    await flushMicrotasks();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("git batch exploded unexpectedly"));
+  });
+
+  it("12. generation guard: a slow author batch from refresh#1 resolving after refresh#2 started is DISCARDED", async () => {
+    const fetch1 = deferred<FetchAuthorsResult>();
+    const fetch2 = deferred<FetchAuthorsResult>();
+    const fetches = [fetch1.promise, fetch2.promise];
+    const fetchAuthors = vi.fn((): Promise<FetchAuthorsResult> => fetches.shift()!);
+
+    const deps = makeDeps({ fetchAuthors });
+    const service = new MigrationService(deps);
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+
+    await service.refresh(); // scan #1; author fetch #1 in flight
+    await service.refresh(); // scan #2; author fetch #2 in flight
+    expect(fetchAuthors).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledTimes(2); // two phase-1 emits
+
+    // The STALE response from scan #1 arrives only now, after scan #2 has started -> discarded.
+    fetch1.resolve(new Map([[ROOT_FILE_PATH, "Stale Author"]]));
+    await flushMicrotasks();
+    expect(listener).toHaveBeenCalledTimes(2); // no third emit with stale data
+    expect(service.getDetail(ROOT_ID)!.author).toBeNull();
+
+    // Scan #2's own response lands normally.
+    fetch2.resolve(new Map([[ROOT_FILE_PATH, "Fresh Author"]]));
+    await flushMicrotasks();
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(service.getDetail(ROOT_ID)!.author).toBe("Fresh Author");
+  });
+
+  it("13. an author batch resolved BEFORE a later dbReachable enrichment survives that enrichment's re-layout", async () => {
+    const authorFetch = deferred<FetchAuthorsResult>();
+    const currentFetch = deferred<{ dbReachable: boolean; currentIds: string[] }>();
+    const deps = makeDeps({
+      fetchAuthors: vi.fn((): Promise<FetchAuthorsResult> => authorFetch.promise),
+      fetchCurrent: vi.fn(() => currentFetch.promise),
+    });
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    authorFetch.resolve(new Map([[ROOT_FILE_PATH, "Ada Lovelace"]]));
+    await flushMicrotasks();
+    expect(service.getState()!.layout.nodes.find((n) => n.id === ROOT_ID)!.author).toBe("Ada Lovelace");
+
+    currentFetch.resolve({ dbReachable: true, currentIds: [ROOT_ID] });
+    await flushMicrotasks();
+
+    const node = service.getState()!.layout.nodes.find((n) => n.id === ROOT_ID)!;
+    expect(node.applied).toBe(true); // the dbReachable enrichment's own re-layout landed...
+    expect(node.author).toBe("Ada Lovelace"); // ...without wiping the author already known
+  });
+
+  it("13b. a dbReachable enrichment resolved BEFORE the author batch is preserved once authors land", async () => {
+    const authorFetch = deferred<FetchAuthorsResult>();
+    const currentFetch = deferred<{ dbReachable: boolean; currentIds: string[] }>();
+    const deps = makeDeps({
+      fetchAuthors: vi.fn((): Promise<FetchAuthorsResult> => authorFetch.promise),
+      fetchCurrent: vi.fn(() => currentFetch.promise),
+    });
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    currentFetch.resolve({ dbReachable: true, currentIds: [ROOT_ID] });
+    await flushMicrotasks();
+    expect(service.getState()!.layout.nodes.find((n) => n.id === ROOT_ID)!.applied).toBe(true);
+
+    authorFetch.resolve(new Map([[ROOT_FILE_PATH, "Ada Lovelace"]]));
+    await flushMicrotasks();
+
+    const node = service.getState()!.layout.nodes.find((n) => n.id === ROOT_ID)!;
+    expect(node.author).toBe("Ada Lovelace");
+    expect(node.applied).toBe(true); // still there — the author patch didn't touch it
+  });
+
+  it("14. setExpandCollapsed after author enrichment keeps the known author (no revert to null)", async () => {
+    const deps = makeDeps({
+      fetchAuthors: vi.fn(async (): Promise<FetchAuthorsResult> => new Map([[ROOT_FILE_PATH, "Ada Lovelace"]])),
+    });
+    const service = new MigrationService(deps);
+    await service.refresh();
+    await flushMicrotasks();
+    expect(service.getState()!.layout.nodes.find((n) => n.id === ROOT_ID)!.author).toBe("Ada Lovelace");
+
+    await service.setExpandCollapsed(true); // re-lays out from the cached graph
+
+    const node = service.getState()!.layout.nodes.find((n) => n.id === ROOT_ID);
+    expect(node!.author).toBe("Ada Lovelace");
+  });
+});
+
+describe("laneColorsFor", () => {
+  it("lane 0/1 use A/B verbatim; lanes >= 2 hue-rotate B by +40deg per lane", () => {
+    expect(laneColorsFor(1, "#4aa3ff", "#c586c0")).toEqual(["#4aa3ff"]);
+    expect(laneColorsFor(2, "#4aa3ff", "#c586c0")).toEqual(["#4aa3ff", "#c586c0"]);
+    expect(laneColorsFor(4, "#4aa3ff", "#c586c0")).toEqual(["#4aa3ff", "#c586c0", "#c58696", "#c5a086"]);
+  });
+
+  it("laneCount 0 still yields a length-1 array (lane 0's color only)", () => {
+    expect(laneColorsFor(0, "#4aa3ff", "#c586c0")).toEqual(["#4aa3ff"]);
+  });
+
+  it("invalid laneColorA falls back to the hardcoded default without disturbing laneColorB's lanes", () => {
+    expect(laneColorsFor(2, "javascript:alert(1)", "#c586c0")).toEqual(["#4aa3ff", "#c586c0"]);
+  });
+
+  it("invalid laneColorB falls back to the hardcoded default for lane 1 AND every rotated lane", () => {
+    expect(laneColorsFor(3, "#4aa3ff", "not-a-color")).toEqual(["#4aa3ff", "#c586c0", "#c58696"]);
+  });
+
+  it("both invalid -> both hardcoded defaults, never NaN/malformed", () => {
+    const colors = laneColorsFor(3, "", "<script>");
+    expect(colors).toEqual(["#4aa3ff", "#c586c0", "#c58696"]);
+    for (const c of colors) expect(c).toMatch(/^#[0-9a-f]{6}$/i);
   });
 });
 

@@ -783,3 +783,113 @@ real save dialog and a real file on disk.
     no errors/CSP violations while repeating steps 2–4.
 12. Repeat steps 1–4 with the **Run Extension (healthy fixture)** launch config: exports the same
     way with no ghost/broken card (2 heads, no BROKEN badge, no dashed red anywhere).
+
+## Task 21: project switching, git author enrichment, lane color scale, config reload, packaging
+
+`src/core/color.ts` (hue-rotation math + hex validation) and `src/services/gitAuthor.ts` (batch git
+author lookup: cache, concurrency cap, git-missing degradation) are both fully vitest-covered
+(`test/unit/color.test.ts`, `test/unit/gitAuthor.test.ts`, including one real-`git log` test against
+a fixture file checked into this repo). `laneColorsFor`'s hue-rotation and hex-fallback behavior,
+and the author-enrichment generation guard / cross-enrichment survival, are covered in
+`test/unit/migrationService.test.ts`. The steps below are the F5-only checks — real git authors,
+live settings changes, and the multi-project switch — that need the real Extension Development
+Host.
+
+### Git author enrichment
+
+1. Press F5, select **Run Extension (broken fixture)**, then **Alembic Graph: Open Migration
+   Graph**.
+2. Immediately after the graph appears, every card's meta row shows only a date (no author yet —
+   the git batch is still running). Within about a second, re-render: every card now shows
+   `<author name>   ·   <date>` — the author is whoever last committed that `versions/*.py` file in
+   this repo (almost certainly you, or whoever authored Task 1's fixtures). Confirm in the Output
+   channel (**Alembic Graph**) there's no error line about author lookup.
+3. Click a card and open the detail panel: the **author** row shows the same name (not `—`).
+4. Repeat with **Run Extension (healthy fixture)**: same behavior, different fixture files.
+
+### Lane color scale + config live-reload
+
+5. With the graph panel open (either fixture), first run **Alembic Graph: Refresh** and confirm the
+   author/date row on a card or two, and (if your environment has a real DB configured — otherwise
+   skip this half) the applied/current dot. Open **Settings** (`Cmd+,` / `Ctrl+,`) and search
+   `alembicGraph`. Change **Lane Color A** to a different hex value (e.g. `#ff8800`) and tab away to
+   commit it. Without reloading the window or re-running any command, the graph's lane-0 (trunk)
+   edges and card stripes recolor to the new value within a moment — **and** the authors/dates and
+   applied/current dots you just confirmed do NOT blink to blank/unknown and back: a lane-color
+   change is a display-only re-emit from the already-known graph, never a re-scan or a fresh
+   `alembic`/git round trip (confirm via the Output channel: no new `scan:` line, no `$ ... current`
+   or `git log` lines appear after the color-change commit).
+6. Change **Lane Color B** similarly (e.g. `#22cc88`): every branch-lane (lane 1) edge/stripe
+   recolors. If the graph has 3+ lanes (open the healthy fixture's `env.py`-adjacent branch, or use
+   a workspace with more concurrent branches), lanes 2+ recolor too, each a visibly different hue
+   rotated off the new Lane Color B rather than all collapsing onto one flat color.
+7. Set **Lane Color A** (or B) to something invalid directly via `settings.json` (e.g.
+   `"alembicGraph.laneColorA": "javascript:alert(1)"` or `"notacolor"`): the graph does NOT break,
+   crash, or render `NaN`/blank colors — lane 0 silently falls back to the default `#4aa3ff` (or
+   lane 1 to `#c586c0`), and the Output channel logs one line naming the invalid setting (only
+   once, not on every keystroke/refresh). Revert the setting afterward.
+8. Toggle **Show Sql Preview** off, then on again: the detail panel's Migration section
+   disappears/reappears accordingly, live, no reload — same "config change → cheap re-emit" path as
+   the lane colors.
+9. Change **Collapse Threshold** to a small number (e.g. `3`): the graph re-collapses a shorter
+   linear run into a placeholder card immediately, no reload.
+10. Change **Alembic Command** to some override string: no visible graph change (expected — nothing
+    about the static graph depends on it), but the Output channel logs a line acknowledging the
+    change. Revert it afterward, then run **Alembic Graph: Refresh** and confirm the CLI-backed
+    "current" badge behavior is unaffected (still works, or still gracefully degrades, per whichever
+    fixture you're on).
+
+### Multi-project switching (`alembicGraph.selectProject`)
+
+11. Press F5, select **Run Extension (multi-project workspace)** (opens this whole repo as the
+    workspace folder, so discovery finds BOTH `fixtures/broken-project/alembic.ini` and
+    `fixtures/healthy-project/alembic.ini`). Check the Output channel: `using project: ... ` names
+    whichever of the two was auto-picked (no prompt on first activation with a fresh workspace —
+    the very first multi-project resolution here does show a picker once, since neither has been
+    persisted yet; pick either one).
+12. Run **Alembic Graph: Select Alembic Project…** from the Command Palette. A QuickPick appears
+    listing BOTH projects, the currently-active one prefixed with a check icon. Pick the OTHER
+    project.
+13. Confirm the switch actually happened: the Output channel logs a new `using project: ...` line
+    for the newly-picked one, followed by a fresh `scan: ...` line; the status bar's head/current/
+    problem counts update to match the new project (11/2/0 for the healthy fixture vs. 12/3/1 for
+    the broken one); the sidebar (if visible) refreshes to the new project's heads within a moment.
+    If the graph panel was open, it closes (switching projects tears down and rebuilds the whole
+    pipeline, including the panel) — reopen it via **Alembic Graph: Open Migration Graph** and
+    confirm it now shows the newly-selected project's graph, not the old one.
+14. Run **Select Alembic Project…** again and re-pick the SAME (already-active) project: no visible
+    change, no new `scan:` line, no panel-closing disruption — a re-pick of the current project is
+    a deliberate no-op.
+15. Run **Select Alembic Project…**, then cancel the QuickPick (Escape): nothing happens — no log
+    line, no state change.
+16. Close the Extension Development Host, press F5 again with the SAME **multi-project workspace**
+    config: the project you picked in step 12/13 is restored automatically (no picker this time) —
+    the choice persisted across the reload via `workspaceState`.
+17. Repeat steps 1–4 (git authors) and 5–9 (lane colors / config reload) against whichever project
+    is active in this multi-project workspace, confirming nothing about the earlier single-fixture
+    behavior regressed when reached via `selectProject` instead of the initial auto-pick.
+
+### Packaging (final acceptance — human executes)
+
+18. From a clean checkout, run:
+    ```
+    npm run check && npm run build && npm run test:unit
+    npx @vscode/vsce package --no-dependencies --no-rewrite-relative-links --allow-missing-repository
+    ```
+    (the extra two flags are required only because this project deliberately ships without a
+    `repository` field in `package.json` — there is no public repo to point at yet — and the
+    README's screenshot is a local relative path, which is fine for local install: VS Code's own
+    Extension Details view resolves it against the installed extension folder, not over HTTP).
+    Expect a `alembic-graph-0.0.1.vsix` file, no errors.
+19. `npx @vscode/vsce ls --no-dependencies` should list exactly: `package.json`, `README.md`,
+    `LICENSE`, `media/screenshot.png`, `media/alembic.svg`, `dist/extension.js`,
+    `dist/webview/graph.js`, `dist/webview/graph.css`, `dist/webview/sidebar.js`,
+    `dist/webview/sidebar.css` — no `node_modules`, no `src`/`test`/`fixtures`/`.venv`/`harness`,
+    no `.map` files.
+20. Install it into a real (non-Development-Host) VS Code: `code --install-extension
+    alembic-graph-0.0.1.vsix`. Open any folder containing an `alembic.ini` (or this repo's
+    `fixtures/broken-project`), confirm the extension activates, the sidebar/graph/status bar all
+    work exactly as in the Development Host, and the installed extension's **Details** page (the
+    Extensions view → Alembic Graph → the tab next to Feature Contributions) renders the README
+    with the screenshot visible (not a broken-image icon). Uninstall afterward if this was just a
+    smoke test (`code --uninstall-extension jheelr.alembic-graph`).

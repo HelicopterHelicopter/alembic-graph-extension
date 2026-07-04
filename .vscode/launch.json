@@ -22,6 +22,18 @@
       ],
       "outFiles": ["${workspaceFolder}/dist/**/*.js"],
       "preLaunchTask": "npm: build"
+    },
+    {
+      // Task 21: opens the WHOLE repo as the workspace folder, so discovery finds BOTH
+      // fixtures/broken-project/alembic.ini and fixtures/healthy-project/alembic.ini — the only way
+      // to manually exercise the multi-project `alembicGraph.selectProject` QuickPick, since each
+      // single-fixture config above only ever has one alembic.ini in scope.
+      "name": "Run Extension (multi-project workspace)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}", "${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "preLaunchTask": "npm: build"
     }
   ]
 }

@@ -94,3 +94,39 @@ export async function pickProject(context: vscode.ExtensionContext): Promise<Ale
   await context.workspaceState.update(SELECTED_INI_KEY, picked.project.iniPath);
   return picked.project;
 }
+
+/**
+ * The `alembicGraph.selectProject` command's body (Task 21): a user-invoked re-pick across EVERY
+ * discovered project, always shown (even with only 0 or 1 project found — unlike `pickProject`,
+ * which auto-resolves those cases silently, this is an explicit ask to switch, so the user always
+ * sees what's out there). Re-runs discovery fresh, in case `alembic.ini` files were added/removed
+ * since activation or the last pick.
+ *
+ * Returns the newly selected project, or `null` if nothing should change: zero projects found (an
+ * info message is shown here so callers don't need their own), the picker was cancelled, or the
+ * user re-picked the project that was already current. Persists the choice the same way
+ * `pickProject` does, via the same `SELECTED_INI_KEY`, so a later window reload still remembers it.
+ */
+export async function selectProject(
+  context: vscode.ExtensionContext,
+  currentIniPath: string | null,
+): Promise<AlembicProject | null> {
+  const projects = await discoverProjects();
+  if (projects.length === 0) {
+    void vscode.window.showInformationMessage("Alembic Graph: no Alembic projects found in this workspace.");
+    return null;
+  }
+
+  const items = projects.map((p) => ({
+    label: p.iniPath === currentIniPath ? `$(check) ${p.label}` : p.label,
+    description: p.iniPath,
+    project: p,
+  }));
+
+  const picked = await vscode.window.showQuickPick(items, { placeHolder: "Select an Alembic project" });
+  if (picked === undefined) return null; // cancelled
+  if (picked.project.iniPath === currentIniPath) return null; // re-picked the already-active project
+
+  await context.workspaceState.update(SELECTED_INI_KEY, picked.project.iniPath);
+  return picked.project;
+}

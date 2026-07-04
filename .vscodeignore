@@ -1,13 +1,17 @@
 .vscode/**
 .superpowers/**
+.venv/**
 src/**
 test/**
 fixtures/**
 design/**
 docs/**
+harness/**
+scripts/**
 node_modules/**
 esbuild.mjs
 tsconfig.json
 vitest.config.ts
+package-lock.json
 **/*.map
 .gitignore
