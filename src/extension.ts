@@ -11,6 +11,7 @@ import { SidebarViewProvider } from "./ui/sidebarView";
 import { createCodeLensProvider } from "./ui/codeLens";
 import { mergeHeadsAction, upgradeAction, type ActionContext } from "./ui/actions";
 import { createDiagnostics } from "./services/diagnostics";
+import { shouldDeliverStale } from "./core/broadcastGate";
 import type { HostToWebviewMessage, UiPrefs } from "./protocol/messages";
 
 const SIDEBAR_VIEW_ID = "alembicGraph.sidebar";
@@ -54,7 +55,12 @@ let sidebarProvider: SidebarViewProvider;
  * running "Select Alembic Project…") would, on completion, post its toast/busy message into
  * WHATEVER project is active by the time the CLI call resolves — `currentPipeline` having already
  * moved on by then — misattributing a stale result into the new project's panel/sidebar. Gating
- * broadcast on this counter makes a superseded pipeline's messages silent no-ops instead.
+ * broadcast on this counter makes a superseded pipeline's messages silent no-ops instead — with
+ * one deliberate exception: a terminal `busy: {active:false}` is NEVER gated, even from a stale
+ * epoch. See `shouldDeliverStale` (core/broadcastGate.ts) for why: `busy:true` posts synchronously
+ * before the CLI await that can straddle a switch, so gating its matching `busy:false` the same
+ * way would leave the sidebar's (persistent, never-torn-down) upgrade button wedged "working…" for
+ * the rest of the session with no self-heal.
  */
 let broadcastEpoch = 0;
 
@@ -259,11 +265,14 @@ function activateForProject(
     // instant a newer pipeline has taken over (`epoch !== broadcastEpoch`), which is what stops a
     // still-in-flight action from a since-switched-away-from project from leaking its toast/busy
     // message into whatever project is active by the time it resolves (see `broadcastEpoch`'s doc
-    // comment). `panelManagerRef` is assigned right after construction below — read at CALL time
-    // (never before this function returns), so building it before `panelManager` exists is fine.
+    // comment) — EXCEPT a terminal `busy:false`, which `shouldDeliverStale` always lets through
+    // even from a stale epoch (see that function's doc comment for why dropping it is the actual
+    // bug this guards against). `panelManagerRef` is assigned right after construction below — read
+    // at CALL time (never before this function returns), so building it before `panelManager`
+    // exists is fine.
     let panelManagerRef: GraphPanelManager | undefined;
     const broadcast = (msg: HostToWebviewMessage): void => {
-      if (epoch !== broadcastEpoch) return; // stale: a newer project is active now
+      if (epoch !== broadcastEpoch && !shouldDeliverStale(msg)) return; // stale: a newer project is active now
       panelManagerRef?.postMessage(msg);
       sidebarProvider.postMessage(msg);
     };

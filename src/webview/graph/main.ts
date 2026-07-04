@@ -478,6 +478,16 @@ onMessage((msg) => {
       renderStore();
       break;
     }
+    case "busyReset":
+      // Belt-and-braces (project-switch review fix), primarily for the sidebar's persistent
+      // busyOps Set — see protocol/messages.ts's doc comment. This webview's own panel is always
+      // disposed/recreated on a project switch (GraphPanelManager's dispose() closes the actual
+      // WebviewPanel), so `store.busyOps` starts fresh every time regardless; handled here anyway
+      // for symmetry/defense-in-depth in case this instance is ever still alive when it arrives.
+      store.busyOps.clear();
+      clearDropGuard();
+      renderStore();
+      break;
     default:
       break;
   }

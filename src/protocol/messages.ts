@@ -68,4 +68,12 @@ export type HostToWebviewMessage =
   // alembic.ini anywhere in the workspace — see src/ui/sidebarView.ts and
   // src/webview/sidebar/main.ts for why this exists as its own message instead of just never
   // sending "state".
-  | { type: "noProject" };
+  | { type: "noProject" }
+  // Belt-and-braces reset sent on every project switch (SidebarViewProvider.rebind, extension.ts):
+  // unconditionally wipe whichever busy operations this webview thinks are in flight and re-render,
+  // regardless of whether every matching "busy" active:false ever arrived. Closes the same gap as
+  // core/broadcastGate.ts's shouldDeliverStale from a second, independent angle — see that file's
+  // doc comment for the race this guards against. Handled identically by both webviews (sidebar's
+  // busyOps is the persistent one that actually needs it; the graph webview's is included purely
+  // for symmetry/defense-in-depth, since its panel is disposed/recreated on every switch anyway).
+  | { type: "busyReset" };

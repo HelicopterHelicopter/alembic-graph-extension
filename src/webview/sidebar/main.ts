@@ -61,6 +61,16 @@ onMessage((msg) => {
       // upgrade button to disable.
       renderCurrent();
       break;
+    case "busyReset":
+      // Belt-and-braces (project-switch review fix): unconditionally clears every tracked
+      // operation, regardless of whether every matching "busy" active:false ever arrived — see
+      // core/broadcastGate.ts's shouldDeliverStale and SidebarViewProvider.rebind's doc comments
+      // for the race this closes. This webview instance persists across a project switch (unlike
+      // the graph panel's, which is disposed/recreated), so without this a stuck operation name
+      // would otherwise wedge the footer button "working…" for the rest of the session.
+      busyOps.clear();
+      renderCurrent();
+      break;
     // "detail" / "selectNode" / "toast" are graph-webview-only; the sidebar has no UI that
     // reacts to them.
     default:

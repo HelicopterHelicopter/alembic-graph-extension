@@ -90,6 +90,13 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
    * switching to a project-less state. (A brand new project's service has no state until its first
    * `refresh()` lands a moment later — that brief window is covered the same way the initial
    * "Scanning migrations…" placeholder covers it on first load: no message posted yet.)
+   *
+   * Also unconditionally posts `busyReset` (belt-and-braces, alongside `shouldDeliverStale` in
+   * core/broadcastGate.ts): this sidebar instance is never recreated across a switch, so whatever
+   * `busyOps` its webview thinks are in flight would otherwise survive indefinitely if some future
+   * change reintroduces a way for a terminal `busy:false` to get dropped. Sent from here rather
+   * than each of `switchProject`'s three call sites (the null-project branch, the success branch,
+   * and the catch branch) so there's exactly one place that can forget it.
    */
   rebind(service: MigrationService | null, panelManager: GraphPanelManager | null, actionCtx: ActionContext | null): void {
     this.service = service;
@@ -104,6 +111,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     }
 
     this.subscribeState(view, service);
+    void view.webview.postMessage({ type: "busyReset" });
 
     if (service) {
       const state = service.getState();
