@@ -309,19 +309,25 @@ const hoverCallbacks: HoverCallbacks = {
 
 /** keyboardNav.ts's handlers (Task 19). `onNavigate` is the one case that can't just be a typed
  * post (see keyboardNav.ts's header comment): it needs to select AND, once the resulting
- * synchronous re-render has replaced the DOM, focus + scroll the FRESH card into view. */
+ * synchronous re-render has replaced the DOM, focus + scroll the FRESH card into view.
+ * Final-review fix: all handlers early-return if dragActive — navigating/toggling/escaping
+ * mid-drag would call renderStore(), rebuilding the canvas and orphaning the pointer-captured card. */
 const keyboardHandlers: KeyboardNavHandlers = {
   onNavigate(id) {
+    if (dragActive) return;
     navigateToNode(id);
   },
   onOpenFile(id) {
+    if (dragActive) return;
     handlers.onOpenFile(id);
   },
   onToggleDetail() {
+    if (dragActive) return;
     store.detailOpen = !store.detailOpen;
     renderStore();
   },
   onEscape() {
+    if (dragActive) return;
     if (store.detailOpen) {
       store.detailOpen = false;
       renderStore();
