@@ -24,7 +24,7 @@ graph.
 - **Export the graph as a standalone SVG** — opens correctly in any browser, no VS Code required.
 - **Sidebar view** (activity bar) with a compact heads/current/problems summary and a one-click
   upgrade-to-heads button.
-- **Status bar** items for head count, current revision, and problem count, each opening the graph.
+- **Status bar** items for head count, current revision, and revision count, each opening the graph.
 - **Git author + date** shown on every card and in the detail panel, resolved from `git log` in the
   background (never blocks the graph).
 - **Multiple Alembic projects**: if your workspace has more than one `alembic.ini`, use **Alembic

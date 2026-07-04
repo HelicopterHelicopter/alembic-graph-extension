@@ -16,13 +16,18 @@
  * in place — see its doc comment), so its `busyOps` Set (webview/sidebar/main.ts) just stays stuck
  * with that operation's name in it forever, no self-heal short of a full window reload.
  *
- * Delivering a stale `busy:false` anyway is safe in a way delivering a stale `busy:true` or
- * `toast` is not: clearing a busy flag can only ever over-eagerly RE-ENABLE something, and that
- * self-corrects on its own even in the unlucky case where the new (current-epoch) pipeline has an
- * identically-named operation genuinely in flight — its own `busy:true`, already posted or about
- * to be, simply re-adds the flag moments later. Over-eagerly showing a toast or greying out a
- * button for a project the user already switched away from has no such self-correction, so those
- * stay gated.
+ * Delivering a stale `busy:false` anyway is NOT a full fix — it trades the "wedged forever" bug
+ * for a smaller, self-limiting one. If the new (current-epoch) pipeline happens to have an
+ * identically-named operation genuinely in flight when the stale `busy:false` lands, it will
+ * transiently clear that operation's flag and re-enable the UI (button/drag-gate) for a moment
+ * even though the NEW project's own action is still running — a real, if narrow, over-enable
+ * window. It self-corrects rather than compounds: the new action's own terminal `busy:false`
+ * hasn't been double-counted away (busyOps is a Set, not a counter), so its own `busy:true`
+ * already re-added the flag, and its own eventual `busy:false` still clears it correctly once it
+ * actually finishes. Only that direction (over-eagerly RE-ENABLING) is judged tolerable; a stale
+ * `busy:true` or `toast` has no equivalent self-correction — over-eagerly showing a toast or
+ * greying out a button for a project the user already switched away from would just sit there, so
+ * those stay gated.
  */
 import type { HostToWebviewMessage } from "../protocol/messages";
 

@@ -52,7 +52,14 @@ function buildBody(detail: RevisionDetail, handlers: DetailHandlers): HTMLElemen
 
   body.append(buildBadgeRow(detail), hash, message, buildKeyValueRows(detail, handlers));
 
-  if (detail.upgradeBody !== null && detail.downgradeBody !== null) {
+  // Bug fix (final review): this used to require BOTH bodies non-null before showing the
+  // "Migration" section at all, so a revision missing just one of upgrade()/downgrade() (e.g. a
+  // downgrade()-less migration, or extractFunctionBody failing to find only one of the two) lost
+  // the section entirely — including the def block for the function it DOES have. The section
+  // (and each def block within it) now renders independently per body: shown if EITHER is
+  // non-null, with only the present one(s) rendered. Both null (config's showSqlPreview is off, or
+  // the source file couldn't be read) still hides the whole section, same as before.
+  if (detail.upgradeBody !== null || detail.downgradeBody !== null) {
     body.append(buildMigrationSection(detail.upgradeBody, detail.downgradeBody));
   }
 
@@ -167,7 +174,10 @@ function buildFileRow(detail: RevisionDetail, handlers: DetailHandlers): HTMLEle
   return row;
 }
 
-function buildMigrationSection(upgradeBody: string, downgradeBody: string): DocumentFragment {
+/** Renders whichever of `upgradeBody`/`downgradeBody` is non-null (the section itself is only
+ * ever called when at least one is — see `buildBody` above); a spacer only separates the two def
+ * blocks when both are present, so a lone body doesn't render with a dangling blank line after it. */
+function buildMigrationSection(upgradeBody: string | null, downgradeBody: string | null): DocumentFragment {
   const frag = document.createDocumentFragment();
 
   const label = document.createElement("div");
@@ -176,13 +186,15 @@ function buildMigrationSection(upgradeBody: string, downgradeBody: string): Docu
 
   const code = document.createElement("div");
   code.className = "alx-detail-code";
-  code.append(
-    buildDefLine("upgrade"),
-    ...buildCodeLines(upgradeBody),
-    buildSpacer(),
-    buildDefLine("downgrade"),
-    ...buildCodeLines(downgradeBody),
-  );
+  if (upgradeBody !== null) {
+    code.append(buildDefLine("upgrade"), ...buildCodeLines(upgradeBody));
+  }
+  if (upgradeBody !== null && downgradeBody !== null) {
+    code.append(buildSpacer());
+  }
+  if (downgradeBody !== null) {
+    code.append(buildDefLine("downgrade"), ...buildCodeLines(downgradeBody));
+  }
 
   frag.append(label, code);
   return frag;

@@ -82,12 +82,32 @@ const store: {
  * (drop, revert, or cancel). While true, incoming "state" messages are stashed in `pendingState`
  * instead of triggering a re-render — render() rebuilds the canvas wholesale, which would orphan
  * the card currently holding pointer capture mid-drag. See `dndCallbacks.onDragActiveChange`.
+ *
+ * Every OTHER message handler that would otherwise call `renderStore()` directly (busy, detail,
+ * selectNode, busyReset — none of which carry a fresh AppState to stash in `pendingState`) routes
+ * through `requestRender()` instead, which sets `pendingRender` the same way — see its doc
+ * comment below for why a bare boolean flag is enough there. Final-review fix: this used to be
+ * true only of the "state" case; those four handlers called `renderStore()` unconditionally,
+ * so a re-render arriving mid-drag (e.g. a stale `busy:false` for a dismissed "Merge Heads…" input
+ * box landing while the user is mid-drag on an unrelated head) would tear down the canvas, orphan
+ * the pointer-captured card, and leave `dragActive` wedged true forever — silently freezing the
+ * panel (no further "state" push would ever render again).
  */
 let dragActive = false;
 /** Latest "state" message received while `dragActive` — applied the moment the drag ends. Only
  * ever holds at most one entry: a second stash while still dragging simply overwrites the first,
  * since only the newest state matters once we do re-render. */
 let pendingState: AppState | null = null;
+/** Set by `requestRender()` while `dragActive` — see that function's doc comment. Flushed (a
+ * plain `renderStore()`) by `dndCallbacks.onDragActiveChange(false)` once the drag ends, unless
+ * `pendingState` ALSO arrived meanwhile, in which case `applyState`'s own `renderStore()` call
+ * already covers it and this is just cleared without a second, redundant render. */
+let pendingRender = false;
+/** Set by the "selectNode" case while `dragActive`, mirroring `pendingRender` but for
+ * `scrollNodeIntoView`'s side effect specifically: it reads the just-rendered canvas' layout to
+ * compute a scroll position, so it must run AFTER whatever render eventually applies, never
+ * before — flushed by `onDragActiveChange(false)` right after the deferred render (if any). */
+let pendingScrollId: string | null = null;
 
 /**
  * Extra guard beyond `store.busyOps`, closing the narrow race between a drop posting "merge" and
@@ -403,13 +423,47 @@ const dndCallbacks: DndCallbacks = {
     // already-applied ancestry highlight needs this explicit hook to tear down — otherwise it'd
     // sit there, stale, until the drag ends and something else happens to re-render.
     if (active) clearActiveHover();
-    if (!active && pendingState !== null) {
-      const next = pendingState;
-      pendingState = null;
-      applyState(next);
+    if (!active) {
+      // A full "state" push (if one arrived mid-drag) wins over a bare pending re-render request —
+      // applyState's own renderStore() call at the end already covers whatever the pending render
+      // was for, so there's nothing left for the `pendingRender` branch to do but clear itself.
+      if (pendingState !== null) {
+        const next = pendingState;
+        pendingState = null;
+        pendingRender = false;
+        applyState(next);
+      } else if (pendingRender) {
+        pendingRender = false;
+        renderStore();
+      }
+      // Deferred scroll (selectNode's side effect) always runs AFTER whichever render just
+      // happened above (or would have been a no-op if neither branch rendered — renderStore()
+      // itself no-ops without store.state, and scrollNodeIntoView guards the same way).
+      if (pendingScrollId !== null) {
+        const id = pendingScrollId;
+        pendingScrollId = null;
+        scrollNodeIntoView(id);
+      }
     }
   },
 };
+
+/**
+ * The render-only counterpart to `pendingState`: routes a re-render request through the same
+ * dragActive-aware deferral, for message handlers that mutate the store but don't carry a fresh
+ * AppState to stash (busy/detail/selectNode/busyReset, below). Their store mutations (store.detail,
+ * store.busyOps, store.selectedId, ...) still happen immediately, synchronously, right before this
+ * is called — only the DOM rebuild waits. While a drag is in flight this only flips
+ * `pendingRender`; `dndCallbacks.onDragActiveChange(false)` flushes it with a plain `renderStore()`
+ * once the drag ends.
+ */
+function requestRender(): void {
+  if (dragActive) {
+    pendingRender = true;
+    return;
+  }
+  renderStore();
+}
 
 renderWaiting();
 
@@ -435,7 +489,7 @@ onMessage((msg) => {
       // `forId` a stale null response could wipe out a valid, newer detail (or vice versa).
       if (msg.forId === store.selectedId) {
         store.detail = msg.detail;
-        renderStore();
+        requestRender();
       }
       break;
     case "toast":
@@ -457,8 +511,16 @@ onMessage((msg) => {
       store.detail = null;
       store.detailOpen = true;
       post({ type: "select", id: msg.id });
-      renderStore();
-      scrollNodeIntoView(msg.id);
+      requestRender();
+      // Deferred the same way the render itself is (final-review fix): scrollNodeIntoView reads
+      // the just-rendered canvas' layout, so jumping the (still mid-drag, about-to-be-orphaned)
+      // OLD viewport here would be pointless at best — stash the id and let
+      // `onDragActiveChange(false)` run it right after the deferred render actually applies.
+      if (dragActive) {
+        pendingScrollId = msg.id;
+      } else {
+        scrollNodeIntoView(msg.id);
+      }
       break;
     }
     case "busy": {
@@ -475,7 +537,7 @@ onMessage((msg) => {
       // Task 17: an open context menu must not outlive the busy gate coming down — its items
       // would post actions the isEnabled() check at open time could no longer veto.
       if (msg.active) closeContextMenu();
-      renderStore();
+      requestRender();
       break;
     }
     case "busyReset":
@@ -486,7 +548,7 @@ onMessage((msg) => {
       // for symmetry/defense-in-depth in case this instance is ever still alive when it arrives.
       store.busyOps.clear();
       clearDropGuard();
-      renderStore();
+      requestRender();
       break;
     default:
       break;
@@ -549,9 +611,15 @@ function applyState(state: AppState): void {
  * now" behavior — those raw scrollTop/Left pixels mean a different content position once the
  * canvas' scale has changed, so blindly reapplying them would visibly jump the view.
  *
- * Never called while `dragActive` (see the "state" case in onMessage and
- * dndCallbacks.onDragActiveChange) — render() rebuilds the canvas wholesale, which would orphan
- * the card currently holding pointer capture mid-drag. */
+ * Never called directly while `dragActive` from any of the message handlers in `onMessage` below
+ * — render() rebuilds the canvas wholesale, which would orphan the card currently holding pointer
+ * capture mid-drag (see the `dragActive` doc comment above). The "state" case routes through
+ * `applyState`, which stashes into `pendingState` while dragging instead of calling this; every
+ * other handler that needs a render (busy, detail, selectNode, busyReset) routes through
+ * `requestRender()`, which does the same via `pendingRender`. Both are flushed by
+ * `dndCallbacks.onDragActiveChange(false)` the instant the drag ends. (Final-review fix: before
+ * this, busy/detail/selectNode/busyReset called this function directly, unconditionally — this
+ * comment's claim used to be false for exactly those four.) */
 function renderStore(scrollOverride?: ScrollPoint): void {
   if (!store.state) return;
   const viewport = document.querySelector<HTMLElement>(".alx-canvas-viewport");

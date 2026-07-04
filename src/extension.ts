@@ -185,7 +185,13 @@ function buildDeps(
         laneColorA: sanitizeLaneColor(cfg.get<string>("laneColorA", DEFAULT_LANE_COLOR_A), DEFAULT_LANE_COLOR_A, "laneColorA"),
         laneColorB: sanitizeLaneColor(cfg.get<string>("laneColorB", DEFAULT_LANE_COLOR_B), DEFAULT_LANE_COLOR_B, "laneColorB"),
         showSqlPreview: cfg.get<boolean>("showSqlPreview", true),
-        collapseThreshold: cfg.get<number>("collapseThreshold", 20),
+        // package.json declares `minimum: 3`, but VS Code only enforces that in the Settings UI —
+        // a hand-edited settings.json (or an extension/task programmatically writing config) can
+        // still hand back anything, including 0/negative/fractional. Clamped here, the point
+        // closest to the untrusted source, same pattern as `sanitizeLaneColor` above; layout.ts's
+        // `run.length > 1` guard is the second line of defense against a degenerate value ever
+        // reaching `layoutGraph` some other way (e.g. a future caller that skips getConfig()).
+        collapseThreshold: Math.max(3, cfg.get<number>("collapseThreshold", 20)),
       };
     },
     getUiPrefs() {

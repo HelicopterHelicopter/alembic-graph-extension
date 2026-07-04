@@ -189,7 +189,6 @@ export class MigrationService {
       this.deps.log(
         `scan: ${files.length} files, ${state.counts.revisions} revisions, ${state.counts.heads} heads, ${state.counts.problems} problems`,
       );
-      this.deps.log(JSON.stringify(state));
 
       this.emit(state);
 

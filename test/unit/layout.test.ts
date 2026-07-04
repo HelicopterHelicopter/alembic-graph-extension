@@ -208,6 +208,24 @@ describe("layoutGraph — collapse", () => {
     expect(layout.collapsed).toBeNull();
   });
 
+  it("7d. a degenerate collapseThreshold (0, e.g. a hand-edited setting bypassing package.json's " +
+    "schema minimum) never emits a collapse node on a 2-node chain — no bogus/dangling collapse edge", () => {
+    const revisions = [
+      mkRevision({ revision: "n0", createDate: d(1) }),
+      mkRevision({ revision: "n1", downRevisions: ["n0"], createDate: d(2) }),
+    ];
+    const layout = layoutGraph(buildGraph(revisions), mkOpts({ collapseThreshold: 0 }));
+    // n1 is the sole head, excluded from the run by `qualifies`; only n0 could ever qualify, so
+    // the run's length is 1 — below the `run.length > 1` floor regardless of collapseThreshold.
+    expect(layout.nodes).toHaveLength(2);
+    expect(layout.collapsed).toBeNull();
+    expect(byId(layout).has("collapse")).toBe(false);
+    for (const e of layout.edges) {
+      expect(e.from).not.toBe("collapse");
+      expect(e.to).not.toBe("collapse");
+    }
+  });
+
   it("8a. a current node mid-chain blocks collapse (root-end run falls below threshold)", () => {
     const layout = layoutGraph(buildGraph(linear6()), mkOpts({ collapseThreshold: 3, currentIds: ["n2"] }));
     // root-end run = {n0, n1} (n2 is current) -> length 2 < 3

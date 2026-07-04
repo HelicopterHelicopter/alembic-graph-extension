@@ -83,7 +83,18 @@ export function layoutGraph(graph: MigrationGraph, opts: LayoutOptions): GraphLa
   let collapsed: { count: number } | null = null;
   if (!opts.expandCollapsed) {
     const run = collapseRun(graph, rowOrder, laneCountAtRow, opts);
-    if (run.length >= opts.collapseThreshold) {
+    // `run.length > 1` is a floor independent of `collapseThreshold`: collapsing needs at least
+    // one member to hide (the anchor itself is always kept visible, uncollapsed — see
+    // applyCollapse's `collapsedIds = run.slice(0, run.length - 1)`). Without this floor, a
+    // degenerate threshold (0, negative, or NaN — e.g. a hand-edited setting bypassing
+    // package.json's schema minimum, see extension.ts's getConfig) would satisfy
+    // `run.length >= collapseThreshold` even when `run` has 0 or 1 entries: at length 0,
+    // `applyCollapse` would compute `anchorId = run[run.length - 1]` as `undefined` and splice a
+    // collapse node in with a dangling edge to a nonexistent node; at length 1 it would emit a
+    // pointless collapse node hiding zero revisions. extension.ts's `Math.max(3, ...)` clamp
+    // closes the same hole at the config-read boundary — this is the belt-and-suspenders floor
+    // for any other caller of `layoutGraph` (tests included) that passes a raw `LayoutOptions`.
+    if (run.length > 1 && run.length >= opts.collapseThreshold) {
       const result = applyCollapse(nodes, edges, run, laneById);
       nodes = result.nodes;
       edges = result.edges;
