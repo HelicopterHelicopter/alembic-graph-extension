@@ -144,6 +144,20 @@ describe("svgExport — order flip", () => {
   });
 });
 
+describe("svgExport — lane color attribute escaping (security)", () => {
+  it("malicious laneColor values with breakout quotes are escaped in attribute contexts", () => {
+    const maliciousLaneColors = ['#4aa3ff" /><script>alert(1)</script><rect x="', '#c586c0'];
+    const svg = buildGraphSvg(baseInput({ laneColors: maliciousLaneColors }));
+
+    // The malicious value should NOT appear raw anywhere in the output
+    expect(svg).not.toContain(`#4aa3ff" /><script>alert(1)</script><rect x="`);
+    // No unescaped script tags should be present
+    expect(svg).not.toContain("<script");
+    // The escaped version should be present instead
+    expect(svg).toContain(escapeXml(`#4aa3ff" /><script>alert(1)</script><rect x="`));
+  });
+});
+
 /** Pulls the y coordinate of the first `<rect>` inside `<g data-node-id="id">...</g>` — the
  * card's background rect, always the first shape emitted (see buildRevisionCard). */
 function extractCardY(svg: string, id: string): number {

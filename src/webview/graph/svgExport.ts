@@ -142,7 +142,7 @@ function buildEdges(layout: GraphLayout, positions: Map<string, Pos>, laneColors
       stroke = EDGE_COLLAPSE;
       dash = ' stroke-dasharray="3 5"';
     }
-    parts.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round"${dash}/>`);
+    parts.push(`<path d="${d}" fill="none" stroke="${escapeXml(stroke)}" stroke-width="2" stroke-linecap="round"${dash}/>`);
   }
   return parts.join("");
 }
@@ -196,7 +196,7 @@ function buildRevisionCard(node: LayoutNode, pos: Pos, density: Density, laneCol
     `<rect x="${pos.x}" y="${pos.y}" width="${pos.w}" height="${pos.h}" rx="7" fill="${CARD_BG}" stroke="${CARD_BORDER}"/>`,
   );
   const stripeOpacity = node.applied === false ? ' opacity="0.32"' : "";
-  parts.push(`<rect x="${pos.x}" y="${pos.y}" width="4" height="${pos.h}" rx="2" fill="${laneColor}"${stripeOpacity}/>`);
+  parts.push(`<rect x="${pos.x}" y="${pos.y}" width="4" height="${pos.h}" rx="2" fill="${escapeXml(laneColor)}"${stripeOpacity}/>`);
 
   const headBaselineY = pos.y + padTop + 9;
   const hashColor = node.applied === true ? HASH_APPLIED : HASH_DIM;
@@ -234,8 +234,8 @@ function buildRevisionCard(node: LayoutNode, pos: Pos, density: Density, laneCol
     const tagW = node.branchLabel.length * 6 + 10;
     const tagY = metaBaselineY - 10;
     parts.push(
-      `<rect x="${metaX}" y="${tagY}" width="${tagW}" height="13" rx="4" fill="none" stroke="${laneColor}"/>` +
-        `<text x="${metaX + tagW / 2}" y="${tagY + 9}" font-family="${SVG_FONT}" font-size="8.5" font-weight="700" text-anchor="middle" fill="${laneColor}">${tagText}</text>`,
+      `<rect x="${metaX}" y="${tagY}" width="${tagW}" height="13" rx="4" fill="none" stroke="${escapeXml(laneColor)}"/>` +
+        `<text x="${metaX + tagW / 2}" y="${tagY + 9}" font-family="${SVG_FONT}" font-size="8.5" font-weight="700" text-anchor="middle" fill="${escapeXml(laneColor)}">${tagText}</text>`,
     );
     metaX += tagW + 6;
   }
