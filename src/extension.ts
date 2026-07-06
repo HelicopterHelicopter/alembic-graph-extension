@@ -205,7 +205,7 @@ function buildDeps(
       };
     },
     getUiPrefs() {
-      return context.workspaceState.get<UiPrefs>(UI_PREFS_KEY, DEFAULT_UI_PREFS);
+      return { ...DEFAULT_UI_PREFS, ...(context.workspaceState.get<UiPrefs>(UI_PREFS_KEY) ?? {}) };
     },
     setUiPrefs(prefs) {
       void context.workspaceState.update(UI_PREFS_KEY, prefs);

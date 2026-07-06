@@ -38,13 +38,14 @@ interface FakeDeps extends MigrationServiceDeps {
 }
 
 /** Builds a fully-spied MigrationServiceDeps. getUiPrefs/setUiPrefs share mutable state, like a
- * real workspaceState-backed implementation would. */
+ * real workspaceState-backed implementation would. Task H: getUiPrefs merges stored values with
+ * defaults to handle legacy persisted objects lacking the axis field. */
 function makeDeps(overrides: Partial<MigrationServiceDeps> = {}): FakeDeps {
   let ui: UiPrefs = { ...DEFAULT_UI };
   const deps = {
     listVersionFiles: vi.fn(async () => loadBrokenFiles()),
     getConfig: vi.fn(() => ({ ...DEFAULT_CONFIG })),
-    getUiPrefs: vi.fn(() => ui),
+    getUiPrefs: vi.fn(() => ({ ...DEFAULT_UI, ...ui })),
     setUiPrefs: vi.fn((prefs: UiPrefs) => {
       ui = prefs;
     }),
@@ -552,6 +553,25 @@ describe("MigrationService edge cases (self-review)", () => {
 
     expect(listener).not.toHaveBeenCalled();
     expect(service.getState()).toBeNull();
+  });
+
+  it("getUiPrefs: legacy persisted prefs without axis field should default to horizontal", async () => {
+    // Task H: legacy stored objects (before axis was added) lack the axis field.
+    // getUiPrefs must merge with defaults so missing fields get their default values.
+    const legacyStored = { order: "newest-bottom", density: "comfortable", expandCollapsed: false } as UiPrefs;
+    const deps = makeDeps({
+      getUiPrefs: vi.fn(() => ({ ...DEFAULT_UI, ...legacyStored })),
+    });
+    const service = new MigrationService(deps);
+
+    await service.refresh();
+
+    const state = service.getState();
+    // Before the fix, state!.ui.axis would be undefined, causing silent fallback to vertical.
+    // After the fix, it should be the default "horizontal".
+    expect(state!.ui.axis).toBe("horizontal");
+    expect(state!.ui.order).toBe("newest-bottom");
+    expect(state!.ui.density).toBe("comfortable");
   });
 });
 

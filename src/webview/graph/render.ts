@@ -687,12 +687,12 @@ function buildMergeHint(state: AppState, positions: Map<string, Pos>, axis: UiPr
     const bulkIsRightward = state.ui.order === "newest-top";
     const leftX = bulkIsRightward
       ? Math.max(a.right, b.right) + MERGE_HINT_GAP
-      : Math.min(a.left, b.left) - MERGE_HINT_GAP - MERGE_HINT_WIDTH;
+      : Math.max(0, Math.min(a.left, b.left) - MERGE_HINT_GAP - MERGE_HINT_WIDTH);
     hint.style.left = `${leftX}px`;
     hint.style.top = `${midy - 17}px`;
   } else {
     const midx = (a.cx + b.cx) / 2;
-    const topY = Math.min(a.top, b.top) - 34;
+    const topY = Math.max(0, Math.min(a.top, b.top) - 34);
     hint.style.left = `${midx - MERGE_HINT_WIDTH / 2}px`;
     hint.style.top = `${topY}px`;
   }
