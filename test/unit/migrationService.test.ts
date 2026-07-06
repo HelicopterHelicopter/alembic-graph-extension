@@ -20,7 +20,7 @@ function loadBrokenFiles(): { path: string; content: string }[] {
 }
 
 const DEFAULT_CONFIG = { laneColorA: "#4aa3ff", laneColorB: "#c586c0", showSqlPreview: true, collapseThreshold: 20 };
-const DEFAULT_UI: UiPrefs = { order: "newest-bottom", density: "comfortable", expandCollapsed: false };
+const DEFAULT_UI: UiPrefs = { order: "newest-bottom", density: "comfortable", expandCollapsed: false, axis: "horizontal" };
 // `state.project` only ever carries label/iniPath (see doRefresh's AppState literal) — kept
 // separate from `DEFAULT_VERSIONS_DIR` below so `expect(state!.project).toEqual(DEFAULT_PROJECT)`
 // isn't broken by a field the emitted state never includes.
@@ -395,6 +395,24 @@ describe("MigrationService.setOrder / setDensity", () => {
     expect(newState.layout).toBe(layoutBefore);
     expect(deps.listVersionFiles).toHaveBeenCalledTimes(1);
   });
+
+  it("5c. setAxis emits updated ui, persists prefs, and leaves the layout object reference unchanged", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+    const layoutBefore = service.getState()!.layout;
+
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+    service.setAxis("vertical");
+
+    expect(deps.setUiPrefs).toHaveBeenCalledWith(expect.objectContaining({ axis: "vertical" }));
+    expect(listener).toHaveBeenCalledTimes(1);
+    const newState = listener.mock.calls[0][0];
+    expect(newState.ui.axis).toBe("vertical");
+    expect(newState.layout).toBe(layoutBefore); // same reference: no re-layout
+    expect(deps.listVersionFiles).toHaveBeenCalledTimes(1); // no re-read
+  });
 });
 
 describe("MigrationService.applyUiPrefs", () => {
@@ -447,20 +465,43 @@ describe("MigrationService.applyUiPrefs", () => {
     expect(deps.setUiPrefs).not.toHaveBeenCalled();
   });
 
-  it("d. all three changed at once: exactly one emit with all applied", async () => {
+  it("d. all four changed at once: exactly one emit with all applied", async () => {
     const deps = makeDeps();
     const service = new MigrationService(deps);
     await service.refresh();
 
     const listener = vi.fn();
     service.onDidChangeState(listener);
-    await service.applyUiPrefs({ order: "newest-top", density: "compact", expandCollapsed: true });
+    await service.applyUiPrefs({ order: "newest-top", density: "compact", expandCollapsed: true, axis: "vertical" });
 
     expect(listener).toHaveBeenCalledTimes(1);
     const newState = listener.mock.calls[0][0];
-    expect(newState.ui).toEqual({ order: "newest-top", density: "compact", expandCollapsed: true });
+    expect(newState.ui).toEqual({ order: "newest-top", density: "compact", expandCollapsed: true, axis: "vertical" });
     expect(deps.setUiPrefs).toHaveBeenCalledTimes(1);
-    expect(deps.setUiPrefs).toHaveBeenCalledWith({ order: "newest-top", density: "compact", expandCollapsed: true });
+    expect(deps.setUiPrefs).toHaveBeenCalledWith({
+      order: "newest-top",
+      density: "compact",
+      expandCollapsed: true,
+      axis: "vertical",
+    });
+  });
+
+  it("e. axis-only change: one emit, layout reference unchanged, setUiPrefs called", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+    const layoutBefore = service.getState()!.layout;
+
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+    await service.applyUiPrefs({ axis: "vertical" });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    const newState = listener.mock.calls[0][0];
+    expect(newState.ui.axis).toBe("vertical");
+    expect(newState.layout).toBe(layoutBefore); // same reference: no re-layout
+    expect(deps.setUiPrefs).toHaveBeenCalledWith(expect.objectContaining({ axis: "vertical" }));
+    expect(deps.listVersionFiles).toHaveBeenCalledTimes(1); // no re-read
   });
 });
 

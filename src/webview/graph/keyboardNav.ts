@@ -12,9 +12,13 @@
  * a synchronous `renderStore()` that rebuilds the canvas wholesale, so the `viewport`/card
  * references this module closed over would already be stale (detached) by the time it returned;
  * only main.ts can safely re-query the FRESH DOM afterward.
+ *
+ * Task H: which physical arrow key means "along the chain" vs "across lanes" flips with `axis` —
+ * `uxMath.arrowKeyTarget` is the single seam that resolves a key + axis + order down to a
+ * `findRowNeighbor`/`findLaneNeighbor` call, so this module doesn't duplicate that mapping per axis.
  */
-import type { NavNode, NavOrder } from "./uxMath";
-import { findLaneNeighbor, findRowNeighbor, verticalRowDelta } from "./uxMath";
+import type { NavAxis, NavNode, NavOrder } from "./uxMath";
+import { arrowKeyTarget, findLaneNeighbor, findRowNeighbor } from "./uxMath";
 
 export interface KeyboardNavHandlers {
   /** Arrow-key move: select `id` (post + detail fetch, like a click) and focus/scroll it into view. */
@@ -29,8 +33,15 @@ export interface KeyboardNavHandlers {
 
 /** Attaches keyboard navigation to the freshly-rendered `viewport`. `nodes` should be the current
  * REVISION nodes only (ghost/collapse cards aren't focusable — see render.ts, they get no
- * tabindex), `order` drives which arrow key means "toward row+1" (see `verticalRowDelta`). */
-export function attachKeyboardNav(viewport: HTMLElement, nodes: NavNode[], order: NavOrder, handlers: KeyboardNavHandlers): void {
+ * tabindex). `order` and `axis` together drive which arrow key resolves to which neighbor (see
+ * `uxMath.arrowKeyTarget`). */
+export function attachKeyboardNav(
+  viewport: HTMLElement,
+  nodes: NavNode[],
+  order: NavOrder,
+  axis: NavAxis,
+  handlers: KeyboardNavHandlers,
+): void {
   viewport.addEventListener("keydown", (e: KeyboardEvent) => {
     const card = (e.target as HTMLElement).closest<HTMLElement>(".alx-card[data-node-id]");
     if (!card || !viewport.contains(card)) return;
@@ -41,17 +52,15 @@ export function attachKeyboardNav(viewport: HTMLElement, nodes: NavNode[], order
 
     switch (e.key) {
       case "ArrowUp":
-      case "ArrowDown": {
-        e.preventDefault();
-        const delta = verticalRowDelta(e.key === "ArrowUp" ? "up" : "down", order);
-        const next = findRowNeighbor(nodes, current, delta);
-        if (next) handlers.onNavigate(next);
-        break;
-      }
+      case "ArrowDown":
       case "ArrowLeft":
       case "ArrowRight": {
         e.preventDefault();
-        const next = findLaneNeighbor(nodes, current, e.key === "ArrowRight" ? 1 : -1);
+        const target = arrowKeyTarget(e.key, axis, order);
+        const next =
+          target.kind === "row"
+            ? findRowNeighbor(nodes, current, target.delta)
+            : findLaneNeighbor(nodes, current, target.delta);
         if (next) handlers.onNavigate(next);
         break;
       }

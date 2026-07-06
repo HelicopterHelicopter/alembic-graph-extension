@@ -388,6 +388,7 @@
   "ui": {
     "order": "newest-bottom",
     "density": "comfortable",
-    "expandCollapsed": false
+    "expandCollapsed": false,
+    "axis": "horizontal"
   }
 }

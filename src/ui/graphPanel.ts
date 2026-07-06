@@ -214,6 +214,9 @@ export class GraphPanelManager {
       case "setDensity":
         this.service.setDensity(msg.density);
         break;
+      case "setAxis":
+        this.service.setAxis(msg.axis);
+        break;
       case "expandCollapse": {
         const state = this.service.getState();
         if (state) void this.service.setExpandCollapsed(!state.ui.expandCollapsed);

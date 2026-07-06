@@ -37,8 +37,8 @@
 
   The stub also mirrors GraphPanelManager's "ready" case -> MigrationService.applyUiPrefs(): a
   non-null `restored` is shallow-merged into state.json's `ui` before the `state` message is
-  dispatched, so a seeded order/density/expandCollapsed is actually observable in the rendered
-  canvas (card size, stacking order, collapse), not just echoed back in the `ready` postMessage
+  dispatched, so a seeded order/density/expandCollapsed/axis (Task H) is actually observable in the
+  rendered canvas (card size, stacking order, collapse), not just echoed back in the `ready` postMessage
   log line. `restored === null` dispatches state.json's `ui` unchanged, same as the real host
   standing by its own workspaceState-backed prefs.
 
@@ -107,6 +107,8 @@
         respondToUiPatch({ order: message.order });
       } else if (message && message.type === "setDensity") {
         respondToUiPatch({ density: message.density });
+      } else if (message && message.type === "setAxis") {
+        respondToUiPatch({ axis: message.axis });
       } else if (message && message.type === "expandCollapse") {
         respondToUiPatch({ expandCollapsed: !currentState?.ui.expandCollapsed });
       } else if (message && message.type === "merge") {

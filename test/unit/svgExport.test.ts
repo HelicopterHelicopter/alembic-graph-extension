@@ -123,14 +123,16 @@ describe("svgExport — message truncation", () => {
   });
 });
 
-describe("svgExport — order flip", () => {
+describe("svgExport — order flip (vertical axis)", () => {
   it("a fixed node's card y position swaps relative order between newest-top and newest-bottom", () => {
     // 5c0d13aa7d9f is row 0 (newest); 8f2a1c9d4e07 is the last row (oldest) in this fixture.
+    // Pinned to axis:"vertical" explicitly — this test is about the row->y mapping specifically,
+    // independent of harness/state.json's own default axis (Task H: horizontal).
     const newestId = "5c0d13aa7d9f";
     const oldestId = "8f2a1c9d4e07";
 
-    const svgTop = buildGraphSvg(baseInput({ ui: { ...state.ui, order: "newest-top" } }));
-    const svgBottom = buildGraphSvg(baseInput({ ui: { ...state.ui, order: "newest-bottom" } }));
+    const svgTop = buildGraphSvg(baseInput({ ui: { ...state.ui, order: "newest-top", axis: "vertical" } }));
+    const svgBottom = buildGraphSvg(baseInput({ ui: { ...state.ui, order: "newest-bottom", axis: "vertical" } }));
 
     const yTopNewest = extractCardY(svgTop, newestId);
     const yTopOldest = extractCardY(svgTop, oldestId);
@@ -141,6 +143,37 @@ describe("svgExport — order flip", () => {
     expect(yTopNewest).toBeLessThan(yTopOldest);
     // newest-bottom: the relationship flips — newest now sits below (larger y than) oldest.
     expect(yBottomNewest).toBeGreaterThan(yBottomOldest);
+  });
+});
+
+describe("svgExport — order flip (horizontal axis, Task H)", () => {
+  it("a fixed node's card x position swaps relative order between newest-top and newest-bottom", () => {
+    const newestId = "5c0d13aa7d9f";
+    const oldestId = "8f2a1c9d4e07";
+
+    const svgLeft = buildGraphSvg(baseInput({ ui: { ...state.ui, order: "newest-top", axis: "horizontal" } }));
+    const svgRight = buildGraphSvg(baseInput({ ui: { ...state.ui, order: "newest-bottom", axis: "horizontal" } }));
+
+    const xLeftNewest = extractCardX(svgLeft, newestId);
+    const xLeftOldest = extractCardX(svgLeft, oldestId);
+    const xRightNewest = extractCardX(svgRight, newestId);
+    const xRightOldest = extractCardX(svgRight, oldestId);
+
+    // newest-top: newest sits to the LEFT (smaller x) of oldest.
+    expect(xLeftNewest).toBeLessThan(xLeftOldest);
+    // newest-bottom (default): the relationship flips — newest now sits to the RIGHT (larger x).
+    expect(xRightNewest).toBeGreaterThan(xRightOldest);
+  });
+
+  it("root <svg> width/height come from the axis-aware canvasSize (row-driven w, lane-driven h)", () => {
+    const horizontalUi = { ...state.ui, axis: "horizontal" as const };
+    const svg = buildGraphSvg(baseInput({ ui: horizontalUi }));
+    const expected = canvasSize(state.layout, horizontalUi, horizontalUi.density);
+    expect(
+      svg.startsWith(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${expected.w}" height="${expected.h}" viewBox="0 0 ${expected.w} ${expected.h}">`,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -164,6 +197,15 @@ function extractCardY(svg: string, id: string): number {
   const groupStart = svg.indexOf(`data-node-id="${id}"`);
   expect(groupStart).toBeGreaterThanOrEqual(0);
   const rectMatch = /<rect x="[^"]*" y="([^"]*)"/.exec(svg.slice(groupStart));
+  expect(rectMatch).not.toBeNull();
+  return Number(rectMatch![1]);
+}
+
+/** Same as `extractCardY` but for x — Task H's horizontal order-flip test. */
+function extractCardX(svg: string, id: string): number {
+  const groupStart = svg.indexOf(`data-node-id="${id}"`);
+  expect(groupStart).toBeGreaterThanOrEqual(0);
+  const rectMatch = /<rect x="([^"]*)"/.exec(svg.slice(groupStart));
   expect(rectMatch).not.toBeNull();
   return Number(rectMatch![1]);
 }

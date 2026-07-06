@@ -41,12 +41,15 @@ interface PersistedUiState {
   order?: UiPrefs["order"];
   density?: UiPrefs["density"];
   expandCollapsed?: boolean;
+  /** Task H: graph axis, persisted exactly like order/density (webview setState + workspaceState
+   * via the host's UiPrefs plumbing — see `restoredPrefs`/`applyUiPrefs`). */
+  axis?: UiPrefs["axis"];
   selectedId?: string | null;
   detailOpen?: boolean;
   scrollTop?: number;
   scrollLeft?: number;
   /** Task 19: canvas zoom [0.5, 1.5] — webview-local (never round-tripped through the host's
-   * UiPrefs), unlike order/density/expandCollapsed above. */
+   * UiPrefs), unlike order/density/expandCollapsed/axis above. */
   zoom?: number;
 }
 
@@ -181,6 +184,9 @@ const handlers: Handlers = {
   },
   onToggleDensity(density) {
     post({ type: "setDensity", density });
+  },
+  onToggleAxis(axis) {
+    post({ type: "setAxis", axis });
   },
   onExpandCollapse() {
     post({ type: "expandCollapse" });
@@ -677,7 +683,7 @@ function renderStore(scrollOverride?: ScrollPoint): void {
     // Task 19: same re-attach-every-render pattern for zoom/hover/keyboard nav.
     attachZoomWheel(nextViewport);
     attachHover(nextViewport, store.state.layout, hoverCallbacks);
-    attachKeyboardNav(nextViewport, navNodes(store.state), store.state.ui.order, keyboardHandlers);
+    attachKeyboardNav(nextViewport, navNodes(store.state), store.state.ui.order, store.state.ui.axis, keyboardHandlers);
     if (toolbarEl) {
       attachSearch(toolbarEl, nextViewport, searchableCards(store.state), store.search.query, store.search.index, searchCallbacks);
     }
@@ -752,6 +758,7 @@ function persist(): void {
     order: ui?.order,
     density: ui?.density,
     expandCollapsed: ui?.expandCollapsed,
+    axis: ui?.axis,
     selectedId: store.selectedId,
     detailOpen: store.detailOpen,
     scrollTop: lastScroll.scrollTop,
@@ -770,5 +777,6 @@ function restoredPrefs(p: PersistedUiState): Partial<UiPrefs> {
   if (p.order !== undefined) out.order = p.order;
   if (p.density !== undefined) out.density = p.density;
   if (p.expandCollapsed !== undefined) out.expandCollapsed = p.expandCollapsed;
+  if (p.axis !== undefined) out.axis = p.axis;
   return out;
 }

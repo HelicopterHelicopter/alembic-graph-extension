@@ -11,6 +11,10 @@ graph.
 - **Graph view** of every revision under `versions/`, laid out by lane/row like a git graph, with
   HEAD / MERGE / BROKEN badges and a dashed-red ghost card for any `down_revision` that points at a
   file that doesn't exist.
+- **Horizontal or vertical axis** — the toolbar's **Axis** toggle flips the timeline between a
+  left-to-right layout (root left, heads right — the default, so a wide editor tab isn't wasted) and
+  the original top-to-bottom layout; **Order** adapts to match (`Newest →`/`Newest ←` horizontal,
+  `Newest ↓`/`Newest ↑` vertical).
 - **Drag to merge** two heads onto each other to run `alembic merge`; **drag a broken (ghost)
   link** onto a real revision to repair its `down_revision` in place.
 - **Upgrade / downgrade** to head(s) or to a specific revision, with a confirmation modal and an

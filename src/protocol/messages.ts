@@ -5,6 +5,14 @@ export interface UiPrefs {
   order: "newest-top" | "newest-bottom";
   density: "comfortable" | "compact";
   expandCollapsed: boolean;
+  /**
+   * Task H: graph time-axis. `"horizontal"` (the default) runs the chain left→right — root on the
+   * left, heads on the right — with lanes stacked vertically; `"vertical"` is the original
+   * top-to-bottom layout with lanes side by side. `order`'s existing values are reinterpreted, not
+   * replaced, under horizontal: `newest-bottom` (default) puts the newest revision on the RIGHT,
+   * `newest-top` puts it on the LEFT — see metrics.ts's `nodeXY` for the exact mapping.
+   */
+  axis: "vertical" | "horizontal";
 }
 
 export interface AppState {
@@ -49,6 +57,7 @@ export type WebviewToHostMessage =
   | { type: "refresh" }
   | { type: "setOrientation"; order: UiPrefs["order"] }
   | { type: "setDensity"; density: UiPrefs["density"] }
+  | { type: "setAxis"; axis: UiPrefs["axis"] }
   | { type: "expandCollapse" }
   | { type: "openFile"; id: string }
   | { type: "openGraph" };   // sidebar only

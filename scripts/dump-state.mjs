@@ -40,7 +40,7 @@ const repoRoot = ${JSON.stringify(repoRoot)};
 const versionsDir = path.join(repoRoot, "fixtures/broken-project/alembic/versions");
 const files = readdirSync(versionsDir).filter((f) => f.endsWith(".py"));
 
-let ui = { order: "newest-bottom", density: "comfortable", expandCollapsed: false };
+let ui = { order: "newest-bottom", density: "comfortable", expandCollapsed: false, axis: "horizontal" };
 
 const service = new MigrationService({
   async listVersionFiles() {

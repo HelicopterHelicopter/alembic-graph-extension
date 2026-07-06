@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   ZOOM_MAX,
   ZOOM_MIN,
+  arrowKeyTarget,
   clampZoom,
   computeAncestorSet,
   fitScroll,
@@ -272,5 +273,38 @@ describe("uxMath — findRowNeighbor / findLaneNeighbor", () => {
     expect(findRowNeighbor(solo, solo[0], -1)).toBeNull();
     expect(findLaneNeighbor(solo, solo[0], 1)).toBeNull();
     expect(findLaneNeighbor(solo, solo[0], -1)).toBeNull();
+  });
+});
+
+describe("uxMath — arrowKeyTarget (Task H: axis-aware arrow-key mapping)", () => {
+  it("vertical: Up/Down are along-chain (row), matching verticalRowDelta", () => {
+    expect(arrowKeyTarget("ArrowDown", "vertical", "newest-top")).toEqual({ kind: "row", delta: 1 });
+    expect(arrowKeyTarget("ArrowUp", "vertical", "newest-top")).toEqual({ kind: "row", delta: -1 });
+    expect(arrowKeyTarget("ArrowDown", "vertical", "newest-bottom")).toEqual({ kind: "row", delta: -1 });
+    expect(arrowKeyTarget("ArrowUp", "vertical", "newest-bottom")).toEqual({ kind: "row", delta: 1 });
+  });
+
+  it("vertical: Left/Right are across-lane, order-independent", () => {
+    expect(arrowKeyTarget("ArrowRight", "vertical", "newest-top")).toEqual({ kind: "lane", delta: 1 });
+    expect(arrowKeyTarget("ArrowLeft", "vertical", "newest-top")).toEqual({ kind: "lane", delta: -1 });
+    expect(arrowKeyTarget("ArrowRight", "vertical", "newest-bottom")).toEqual({ kind: "lane", delta: 1 });
+    expect(arrowKeyTarget("ArrowLeft", "vertical", "newest-bottom")).toEqual({ kind: "lane", delta: -1 });
+  });
+
+  it("horizontal: Left/Right are along-chain (row) — the inverse of vertical", () => {
+    // newest-top: x increases with row directly (nodeXY's effRow = row, no flip) — same shape as
+    // vertical's "row increases downward" under newest-top, so ArrowRight/Left reuse
+    // verticalRowDelta("down"/"up", order) unchanged (see uxMath.ts's arrowKeyTarget doc comment).
+    expect(arrowKeyTarget("ArrowRight", "horizontal", "newest-top")).toEqual({ kind: "row", delta: 1 });
+    expect(arrowKeyTarget("ArrowLeft", "horizontal", "newest-top")).toEqual({ kind: "row", delta: -1 });
+    expect(arrowKeyTarget("ArrowRight", "horizontal", "newest-bottom")).toEqual({ kind: "row", delta: -1 });
+    expect(arrowKeyTarget("ArrowLeft", "horizontal", "newest-bottom")).toEqual({ kind: "row", delta: 1 });
+  });
+
+  it("horizontal: Up/Down are across-lane (lane increases downward), order-independent", () => {
+    expect(arrowKeyTarget("ArrowDown", "horizontal", "newest-top")).toEqual({ kind: "lane", delta: 1 });
+    expect(arrowKeyTarget("ArrowUp", "horizontal", "newest-top")).toEqual({ kind: "lane", delta: -1 });
+    expect(arrowKeyTarget("ArrowDown", "horizontal", "newest-bottom")).toEqual({ kind: "lane", delta: 1 });
+    expect(arrowKeyTarget("ArrowUp", "horizontal", "newest-bottom")).toEqual({ kind: "lane", delta: -1 });
   });
 });

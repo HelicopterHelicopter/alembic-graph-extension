@@ -340,6 +340,13 @@ export class MigrationService {
     this.updateUi({ density: d });
   }
 
+  /** Updates prefs + re-emits state. Client-side flip only (Task H): the layout engine's
+   * lane/row output is untouched — axis is purely a webview pixel-mapping concern, same as
+   * order/density. */
+  setAxis(axis: UiPrefs["axis"]): void {
+    this.updateUi({ axis });
+  }
+
   private updateUi(patch: Partial<UiPrefs>): void {
     const base = this.state?.ui ?? this.deps.getUiPrefs();
     const ui: UiPrefs = { ...base, ...patch };
@@ -412,7 +419,8 @@ export class MigrationService {
     const ui: UiPrefs = { ...base, ...prefs };
 
     const expandChanged = ui.expandCollapsed !== base.expandCollapsed;
-    const changed = expandChanged || ui.order !== base.order || ui.density !== base.density;
+    const changed =
+      expandChanged || ui.order !== base.order || ui.density !== base.density || ui.axis !== base.axis;
     if (!changed) return; // true no-op: nothing differs, don't even touch persisted storage
 
     this.deps.setUiPrefs(ui);

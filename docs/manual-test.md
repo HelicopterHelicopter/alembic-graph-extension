@@ -893,3 +893,65 @@ Host.
     Extensions view → Alembic Graph → the tab next to Feature Contributions) renders the README
     with the screenshot visible (not a broken-image icon). Uninstall afterward if this was just a
     smoke test (`code --uninstall-extension jheelr.alembic-graph`).
+
+## Task H: horizontal graph axis (user-requested)
+
+`UiPrefs.axis` (`"vertical" | "horizontal"`, default `"horizontal"`) is a pure pixel-mapping choice
+made entirely in `src/webview/graph/metrics.ts` (`nodeXY`/`canvasSize`/`edgePathD`, all axis-aware)
+— the layout engine's abstract (lane, row) output never changes, so `render.ts` (live canvas) and
+`svgExport.ts` (standalone export) can never draw a different layout for the same state. Covered by
+`test/unit/metrics.test.ts` (pinned horizontal coordinates for both orders/densities, canvasSize's
+row/lane swap, edgePathD's horizontal bezier form) and `test/unit/uxMath.test.ts`
+(`arrowKeyTarget`'s axis-aware key mapping); persistence mirrors `test/unit/migrationService.test.ts`'s
+existing order/density coverage. Everything below was separately verified end-to-end via Playwright
+against the real built webview (`harness/graph.html`).
+
+1. Press F5, select **Run Extension (broken fixture)**, then **Alembic Graph: Open Migration
+   Graph**.
+2. **Default is horizontal**: the graph opens with the root card at the left and the chain running
+   left→right, lanes stacked vertically (a branch shows as a card sitting in a lower row, not off to
+   the side). The toolbar reads, left to right: **Axis** (`Horizontal`/`Vertical`, `Horizontal`
+   highlighted), **Order** (`Newest →`/`Newest ←`, `Newest →` highlighted — the arrows themselves
+   confirm the axis, not just the toggle's active state).
+3. Click **Vertical**: the canvas re-lays out to the original top-to-bottom layout (root top, lanes
+   side by side), and the Order labels switch back to `Newest ↓`/`Newest ↑`. Click **Horizontal**
+   again: back to left-to-right, labels back to arrows, no layout artifacts left over from the
+   toggle (no stray edge, no card at a stale position).
+4. In horizontal mode, click **Newest ←**: the newest revision (and any head at row 0) jumps to the
+   LEFT end of the canvas and the root card moves to the right end — the mirror image of step 2.
+   Click **Newest →** to restore the default.
+5. Hover an edge / examine the DOM (or trust the unit test): a same-lane edge's path is a nearly
+   straight horizontal line — start point's x is less than the end point's x, and both y's match —
+   confirming edges anchor card-side-to-card-side (right-center → left-center), not top/bottom as in
+   vertical.
+6. Confirm the drag interactions still land correctly in horizontal mode: drag one HEAD card onto
+   another head to merge (Task 14) — the merge confirmation targets the correct pair, same as
+   vertical. Drag the ghost card (`deadbeef0000`) onto a real revision to repoint (Task 15) — same
+   correct target resolution. Neither drag is visually distorted or offset.
+7. Click a revision card to focus it, then press **→**: selection/focus move to the nearest card
+   toward the newest end of the chain (the inverse of vertical's ↑/↓); **←** moves the other way.
+   Press **↓**/**↑**: selection moves across lanes (down = next lane, up = previous lane) — the
+   inverse mapping of vertical's ←/→. At the edge of the graph, the unavailable direction does
+   nothing, same as vertical.
+8. With 2+ heads visible (the broken fixture has 3), confirm the green **drag one head onto the
+   other to merge ⇄** hint sits beside the pair of heads (not overlapping either card, not clipped
+   off the edge of the canvas) — to their left under the default `Newest →`, flipping to their right
+   under `Newest ←`.
+9. Toggle **Compact** density in horizontal mode: cards shrink, lanes move closer together
+   vertically, and — for the broken revision's **⚠ down_revision missing — drag onto a parent to
+   re-point** hint below its card — confirm the hint text never overlaps the card in the lane below
+   it (there's still ~40px of clearance between lanes at compact density).
+10. Confirm zoom/fit (Task 19), search-and-cycle centering, ancestry hover, FLIP transitions, and
+    the right-click context menu all still work normally in horizontal mode — none of them are
+    axis-specific, but verify rather than assume: zoom in/out and Fit behave the same; typing a
+    search query and pressing Enter centers the matched card in the viewport; hovering a card
+    highlights its ancestry; toggling Order/density animates cards sliding to their new positions
+    rather than teleporting; right-clicking a card opens the menu at the cursor.
+11. Persistence: with the panel open in horizontal mode, close and reopen it (or reload the window)
+    — axis stays horizontal. Switch to **Vertical**, close/reopen — vertical is restored (same
+    persistence path as order/density/selection/scroll, Task 11).
+12. **Export SVG** while in horizontal mode: the saved file, opened standalone in a browser, matches
+    the live canvas — left-to-right chain, lanes stacked vertically, the project label/counts title
+    block still sane in the top-left corner (not overlapping the graph).
+13. Repeat step 2 with the **Run Extension (healthy fixture)** launch config: same horizontal
+    default, no ghost/broken card, everything else unchanged.

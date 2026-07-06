@@ -17,7 +17,12 @@ import type { HostToWebviewMessage, UiPrefs } from "./protocol/messages";
 const SIDEBAR_VIEW_ID = "alembicGraph.sidebar";
 
 const UI_PREFS_KEY = "alembicGraph.uiPrefs";
-const DEFAULT_UI_PREFS: UiPrefs = { order: "newest-bottom", density: "comfortable", expandCollapsed: false };
+const DEFAULT_UI_PREFS: UiPrefs = {
+  order: "newest-bottom",
+  density: "comfortable",
+  expandCollapsed: false,
+  axis: "horizontal",
+};
 
 const NO_PROJECT_MESSAGE = "Alembic Graph: no Alembic project is active. Run \"Select Alembic Project…\" first.";
 

@@ -34,8 +34,11 @@ interface Pos {
   w: number;
   h: number;
   cx: number;
+  cy: number;
   top: number;
   bottom: number;
+  left: number;
+  right: number;
 }
 
 // System font stacks only (no embedded fonts, per the brief's "out of scope") — deliberately
@@ -125,14 +128,14 @@ function badgeWidth(text: string): number {
   return text.length * 6 + 10;
 }
 
-function buildEdges(layout: GraphLayout, positions: Map<string, Pos>, laneColors: string[]): string {
+function buildEdges(layout: GraphLayout, positions: Map<string, Pos>, laneColors: string[], axis: UiPrefs["axis"]): string {
   const parts: string[] = [];
   for (const edge of layout.edges) {
     const a = positions.get(edge.from);
     const b = positions.get(edge.to);
     if (!a || !b) continue;
 
-    const d = edgePathD(a, b);
+    const d = edgePathD(a, b, axis);
     let stroke = laneColors[edge.colorLane] ?? laneColors[0] ?? DEFAULT_LANE_COLOR;
     let dash = "";
     if (edge.kind === "broken") {
@@ -255,7 +258,18 @@ function computePositions(layout: GraphLayout, ui: UiPrefs, density: Density): M
   for (const node of layout.nodes) {
     const { x, y } = nodeXY(node, ui, layout.rowCount, density);
     const { w, h } = nodeSize(node, density);
-    map.set(node.id, { x, y, w, h, cx: x + w / 2, top: y, bottom: y + h });
+    map.set(node.id, {
+      x,
+      y,
+      w,
+      h,
+      cx: x + w / 2,
+      cy: y + h / 2,
+      top: y,
+      bottom: y + h,
+      left: x,
+      right: x + w,
+    });
   }
   return map;
 }
@@ -286,7 +300,7 @@ export function buildGraphSvg(input: SvgExportInput): string {
     `<rect x="0" y="0" width="${size.w}" height="${size.h}" fill="${BG}"/>` +
     `<text x="${PAD_X}" y="14" font-family="${SVG_FONT}" font-size="12" font-weight="600" fill="${TITLE_FG}">${escapeXml(projectLabel)}</text>` +
     `<text x="${PAD_X}" y="27" font-family="${SVG_FONT}" font-size="12" fill="${TITLE_FG}">${escapeXml(subtitle)}</text>` +
-    buildEdges(layout, positions, laneColors) +
+    buildEdges(layout, positions, laneColors, ui.axis) +
     nodeParts.join("") +
     `</svg>`
   );

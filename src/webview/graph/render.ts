@@ -38,6 +38,8 @@ export interface Handlers {
   onSelect(id: string): void;
   onToggleOrder(order: UiPrefs["order"]): void;
   onToggleDensity(density: UiPrefs["density"]): void;
+  /** Task H: toolbar Axis toggle (Horizontal | Vertical), left of Order. */
+  onToggleAxis(axis: UiPrefs["axis"]): void;
   onExpandCollapse(): void;
   onCloseDetail(): void;
   onOpenFile(id: string): void;
@@ -62,8 +64,11 @@ interface Pos {
   w: number;
   h: number;
   cx: number;
+  cy: number;
   top: number;
   bottom: number;
+  left: number;
+  right: number;
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -174,15 +179,32 @@ function buildToolbar(state: AppState, view: ViewState, handlers: Handlers): HTM
   searchCount.className = "alx-search-count";
   searchWrap.append(searchInput, searchCount);
 
+  // Task H: Axis toggle, left of Order — Horizontal (default, root left / heads right) vs
+  // Vertical (the original top-to-bottom layout).
+  const axisLabel = document.createElement("span");
+  axisLabel.className = "alx-order-label";
+  axisLabel.textContent = "Axis";
+
+  const axisGroup = document.createElement("div");
+  axisGroup.className = "alx-toggle-group";
+  axisGroup.append(
+    makeToggle("Horizontal", state.ui.axis === "horizontal", () => handlers.onToggleAxis("horizontal")),
+    makeToggle("Vertical", state.ui.axis === "vertical", () => handlers.onToggleAxis("vertical")),
+  );
+
   const orderLabel = document.createElement("span");
   orderLabel.className = "alx-order-label";
   orderLabel.textContent = "Order";
 
+  // Task H: labels adapt per axis — horizontal reads as a left/right direction (the newest end is
+  // now on a side, not top/bottom), vertical keeps the original up/down arrows.
+  const newestBottomLabel = state.ui.axis === "horizontal" ? "Newest →" : "Newest ↓";
+  const newestTopLabel = state.ui.axis === "horizontal" ? "Newest ←" : "Newest ↑";
   const orderGroup = document.createElement("div");
   orderGroup.className = "alx-toggle-group";
   orderGroup.append(
-    makeToggle("Newest ↓", state.ui.order === "newest-bottom", () => handlers.onToggleOrder("newest-bottom")),
-    makeToggle("Newest ↑", state.ui.order === "newest-top", () => handlers.onToggleOrder("newest-top")),
+    makeToggle(newestBottomLabel, state.ui.order === "newest-bottom", () => handlers.onToggleOrder("newest-bottom")),
+    makeToggle(newestTopLabel, state.ui.order === "newest-top", () => handlers.onToggleOrder("newest-top")),
   );
 
   const densityGroup = document.createElement("div");
@@ -213,7 +235,17 @@ function buildToolbar(state: AppState, view: ViewState, handlers: Handlers): HTM
 
   toolbar.append(label, sep, headsChip, revCount, spacer);
   if (busyIndicator) toolbar.append(busyIndicator);
-  toolbar.append(searchWrap, orderLabel, orderGroup, densityGroup, newRevisionBtn, zoomCluster, exportSvgBtn);
+  toolbar.append(
+    searchWrap,
+    axisLabel,
+    axisGroup,
+    orderLabel,
+    orderGroup,
+    densityGroup,
+    newRevisionBtn,
+    zoomCluster,
+    exportSvgBtn,
+  );
   return toolbar;
 }
 
@@ -287,7 +319,18 @@ function computePositions(state: AppState): Map<string, Pos> {
   for (const node of layout.nodes) {
     const { x, y } = nodeXY(node, ui, layout.rowCount, density);
     const { w, h } = nodeSize(node, density);
-    map.set(node.id, { x, y, w, h, cx: x + w / 2, top: y, bottom: y + h });
+    map.set(node.id, {
+      x,
+      y,
+      w,
+      h,
+      cx: x + w / 2,
+      cy: y + h / 2,
+      top: y,
+      bottom: y + h,
+      left: x,
+      right: x + w,
+    });
   }
   return map;
 }
@@ -321,7 +364,7 @@ function buildCanvasViewport(
   canvas.style.height = `${size.h}px`;
   canvas.style.transform = `scale(${zoom})`;
 
-  canvas.append(buildEdgesSvg(layout, size, positions, state.laneColors));
+  canvas.append(buildEdgesSvg(layout, size, positions, state.laneColors, ui.axis));
 
   const brokenParentByChild = brokenParentByChildMap(state);
   for (const node of layout.nodes) {
@@ -330,7 +373,7 @@ function buildCanvasViewport(
     canvas.append(buildNodeElement(node, state, view, handlers, pos, density, brokenParentByChild));
   }
 
-  const mergeHint = buildMergeHint(state, positions);
+  const mergeHint = buildMergeHint(state, positions, ui.axis);
   if (mergeHint) canvas.append(mergeHint);
 
   scaleWrapper.append(canvas);
@@ -343,6 +386,7 @@ function buildEdgesSvg(
   size: { w: number; h: number },
   positions: Map<string, Pos>,
   laneColors: string[],
+  axis: UiPrefs["axis"],
 ): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg") as SVGSVGElement;
   svg.setAttribute("width", String(size.w));
@@ -356,10 +400,11 @@ function buildEdgesSvg(
     const b = positions.get(edge.to);
     if (!a || !b) continue;
 
-    // Anchor = upper card's bottom-center -> lower card's top-center (metrics.ts's edgePathD,
-    // shared with svgExport.ts so the standalone export draws identical curves).
+    // Anchor = upper card's bottom-center -> lower card's top-center in vertical, lefter card's
+    // right-center -> righter card's left-center in horizontal (metrics.ts's edgePathD, shared
+    // with svgExport.ts so the standalone export draws identical curves).
     const path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", edgePathD(a, b));
+    path.setAttribute("d", edgePathD(a, b, axis));
     // Task 19: hover.ts reads these to decide whether an edge sits on the hovered ancestor path —
     // `edge.from`/`.to` are already the parent/child node ids (see LayoutEdge in core/types.ts).
     path.dataset.from = edge.from;
@@ -618,19 +663,38 @@ function buildBadges(node: LayoutNode): HTMLElement | null {
 
 // ---------- merge hint ----------
 
-function buildMergeHint(state: AppState, positions: Map<string, Pos>): HTMLElement | null {
+/** Matches graph.css's `.alx-merge-hint` fixed width. */
+const MERGE_HINT_WIDTH = 250;
+/** Clearance between the hint box and whichever card edge it sits beside. */
+const MERGE_HINT_GAP = 16;
+
+function buildMergeHint(state: AppState, positions: Map<string, Pos>, axis: UiPrefs["axis"]): HTMLElement | null {
   if (state.counts.heads < 2 || state.heads.length < 2) return null;
   const a = positions.get(state.heads[0].id);
   const b = positions.get(state.heads[1].id);
   if (!a || !b) return null;
 
-  const midx = (a.cx + b.cx) / 2;
-  const topY = Math.min(a.top, b.top) - 34;
-
   const hint = document.createElement("div");
   hint.className = "alx-merge-hint";
-  hint.style.left = `${midx - 125}px`;
-  hint.style.top = `${topY}px`;
   hint.textContent = "drag one head onto the other to merge  ⇄";
+
+  if (axis === "horizontal") {
+    // Heads cluster toward the newest end of the chain — the min-x edge under "newest-top", the
+    // max-x edge under "newest-bottom" (see nodeXY's effRow mapping). Placing the hint toward the
+    // OLDER/bulk side (rather than "above", as in vertical) keeps it inside the canvas instead of
+    // risking a clip against whichever screen edge the newest end happens to sit at.
+    const midy = (a.cy + b.cy) / 2;
+    const bulkIsRightward = state.ui.order === "newest-top";
+    const leftX = bulkIsRightward
+      ? Math.max(a.right, b.right) + MERGE_HINT_GAP
+      : Math.min(a.left, b.left) - MERGE_HINT_GAP - MERGE_HINT_WIDTH;
+    hint.style.left = `${leftX}px`;
+    hint.style.top = `${midy - 17}px`;
+  } else {
+    const midx = (a.cx + b.cx) / 2;
+    const topY = Math.min(a.top, b.top) - 34;
+    hint.style.left = `${midx - MERGE_HINT_WIDTH / 2}px`;
+    hint.style.top = `${topY}px`;
+  }
   return hint;
 }

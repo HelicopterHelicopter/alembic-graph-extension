@@ -173,6 +173,9 @@ export interface NavNode {
 }
 
 export type NavOrder = "newest-top" | "newest-bottom";
+/** Mirrors `UiPrefs["axis"]` (protocol/messages.ts) — redeclared locally rather than imported so
+ * this module stays dependency-free, same rationale as `NavOrder` above. */
+export type NavAxis = "vertical" | "horizontal";
 
 /**
  * Which way `row` moves for a visual up/down arrow press, given orientation: `nodeXY` (metrics.ts)
@@ -226,4 +229,40 @@ export function findRowNeighbor(nodes: NavNode[], current: NavNode, rowDelta: 1 
  * back to that lane's nearest row otherwise). */
 export function findLaneNeighbor(nodes: NavNode[], current: NavNode, laneDelta: 1 | -1): string | null {
   return nearestAlongAxis(nodes, current, "lane", laneDelta);
+}
+
+export type ArrowKey = "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight";
+
+/** Which neighbor-finding function (`findRowNeighbor`/`findLaneNeighbor`) an arrow key should
+ * drive, and the delta to pass it. */
+export interface ArrowNavTarget {
+  kind: "row" | "lane";
+  delta: 1 | -1;
+}
+
+/**
+ * Task H: axis-aware arrow-key mapping, keyboardNav.ts's one seam for "which physical key moves
+ * along the chain vs across lanes". Vertical keeps the original scheme (↑/↓ = along-chain, ←/→ =
+ * across-lane); horizontal is the inverse (←/→ = along-chain, ↑/↓ = across-lane) per the brief.
+ *
+ * Reuses `verticalRowDelta` rather than duplicating its order-flip math: that function's row
+ * formula only depends on which key represents the "positive" spatial direction (the one `nodeXY`
+ * increases toward under `newest-top`) — under vertical that's "down" (y increases downward);
+ * under horizontal it's "right" (x increases rightward, see `nodeXY`'s `effRow`). Both are the same
+ * shape of formula, just relabeled, so `ArrowRight`/`ArrowLeft` are passed through as `"down"`/
+ * `"up"` here rather than re-deriving the same order-flip logic a second time. The lane axis needs
+ * no such reuse — it's never mirrored by `order` in either axis (lane 0 is always at the
+ * axis-agnostic "start": leftmost in vertical, topmost in horizontal), so its delta is a plain
+ * +1/-1 off the key's spatial sign.
+ */
+export function arrowKeyTarget(key: ArrowKey, axis: NavAxis, order: NavOrder): ArrowNavTarget {
+  const alongChainKeys: ArrowKey[] =
+    axis === "horizontal" ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
+
+  if (alongChainKeys.includes(key)) {
+    const isPositiveDirection = key === "ArrowDown" || key === "ArrowRight";
+    return { kind: "row", delta: verticalRowDelta(isPositiveDirection ? "down" : "up", order) };
+  }
+  const isPositiveDirection = key === "ArrowRight" || key === "ArrowDown";
+  return { kind: "lane", delta: isPositiveDirection ? 1 : -1 };
 }
