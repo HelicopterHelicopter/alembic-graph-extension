@@ -955,3 +955,45 @@ against the real built webview (`harness/graph.html`).
     block still sane in the top-left corner (not overlapping the graph).
 13. Repeat step 2 with the **Run Extension (healthy fixture)** launch config: same horizontal
     default, no ghost/broken card, everything else unchanged.
+
+## Bug fix: edges follow the dragged node during merge/repoint drags
+
+Previously, dragging a card (Task 14 merge, Task 15 repoint) moved the card via a CSS `transform`
+without re-rendering (so the card holding pointer capture wouldn't be torn down mid-drag — see
+dnd.ts's header comment), but the connected SVG `<path>` edges were never updated to match, so they
+stayed frozen at the card's pre-drag position until the drag ended. The fix live-updates just the
+affected paths' `d` attribute every animation frame (`dnd.ts`'s new `onDragMove` callback,
+rAF-throttled, wired in `main.ts`), recomputed via a new pure `metrics.ts` helper (`nodeAnchor`,
+covered by `test/unit/metrics.test.ts`) — the SAME `nodeXY`/`nodeSize`/`edgePathD` math render.ts
+uses, with the dragged node's position nudged by the live delta — so a live-dragged edge can never
+visually disagree with the settled layout it's previewing. On every drag exit (drop or revert) the
+edges snap back to their unmodified position in lockstep with the card's own transform reset.
+Verified end-to-end via Playwright against `harness/graph.html` (`npm run build` first): dragging a
+head card, the connected edge's endpoint tracked the cursor exactly (0px error) at both 100% and
+80% zoom, in both horizontal and vertical axis, unrelated edges never changed, an empty-canvas
+revert restored the exact original `d` string, and a completed merge/repoint drop still worked; the
+ghost card's repoint drag also live-tracked its one broken edge the same way. The steps below are
+the F5-only checks that harness can't cover (real host round trip, real cursor input).
+
+1. Press F5, select **Run Extension (broken fixture)** (3 heads, 1 broken link), set the
+   `alembicGraph.alembicCommand` override (see Task 14's setup), then **Alembic Graph: Open
+   Migration Graph**.
+2. Drag the `4bfc02996c8e` **search index (experimental)** head card slowly toward empty canvas
+   space (not onto another card). Watch its incoming edge (from `29dae0774a6c`): the curve
+   visibly stretches and follows the card in real time, exactly matching the cursor — no lag, no
+   frozen segment. Release: the card AND its edge snap back together to their original position (no
+   mismatched flash of one settling before the other).
+3. Repeat, this time dropping onto the `3aebf1885b7d` head card to complete a real merge: the same
+   live-follow is visible up to the drop, then the usual input-box → busy → success toast →
+   re-rendered one-head graph flow (Task 14) takes over normally. `git checkout -- fixtures/` +
+   delete `fixtures/*/fixture.db` afterward.
+4. Drag the ghost card (`deadbeef0000`) partway toward `4bfc02996c8e` and release on empty canvas
+   (revert): confirm its one dashed red broken edge visibly follows the ghost during the drag, then
+   snaps back with the card on release — same as step 2, for the repoint side (Task 15).
+5. Set zoom to 80% (toolbar `−` twice) and repeat step 2: the edge still tracks the card 1:1 (not
+   faster/slower than the cursor) — same as Task 19's existing zoom-drag regression check, now
+   extended to the edge itself.
+6. Toggle **Vertical** axis and repeat step 2: the edge (now a vertical bezier) still follows the
+   card correctly along the new axis.
+7. Open webview DevTools (**Developer: Open Webview Developer Tools**) and confirm no errors/CSP
+   violations while repeating steps 2–4.

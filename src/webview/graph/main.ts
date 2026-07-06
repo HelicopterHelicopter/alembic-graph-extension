@@ -8,7 +8,7 @@ import "./graph.css";
 import { onMessage, post, getPersisted, setPersisted } from "../shared/vscodeApi";
 import type { AppState, RevisionDetail, UiPrefs } from "../../protocol/messages";
 import { render, showToast, type Handlers, type ViewState } from "./render";
-import { canvasSize, nodeSize, nodeXY } from "./metrics";
+import { canvasSize, edgePathD, nodeAnchor, nodeSize, nodeXY } from "./metrics";
 import { buildGraphSvg } from "./svgExport";
 import { attachDnd, type DndCallbacks } from "./dnd";
 import { attachContextMenu, closeContextMenu, isContextMenuOpen, type MenuHandlers } from "./contextMenu";
@@ -410,6 +410,59 @@ const menuHandlers: MenuHandlers = {
   },
 };
 
+/**
+ * Bug fix: live-updates just the `<path>` elements touching `nodeId` while it's being dragged
+ * (dnd.ts's `onDragMove`, rAF-throttled there) — WITHOUT re-rendering, which would tear down the
+ * card currently holding pointer capture (see `dragActive`'s doc comment). Recomputes each
+ * affected edge's `d` from the SAME pure metrics.ts math render.ts's `computePositions`/
+ * `buildEdgesSvg` use, with `nodeId`'s endpoint alone nudged by `(dxCanvas, dyCanvas)` (already
+ * zoom-divided by dnd.ts — see its module doc comment) via `nodeAnchor`'s override params; the
+ * OTHER endpoint of each edge is left at its plain, unmodified position. Deliberately reads
+ * `data-from`/`data-to` (already set by render.ts's `buildEdgesSvg` for hover.ts) rather than
+ * measuring the DOM — `getBoundingClientRect()` is zoom-scaled and would need an inverse
+ * conversion for no benefit over just reusing the same pixel math the SVG was built from. A no-op
+ * if there's no current state/viewport (defensive — shouldn't happen while a drag is live) or no
+ * edge touches this node (a lone/root/leaf-only drag).
+ */
+function updateDraggedEdges(nodeId: string, dxCanvas: number, dyCanvas: number): void {
+  if (!store.state) return;
+  const svg = document.querySelector<SVGSVGElement>(".alx-canvas-viewport .alx-edges");
+  if (!svg) return;
+  const paths = svg.querySelectorAll<SVGPathElement>(
+    `path[data-from="${CSS.escape(nodeId)}"], path[data-to="${CSS.escape(nodeId)}"]`,
+  );
+  if (paths.length === 0) return;
+
+  const { layout, ui } = store.state;
+  const density = ui.density;
+  const nodeById = new Map(layout.nodes.map((n) => [n.id, n]));
+  for (const path of paths) {
+    const fromId = path.dataset.from;
+    const toId = path.dataset.to;
+    if (!fromId || !toId) continue;
+    const fromNode = nodeById.get(fromId);
+    const toNode = nodeById.get(toId);
+    if (!fromNode || !toNode) continue;
+    const fromAnchor = nodeAnchor(
+      fromNode,
+      ui,
+      layout.rowCount,
+      density,
+      fromId === nodeId ? dxCanvas : 0,
+      fromId === nodeId ? dyCanvas : 0,
+    );
+    const toAnchor = nodeAnchor(
+      toNode,
+      ui,
+      layout.rowCount,
+      density,
+      toId === nodeId ? dxCanvas : 0,
+      toId === nodeId ? dyCanvas : 0,
+    );
+    path.setAttribute("d", edgePathD(fromAnchor, toAnchor, ui.axis));
+  }
+}
+
 /** dnd.ts's hooks into this store — see the module doc comments on `dragActive`/`dropGuardActive`
  * above for why each exists. */
 const dndCallbacks: DndCallbacks = {
@@ -428,6 +481,9 @@ const dndCallbacks: DndCallbacks = {
     // kind.
     armDropGuard();
     post({ type: "repoint", ghostId, targetId });
+  },
+  onDragMove(id, dxCanvas, dyCanvas) {
+    updateDraggedEdges(id, dxCanvas, dyCanvas);
   },
   onDragActiveChange(active) {
     dragActive = active;

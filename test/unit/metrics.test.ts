@@ -11,6 +11,7 @@ import {
   cardH,
   edgePathD,
   laneGapH,
+  nodeAnchor,
   nodeSize,
   nodeXY,
   rowGap,
@@ -168,6 +169,43 @@ describe("metrics — canvasSize (horizontal axis)", () => {
     const size = canvasSize({ laneCount: 0, rowCount: 0 }, { axis: "horizontal" }, "comfortable");
     expect(size.w).toBe(PAD_X + 0 * H_ROW_GAP + CARD_W + 80);
     expect(size.h).toBe(PAD_Y + 0 * laneGapH("comfortable") + cardH("comfortable") + 60);
+  });
+});
+
+describe("metrics — nodeAnchor", () => {
+  it("with no override, matches nodeXY/nodeSize exactly (vertical axis)", () => {
+    const node = { lane: 1, row: 2, kind: "revision" as const };
+    const ui = { order: "newest-top" as const, axis: "vertical" as const };
+    const anchor = nodeAnchor(node, ui, 5, "comfortable");
+    const { x, y } = nodeXY(node, ui, 5, "comfortable");
+    const { w, h } = nodeSize(node, "comfortable");
+    expect(anchor).toEqual({ cx: x + w / 2, cy: y + h / 2, top: y, bottom: y + h, left: x, right: x + w });
+  });
+
+  it("overrideDx/overrideDy shift the anchor's whole box (drag-follow math)", () => {
+    const node = { lane: 0, row: 0, kind: "revision" as const };
+    const ui = { order: "newest-top" as const, axis: "horizontal" as const };
+    const base = nodeAnchor(node, ui, 5, "comfortable");
+    const dragged = nodeAnchor(node, ui, 5, "comfortable", 40, -15);
+    expect(dragged.left).toBe(base.left + 40);
+    expect(dragged.right).toBe(base.right + 40);
+    expect(dragged.top).toBe(base.top - 15);
+    expect(dragged.bottom).toBe(base.bottom - 15);
+    expect(dragged.cx).toBe(base.cx + 40);
+    expect(dragged.cy).toBe(base.cy - 15);
+  });
+
+  it("ghost/collapse kinds still use their own fixed nodeSize under an override", () => {
+    const ghost = nodeAnchor(
+      { lane: 0, row: 0, kind: "ghost" },
+      { order: "newest-top", axis: "vertical" },
+      5,
+      "comfortable",
+      10,
+      10,
+    );
+    expect(ghost.right - ghost.left).toBe(GHOST_W);
+    expect(ghost.bottom - ghost.top).toBe(GHOST_H);
   });
 });
 

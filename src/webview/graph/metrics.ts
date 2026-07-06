@@ -118,6 +118,32 @@ export interface EdgeAnchor {
 }
 
 /**
+ * `EdgeAnchor` for one node, with its top-left position optionally nudged by `(overrideDx,
+ * overrideDy)` — the live edge-follow math (dnd.ts's `onDragMove` -> main.ts) needs this for
+ * exactly one endpoint (the node currently being dragged) per recompute, while the OTHER endpoint
+ * stays at its plain, unmodified position (defaults 0/0 cover that case without a separate code
+ * path). Deliberately pure/DOM-free — same reasoning as every other function in this file: no
+ * `getBoundingClientRect()` (zoom-scaled, and a card's rect briefly lags a `transform` write
+ * anyway), just the same `nodeXY`/`nodeSize` math `render.ts`'s `computePositions` already runs,
+ * so a live-dragged edge can never visually disagree with the settled layout it's a live preview
+ * of.
+ */
+export function nodeAnchor(
+  node: Pick<LayoutNode, "lane" | "row" | "kind">,
+  ui: Pick<UiPrefs, "order" | "axis">,
+  rowCount: number,
+  density: Density,
+  overrideDx = 0,
+  overrideDy = 0,
+): EdgeAnchor {
+  const { x, y } = nodeXY(node, ui, rowCount, density);
+  const { w, h } = nodeSize(node, density);
+  const left = x + overrideDx;
+  const top = y + overrideDy;
+  return { cx: left + w / 2, cy: top + h / 2, top, bottom: top + h, left, right: left + w };
+}
+
+/**
  * SVG `<path>` `d` string for one parent→child edge — shared by the live DOM canvas (render.ts's
  * `buildEdgesSvg`) and the standalone SVG export (svgExport.ts) so the two renderers can never draw
  * visibly different curves for the same layout.

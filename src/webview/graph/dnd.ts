@@ -52,6 +52,23 @@ export interface DndCallbacks {
    * main.ts uses this to defer/flush incoming "state" re-renders while a card holds pointer
    * capture. */
   onDragActiveChange(active: boolean): void;
+  /**
+   * Live edge-follow (bug fix): called at most once per animation frame while a card is being
+   * dragged (rAF-throttled below — a raw pointermove firehose recomputing SVG `d` strings on every
+   * event would be too hot), and once more, synchronously with `(id, 0, 0)`, the instant the drag
+   * ends (see `endDrag`) so the edges snap back in lockstep with the origin wrapper's own transform
+   * reset rather than staying visually drifted until the next full re-render.
+   *
+   * `id` is the DRAGGED WRAPPER's own node id (`card.dataset.nodeId` — same value render.ts sets on
+   * both the card and its `.alx-node` wrapper), NOT necessarily `originId`: dragging a broken
+   * NON-head revision card is a repoint drag whose `originId` is the missing PARENT's ghost id (see
+   * the module doc comment), but the wrapper that's visually moving — and whose edges need to
+   * follow — is the child revision's own wrapper. `dxCanvas`/`dyCanvas` are the same zoom-divided
+   * deltas already applied to that wrapper's CSS transform (see the module doc comment's Task 19
+   * zoom note), so main.ts can feed them straight into metrics.ts's `nodeAnchor` override without
+   * any further conversion.
+   */
+  onDragMove(id: string, dxCanvas: number, dyCanvas: number): void;
 }
 
 const DRAG_THRESHOLD_PX = 4;
@@ -65,6 +82,13 @@ interface DragState {
    * see the module doc comment on `[data-repoint-ghost-id]`. Either way, this is the first
    * argument of the eventual `onMergeDrop`/`onRepointDrop` call. */
   originId: string;
+  /** The dragged WRAPPER's own node id (`card.dataset.nodeId`) — equal to `originId` for merge and
+   * for a repoint drag started on the ghost card itself, but DIFFERENT from `originId` when
+   * repoint-dragging a broken non-head revision card (there, `originId` names the missing PARENT's
+   * ghost id, while this is the child revision's own id — see `onDragMove`'s doc comment on
+   * `DndCallbacks`). Always the correct id to pass to `onDragMove`, since that's what render.ts's
+   * edge `data-from`/`data-to` attributes and metrics.ts's layout lookups key on. */
+  nodeId: string;
   originCard: HTMLElement;
   originWrapper: HTMLElement;
   originZIndex: string;
@@ -93,6 +117,26 @@ export function attachDnd(viewport: HTMLElement, state: AppState, zoom: number, 
   let drag: DragState | null = null;
   let suppressNextClick = false;
 
+  // Live edge-follow throttling (see DndCallbacks.onDragMove's doc comment): pointermove fires far
+  // more often than a frame renders, so only the LATEST delta per animation frame is ever forwarded
+  // to the (potentially non-trivial: DOM query + metrics recompute + setAttribute per affected path)
+  // callback. `dragMoveRaf` is cancelled in `endDrag` so a frame that was already scheduled right
+  // before the drag ended can never fire late with a now-stale `drag` (or none at all).
+  let dragMoveRaf: number | null = null;
+  let dragMoveDx = 0;
+  let dragMoveDy = 0;
+
+  function scheduleDragMove(dxCanvas: number, dyCanvas: number): void {
+    dragMoveDx = dxCanvas;
+    dragMoveDy = dyCanvas;
+    if (dragMoveRaf !== null) return;
+    dragMoveRaf = requestAnimationFrame(() => {
+      dragMoveRaf = null;
+      if (!drag || !drag.dragging) return;
+      cb.onDragMove(drag.nodeId, dragMoveDx, dragMoveDy);
+    });
+  }
+
   function headCards(): HTMLElement[] {
     return Array.from(viewport.querySelectorAll<HTMLElement>('[data-head="true"]')).filter((el) => {
       const id = el.dataset.nodeId;
@@ -114,9 +158,20 @@ export function attachDnd(viewport: HTMLElement, state: AppState, zoom: number, 
   function endDrag(revert: boolean): void {
     if (!drag) return;
     const wasDragging = drag.dragging;
+    if (dragMoveRaf !== null) {
+      cancelAnimationFrame(dragMoveRaf);
+      dragMoveRaf = null;
+    }
     if (revert) {
       drag.originWrapper.style.transform = "";
       drag.originWrapper.style.zIndex = drag.originZIndex;
+      // Bug fix: snap the edges back to the unmodified layout in lockstep with the transform reset
+      // above — a (0, 0) delta recomputes each affected path from `drag.nodeId`'s plain,
+      // unoverridden position, exactly matching what render.ts would draw. Covers every exit path
+      // (drop, Escape/cancel revert) since `revert` is always true at every current call site; only
+      // guarded on `wasDragging` because a click that never crossed the drag threshold never called
+      // `onDragMove` in the first place, so there's nothing to restore.
+      if (wasDragging) cb.onDragMove(drag.nodeId, 0, 0);
     }
     drag.originCard.classList.remove("alx-card--dragging");
     if (drag.kind === "merge") {
@@ -160,6 +215,7 @@ export function attachDnd(viewport: HTMLElement, state: AppState, zoom: number, 
 
     let kind: DragKind;
     let originId: string;
+    let nodeId: string;
     // A head wins even if it's also broken (render.ts never sets data-repoint-ghost-id on a head
     // card) — so checking data-head first is enough to keep the two kinds mutually exclusive.
     if (card.dataset.head === "true") {
@@ -167,17 +223,21 @@ export function attachDnd(viewport: HTMLElement, state: AppState, zoom: number, 
       if (!id || !headIds.has(id)) return;
       kind = "merge";
       originId = id;
+      nodeId = id;
     } else {
       const ghostId = card.dataset.repointGhostId;
-      if (!ghostId) return;
+      const cardNodeId = card.dataset.nodeId;
+      if (!ghostId || !cardNodeId) return;
       kind = "repoint";
       originId = ghostId;
+      nodeId = cardNodeId;
     }
 
     drag = {
       pointerId: e.pointerId,
       kind,
       originId,
+      nodeId,
       originCard: card,
       originWrapper: wrapper,
       originZIndex: wrapper.style.zIndex,
@@ -217,7 +277,13 @@ export function attachDnd(viewport: HTMLElement, state: AppState, zoom: number, 
     e.preventDefault();
     // Divide by zoom: see the module doc comment's Task 19 note — dx/dy are raw client-pixel
     // deltas, but the wrapper sits inside a `transform: scale(zoom)` ancestor.
-    drag.originWrapper.style.transform = `translate(${dx / zoom}px, ${dy / zoom}px)`;
+    const dxCanvas = dx / zoom;
+    const dyCanvas = dy / zoom;
+    drag.originWrapper.style.transform = `translate(${dxCanvas}px, ${dyCanvas}px)`;
+    // Bug fix: keep the edges attached to this node tracking the card live, rAF-throttled (see
+    // `scheduleDragMove`'s doc comment) rather than staying frozen at the pre-drag position until
+    // the drag ends.
+    scheduleDragMove(dxCanvas, dyCanvas);
 
     const candidates = drag.kind === "merge" ? headCards() : drag.repointTargets;
     let hit: HTMLElement | null = null;
