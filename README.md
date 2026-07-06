@@ -37,12 +37,18 @@ graph.
   Python environment is required just to view it.
 - To run actions that shell out to the real `alembic` CLI (upgrade, downgrade, merge, preview SQL,
   new revision, and the "current revision" badge), you need a Python environment with `alembic`
-  installed, reachable one of three ways (in order of precedence):
+  installed, reachable one of four ways (in order of precedence):
   1. `alembicGraph.alembicCommand`, if set (e.g. `poetry run alembic`).
   2. The [ms-python](https://marketplace.visualstudio.com/items?itemName=ms-python.python)
      extension's active interpreter (`<python> -m alembic`) — installed, but optional; if it's
      absent this step is simply skipped.
-  3. A bare `alembic` on `PATH`.
+  3. A project-local `.venv`/`venv`, auto-discovered under the project's `alembic.ini` directory
+     and then the first workspace folder — this covers the common case of `alembic` installed in
+     the project's own virtualenv without it ever being selected as the active Python interpreter.
+  4. A bare `alembic` on `PATH`.
+
+  If none of these resolve to a real `alembic`, the error names exactly what was tried and how to
+  fix it (pick an interpreter, install alembic, or set `alembicGraph.alembicCommand`).
 - Git, on `PATH`, for author enrichment (optional — cards just show no author if it's missing).
 
 ## Extension Settings

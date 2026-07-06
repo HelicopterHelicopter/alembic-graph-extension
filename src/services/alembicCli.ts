@@ -10,6 +10,8 @@
  * interpreter path by pythonEnv.ts + extension.ts.
  */
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import * as path from "node:path";
 
 export interface AlembicCommand {
   argv0: string;
@@ -17,11 +19,72 @@ export interface AlembicCommand {
 }
 
 /**
+ * Searches `[iniDir, workspaceRoot]` (deduped, in that order — iniDir wins when both have an env)
+ * for a project-local Python environment holding alembic: for each of `[".venv", "venv"]` (`.venv`
+ * wins over `venv` within the same base), a direct `<envDir>/{bin|Scripts}/alembic[.exe]` binary is
+ * preferred over falling back to `<envDir>/{bin|Scripts}/python[.exe]` run as `python -m alembic`.
+ * This is the tier `resolveCommand` falls back to between "ms-python's active interpreter" and "a
+ * bare `alembic` on PATH" — most real projects have alembic installed in a project-local venv that
+ * was never explicitly selected as the active Python interpreter.
+ *
+ * `platform`/`exists` are injectable purely for testing the win32 branch from any host OS; both
+ * default to the real `process.platform` / `fs.existsSync`. Never throws — an `exists` that throws
+ * (e.g. a permission error) is treated as "not found" for that candidate, same as `existsSync`
+ * itself never throwing in practice.
+ */
+export function findProjectEnvCommand(opts: {
+  iniDir: string;
+  workspaceRoot: string | null;
+  platform?: NodeJS.Platform;
+  exists?: (p: string) => boolean;
+}): AlembicCommand | null {
+  const platform = opts.platform ?? process.platform;
+  const rawExists = opts.exists ?? existsSync;
+  const exists = (p: string): boolean => {
+    try {
+      return rawExists(p);
+    } catch {
+      return false;
+    }
+  };
+
+  const bases = opts.workspaceRoot !== null && opts.workspaceRoot !== opts.iniDir
+    ? [opts.iniDir, opts.workspaceRoot]
+    : [opts.iniDir];
+
+  const binDirName = platform === "win32" ? "Scripts" : "bin";
+  const exeSuffix = platform === "win32" ? ".exe" : "";
+
+  for (const base of bases) {
+    for (const envDir of [".venv", "venv"]) {
+      const envBinDir = path.join(base, envDir, binDirName);
+
+      const alembicPath = path.join(envBinDir, `alembic${exeSuffix}`);
+      if (exists(alembicPath)) return { argv0: alembicPath, prefixArgs: [] };
+
+      const pythonPath = path.join(envBinDir, `python${exeSuffix}`);
+      if (exists(pythonPath)) return { argv0: pythonPath, prefixArgs: ["-m", "alembic"] };
+    }
+  }
+
+  return null;
+}
+
+/**
  * Precedence: a non-empty override setting (whitespace-split: first token is argv0, the rest are
  * prefix args, e.g. `"poetry run alembic"` -> `poetry run alembic <args>`) beats a resolved
- * interpreter path (`<pythonPath> -m alembic <args>`), which beats a bare `alembic` on PATH.
+ * interpreter path (`<pythonPath> -m alembic <args>`), which beats a discoverable project-local
+ * venv (`findProjectEnvCommand`, only attempted when `iniDir` is supplied), which beats a bare
+ * `alembic` on PATH.
  */
-export function resolveCommand(opts: { override: string; pythonPath: string | null }): AlembicCommand {
+export function resolveCommand(opts: {
+  override: string;
+  pythonPath: string | null;
+  iniDir?: string;
+  workspaceRoot?: string | null;
+  platform?: NodeJS.Platform;
+  exists?: (p: string) => boolean;
+}): AlembicCommand {
   const trimmedOverride = opts.override.trim();
   if (trimmedOverride.length > 0) {
     const [argv0, ...prefixArgs] = trimmedOverride.split(/\s+/);
@@ -29,6 +92,15 @@ export function resolveCommand(opts: { override: string; pythonPath: string | nu
   }
   if (opts.pythonPath !== null) {
     return { argv0: opts.pythonPath, prefixArgs: ["-m", "alembic"] };
+  }
+  if (opts.iniDir !== undefined) {
+    const found = findProjectEnvCommand({
+      iniDir: opts.iniDir,
+      workspaceRoot: opts.workspaceRoot ?? null,
+      platform: opts.platform,
+      exists: opts.exists,
+    });
+    if (found !== null) return found;
   }
   return { argv0: "alembic", prefixArgs: [] };
 }
@@ -161,7 +233,21 @@ export class AlembicCli {
     if (result.ok) {
       this.log("  exit 0");
     } else {
+      // Log the raw spawn/exec error verbatim first (useful for diagnosing exactly what Node
+      // reported), THEN rewrite `result.error` in place if it's a spawn ENOENT — Node's own message
+      // ("spawn alembic ENOENT") is meaningless to a user who never typed that command themselves;
+      // this turns it into the actionable guidance actually surfaced by toasts (cliErrorText) and
+      // any other consumer of RunResult.error.
       this.log(`  ${result.error}`);
+      if (/spawn (.+) ENOENT/.test(result.error)) {
+        result = {
+          ...result,
+          error:
+            `alembic not found (tried "${command.argv0}"). Install alembic in your project's ` +
+            `environment, select a Python interpreter with alembic (ms-python), or set the ` +
+            `alembicGraph.alembicCommand setting.`,
+        };
+      }
     }
     if (result.stderr.trim().length > 0) this.log(result.stderr.trimEnd());
 

@@ -76,18 +76,23 @@ export function getCli(): AlembicCli | undefined {
 }
 
 /**
- * Resolves the alembic command to run, fresh on every call (both the override setting and the
- * active Python interpreter can change between calls — this must never be cached). Precedence:
- * a non-empty `alembicGraph.alembicCommand` override wins outright; otherwise fall back to the
- * ms-python extension's active interpreter (`python -m alembic`), then a bare `alembic` on PATH.
+ * Resolves the alembic command to run, fresh on every call (the override setting, the active
+ * Python interpreter, and the project-local venv on disk can all change between calls — this must
+ * never be cached). Precedence: a non-empty `alembicGraph.alembicCommand` override wins outright;
+ * otherwise fall back to the ms-python extension's active interpreter (`python -m alembic`); then a
+ * project-local `.venv`/`venv` discovered under `iniDir` or the first workspace folder
+ * (`findProjectEnvCommand` — the common case where alembic is installed in the project but was
+ * never explicitly selected as the active interpreter); then a bare `alembic` on PATH. Cheap even
+ * though it's called fresh per run: at most a handful of `existsSync` calls.
  */
-async function resolveAlembicCommand() {
+async function resolveAlembicCommand(iniDir: string) {
   const override = vscode.workspace.getConfiguration("alembicGraph").get<string>("alembicCommand", "");
   if (override.trim().length > 0) {
-    return resolveCommand({ override, pythonPath: null });
+    return resolveCommand({ override, pythonPath: null, iniDir });
   }
   const pythonPath = await getActivePythonPath();
-  return resolveCommand({ override: "", pythonPath });
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
+  return resolveCommand({ override: "", pythonPath, iniDir, workspaceRoot });
 }
 
 /** Builds the AlembicCli for `project`, rooted at its alembic.ini directory (the cwd alembic
@@ -95,7 +100,7 @@ async function resolveAlembicCommand() {
 function buildAlembicCli(project: AlembicProject): AlembicCli {
   return new AlembicCli({
     cwd: project.iniDir,
-    resolve: resolveAlembicCommand,
+    resolve: () => resolveAlembicCommand(project.iniDir),
     log: (line) => outputChannel.appendLine(line),
   });
 }

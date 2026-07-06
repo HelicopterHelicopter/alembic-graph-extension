@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterAll } from "vitest";
-import { existsSync, rmSync, mkdtempSync, cpSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { describe, it, expect, vi, afterAll, afterEach } from "vitest";
+import { existsSync, rmSync, mkdtempSync, mkdirSync, cpSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,7 @@ import {
   AlembicCli,
   parseCurrentOutput,
   resolveCommand,
+  findProjectEnvCommand,
   type ExecFn,
   type RunResult,
 } from "../../src/services/alembicCli";
@@ -57,6 +58,179 @@ describe("resolveCommand", () => {
   });
 
   it("1c. neither -> bare alembic on PATH", () => {
+    expect(resolveCommand({ override: "", pythonPath: null })).toEqual({ argv0: "alembic", prefixArgs: [] });
+  });
+});
+
+describe("findProjectEnvCommand", () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeDir(...segments: string[]): string {
+    const p = path.join(tmpDir, ...segments);
+    mkdirSync(p, { recursive: true });
+    return p;
+  }
+
+  it("8a. venv alembic binary found at iniDir -> direct alembic form", () => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-findenv-"));
+    const iniDir = makeDir("proj");
+    const binDir = makeDir("proj", ".venv", "bin");
+    writeFileSync(path.join(binDir, "alembic"), "");
+
+    expect(findProjectEnvCommand({ iniDir, workspaceRoot: null })).toEqual({
+      argv0: path.join(binDir, "alembic"),
+      prefixArgs: [],
+    });
+  });
+
+  it("8b. python-only venv -> -m alembic form", () => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-findenv-"));
+    const iniDir = makeDir("proj");
+    const binDir = makeDir("proj", ".venv", "bin");
+    writeFileSync(path.join(binDir, "python"), "");
+
+    expect(findProjectEnvCommand({ iniDir, workspaceRoot: null })).toEqual({
+      argv0: path.join(binDir, "python"),
+      prefixArgs: ["-m", "alembic"],
+    });
+  });
+
+  it("8c. iniDir env beats workspaceRoot env", () => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-findenv-"));
+    const iniDir = makeDir("proj");
+    const workspaceRoot = makeDir("workspace");
+    writeFileSync(path.join(makeDir("proj", ".venv", "bin"), "alembic"), "");
+    writeFileSync(path.join(makeDir("workspace", ".venv", "bin"), "alembic"), "");
+
+    expect(findProjectEnvCommand({ iniDir, workspaceRoot })).toEqual({
+      argv0: path.join(iniDir, ".venv", "bin", "alembic"),
+      prefixArgs: [],
+    });
+  });
+
+  it("8d. .venv beats venv within the same base", () => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-findenv-"));
+    const iniDir = makeDir("proj");
+    writeFileSync(path.join(makeDir("proj", ".venv", "bin"), "alembic"), "");
+    writeFileSync(path.join(makeDir("proj", "venv", "bin"), "alembic"), "");
+
+    expect(findProjectEnvCommand({ iniDir, workspaceRoot: null })).toEqual({
+      argv0: path.join(iniDir, ".venv", "bin", "alembic"),
+      prefixArgs: [],
+    });
+  });
+
+  it("8e. nothing found (no .venv/venv at all) -> null", () => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-findenv-"));
+    const iniDir = makeDir("proj");
+
+    expect(findProjectEnvCommand({ iniDir, workspaceRoot: null })).toBeNull();
+  });
+
+  it("8f. workspaceRoot venv used when iniDir has none", () => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-findenv-"));
+    const iniDir = makeDir("proj");
+    const workspaceRoot = makeDir("workspace");
+    writeFileSync(path.join(makeDir("workspace", ".venv", "bin"), "python"), "");
+
+    expect(findProjectEnvCommand({ iniDir, workspaceRoot })).toEqual({
+      argv0: path.join(workspaceRoot, ".venv", "bin", "python"),
+      prefixArgs: ["-m", "alembic"],
+    });
+  });
+
+  it("8g. win32 branch (injected platform + exists): Scripts/alembic.exe found", () => {
+    const iniDir = "C:\\proj";
+    const alembicExe = path.join(iniDir, ".venv", "Scripts", "alembic.exe");
+    const exists = (p: string) => p === alembicExe;
+
+    expect(findProjectEnvCommand({ iniDir, workspaceRoot: null, platform: "win32", exists })).toEqual({
+      argv0: alembicExe,
+      prefixArgs: [],
+    });
+  });
+
+  it("8h. win32 branch (injected platform + exists): Scripts/python.exe found when no alembic.exe", () => {
+    const iniDir = "C:\\proj";
+    const pythonExe = path.join(iniDir, ".venv", "Scripts", "python.exe");
+    const exists = (p: string) => p === pythonExe;
+
+    expect(findProjectEnvCommand({ iniDir, workspaceRoot: null, platform: "win32", exists })).toEqual({
+      argv0: pythonExe,
+      prefixArgs: ["-m", "alembic"],
+    });
+  });
+
+  it("8i. never throws even if exists() throws", () => {
+    const exists = () => {
+      throw new Error("boom");
+    };
+    expect(() => findProjectEnvCommand({ iniDir: "/nope", workspaceRoot: null, exists: exists as unknown as (p: string) => boolean })).not.toThrow();
+  });
+});
+
+describe("resolveCommand + project venv discovery precedence", () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeDir(...segments: string[]): string {
+    const p = path.join(tmpDir, ...segments);
+    mkdirSync(p, { recursive: true });
+    return p;
+  }
+
+  it("9a. ms-python pythonPath still wins over a discoverable project venv", () => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-resolveenv-"));
+    const iniDir = makeDir("proj");
+    writeFileSync(path.join(makeDir("proj", ".venv", "bin"), "alembic"), "");
+
+    expect(resolveCommand({ override: "", pythonPath: "/venv/bin/python", iniDir, workspaceRoot: null })).toEqual({
+      argv0: "/venv/bin/python",
+      prefixArgs: ["-m", "alembic"],
+    });
+  });
+
+  it("9b. pythonPath null + discoverable venv -> venv command", () => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-resolveenv-"));
+    const iniDir = makeDir("proj");
+    const binDir = makeDir("proj", ".venv", "bin");
+    writeFileSync(path.join(binDir, "alembic"), "");
+
+    expect(resolveCommand({ override: "", pythonPath: null, iniDir, workspaceRoot: null })).toEqual({
+      argv0: path.join(binDir, "alembic"),
+      prefixArgs: [],
+    });
+  });
+
+  it("9c. override still wins outright even with a discoverable venv", () => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-resolveenv-"));
+    const iniDir = makeDir("proj");
+    writeFileSync(path.join(makeDir("proj", ".venv", "bin"), "alembic"), "");
+
+    expect(resolveCommand({ override: "poetry run alembic", pythonPath: null, iniDir, workspaceRoot: null })).toEqual({
+      argv0: "poetry",
+      prefixArgs: ["run", "alembic"],
+    });
+  });
+
+  it("9d. no pythonPath, no discoverable venv -> falls through to bare alembic on PATH", () => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-resolveenv-"));
+    const iniDir = makeDir("proj"); // no .venv/venv underneath
+
+    expect(resolveCommand({ override: "", pythonPath: null, iniDir, workspaceRoot: null })).toEqual({
+      argv0: "alembic",
+      prefixArgs: [],
+    });
+  });
+
+  it("9e. omitting iniDir entirely preserves the original (pre-discovery) behavior", () => {
     expect(resolveCommand({ override: "", pythonPath: null })).toEqual({ argv0: "alembic", prefixArgs: [] });
   });
 });
@@ -119,7 +293,7 @@ describe("AlembicCli.run (real default exec, node -e scripts)", () => {
     if (!result.ok) expect(result.error).toContain("timed out after 200ms");
   });
 
-  it("3d. a missing binary resolves ok:false (never throws/rejects)", async () => {
+  it("3d. a missing binary resolves ok:false (never throws/rejects), rewritten to an actionable message", async () => {
     const cli = new AlembicCli({
       cwd: REPO_ROOT,
       resolve: async () => ({ argv0: "this-binary-does-not-exist-xyz", prefixArgs: [] }),
@@ -127,7 +301,10 @@ describe("AlembicCli.run (real default exec, node -e scripts)", () => {
     });
     const result = await cli.run(["current"]);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("ENOENT");
+    if (!result.ok) {
+      expect(result.error).toContain("alembic not found");
+      expect(result.error).toContain('tried "this-binary-does-not-exist-xyz"');
+    }
   });
 
   it("4. mutex: two concurrent run() calls serialize (second starts after first ends) in FIFO order", async () => {
@@ -201,6 +378,60 @@ describe("AlembicCli.current (injected exec)", () => {
   it("5b. ok:false -> dbReachable:false (no currentIds leak through)", async () => {
     const { cli } = makeCli({ ok: false, error: "db is down", stdout: "3aebf1885b7d (head)\n", stderr: "" });
     await expect(cli.current()).resolves.toEqual({ dbReachable: false });
+  });
+});
+
+describe("AlembicCli.run ENOENT rewrite (actionable message)", () => {
+  it("10a. a spawn ENOENT error is rewritten to name the resolved argv0 and hint at the fixes", async () => {
+    const exec = vi.fn<ExecFn>(async () => ({ ok: false, error: "spawn alembic ENOENT", stdout: "", stderr: "" }));
+    const cli = new AlembicCli({
+      cwd: "/proj",
+      resolve: async () => ({ argv0: "alembic", prefixArgs: [] }),
+      log: () => {},
+      exec,
+    });
+
+    const result = await cli.run(["current"]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("alembic not found");
+      expect(result.error).toContain('tried "alembic"');
+      expect(result.error).toContain("alembicGraph.alembicCommand");
+      expect(result.error).toContain("ms-python");
+    }
+  });
+
+  it("10b. the original spawn error line is still logged to the output channel before the rewrite", async () => {
+    const log = vi.fn();
+    const exec = vi.fn<ExecFn>(async () => ({
+      ok: false,
+      error: "spawn /venv/bin/alembic ENOENT",
+      stdout: "",
+      stderr: "",
+    }));
+    const cli = new AlembicCli({
+      cwd: "/proj",
+      resolve: async () => ({ argv0: "/venv/bin/alembic", prefixArgs: [] }),
+      log,
+      exec,
+    });
+
+    const result = await cli.run(["current"]);
+    expect(log).toHaveBeenCalledWith("  spawn /venv/bin/alembic ENOENT");
+    if (!result.ok) expect(result.error).toContain('tried "/venv/bin/alembic"');
+  });
+
+  it("10c. non-ENOENT errors pass through unchanged", async () => {
+    const exec = vi.fn<ExecFn>(async () => ({ ok: false, error: "db is down", stdout: "", stderr: "" }));
+    const cli = new AlembicCli({
+      cwd: "/proj",
+      resolve: async () => ({ argv0: "alembic", prefixArgs: [] }),
+      log: () => {},
+      exec,
+    });
+
+    const result = await cli.run(["current"]);
+    if (!result.ok) expect(result.error).toBe("db is down");
   });
 });
 
@@ -522,6 +753,25 @@ describe.skipIf(!existsSync(VENV_PYTHON))("AlembicCli real-fixture integration (
       // Offline proof: sqlite auto-creates its file on ANY real connection (6b relies on that),
       // so the file still being absent means --sql never opened one.
       expect(existsSync(dbPath)).toBe(false);
+    }, 30000);
+  });
+
+  describe("6h. findProjectEnvCommand real integration (repo's own .venv)", () => {
+    // fixtures/healthy-project has no .venv/venv of its own, so this proves the workspaceRoot tier
+    // (the repo root, whose real .venv has alembic installed) is what discovery falls back to —
+    // and that the discovered command actually runs `alembic heads` successfully end to end.
+    it("6h. discovers a working alembic command against the repo root and runs heads successfully", async () => {
+      const found = findProjectEnvCommand({ iniDir: HEALTHY_PROJECT, workspaceRoot: REPO_ROOT });
+      expect(found).not.toBeNull();
+      expect(found?.argv0.startsWith(path.join(REPO_ROOT, ".venv"))).toBe(true);
+
+      const cli = new AlembicCli({ cwd: HEALTHY_PROJECT, resolve: async () => found!, log: () => {} });
+      const result = await cli.run(["heads"]);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.stdout).toContain("3aebf1885b7d");
+        expect(result.stdout).toContain("4bfc02996c8e");
+      }
     }, 30000);
   });
 });
