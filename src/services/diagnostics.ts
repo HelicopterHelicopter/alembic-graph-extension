@@ -24,7 +24,7 @@ export function createDiagnostics(service: MigrationService): vscode.Disposable 
     const state = service.getState();
     if (state === null) return;
 
-    const byFile = buildFileDiagnostics(state.problems);
+    const byFile = buildFileDiagnostics(state.problems, state.ghostBlame);
     for (const [filePath, entries] of byFile) {
       const diagnostics = entries.map(({ line, message }) => {
         const diagnostic = new vscode.Diagnostic(

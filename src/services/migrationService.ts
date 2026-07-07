@@ -17,7 +17,7 @@ import { DEFAULT_LANE_COLOR_A, DEFAULT_LANE_COLOR_B, isValidHex, rotateHue } fro
 import { layoutGraph, type LayoutOptions } from "../core/layout";
 import { extractFunctionBody, parseRevisionSource } from "../core/parser";
 import type { GraphLayout, MigrationGraph } from "../core/types";
-import type { AppState, RevisionDetail, UiPrefs } from "../protocol/messages";
+import type { AppState, GhostBlame, RevisionDetail, UiPrefs } from "../protocol/messages";
 
 export type RepointPlan =
   | { ok: true; edits: { revisionId: string; filePath: string }[] }
@@ -44,6 +44,13 @@ export interface MigrationServiceDeps {
    * rejection anyway, same treatment as `fetchCurrent`.
    */
   fetchAuthors?(filePaths: string[]): Promise<Map<string, string>>;
+  /**
+   * Optional adapter over a git ghost-blame provider (Task B1's gitDeletion.ts
+   * `GhostBlameProvider.lookup`). Absent in tests/deps that don't care about it (`state.ghostBlame`
+   * stays `{}` forever). Never expected to throw (the provider's own golden rule) but refresh()
+   * guards against a rejection anyway, same treatment as `fetchCurrent`/`fetchAuthors`.
+   */
+  fetchGhostBlame?(requests: { missingId: string; childFilePath: string }[]): Promise<Record<string, GhostBlame | null>>;
 }
 
 const DEBOUNCE_MS = 300;
@@ -87,6 +94,16 @@ export class MigrationService {
    * is free — see gitAuthor.ts's own cache); a file that disappears from the graph simply stops
    * matching any node, harmlessly. */
   private authorsByPath: Map<string, string> = new Map();
+
+  /** Last confirmed git ghost-blame batch (Task B1), keyed by missing revision id — populated by
+   * `applyGhostBlame` once `deps.fetchGhostBlame` resolves, and merged (not replaced) on every
+   * subsequent resolve so a later scan's re-fire never wipes out a ghost id it didn't happen to
+   * re-resolve. Persists across scans on purpose, same rationale as `authorsByPath`: a repeat
+   * lookup for an already-known id is free (see gitDeletion.ts's own per-id cache), and a ghost
+   * that disappears from the graph (repointed/restored) simply stops matching any UI ghost card,
+   * harmlessly. Not layout data — unlike authors, this never triggers a re-layout; it's a plain
+   * top-level `AppState.ghostBlame` field the webview reads alongside the layout. */
+  private ghostBlameById: Record<string, GhostBlame | null> = {};
 
   /** Set once by `dispose()`. Task 21 made `dispose()` reachable mid-session (a project switch
    * disposes the previous project's service while it may still be mid-`refresh()`), whereas
@@ -180,6 +197,7 @@ export class MigrationService {
         },
         config: { showSqlPreview: config.showSqlPreview },
         ui,
+        ghostBlame: this.ghostBlameById,
       };
 
       this.cachedGraph = graph;
@@ -223,6 +241,24 @@ export class MigrationService {
             // The gitAuthor provider's own golden rule means this never actually rejects, but
             // degrade the same as any other best-effort enrichment if a custom deps impl does.
             this.deps.log(`error fetching git authors: ${err instanceof Error ? err.message : String(err)}`);
+          });
+      }
+
+      // Phase 2c: async ghost-blame enrichment (Task B1), same NOT-awaited/generation-guarded
+      // treatment as phases 2/2b above — the (multi-git-call) blame search must never block
+      // refresh(), and a response landing after a newer scan has started is discarded. Only fired
+      // when there's actually a ghost to blame: an empty `graph.ghosts` means nothing to look up
+      // and no reason to invoke the provider at all (mirrors fetchCurrent/fetchAuthors always
+      // firing unconditionally, but this one has a real "nothing to do" case they don't).
+      if (this.deps.fetchGhostBlame && graph.ghosts.length > 0) {
+        const requests = graph.ghosts.map((g) => ({ missingId: g.id, childFilePath: graph.nodes[g.childIds[0]].filePath }));
+        this.deps
+          .fetchGhostBlame(requests)
+          .then((result) => this.applyGhostBlame(myGeneration, result))
+          .catch((err) => {
+            // The gitDeletion provider's own golden rule means this never actually rejects, but
+            // degrade the same as any other best-effort enrichment if a custom deps impl does.
+            this.deps.log(`error fetching ghost blame: ${err instanceof Error ? err.message : String(err)}`);
           });
       }
     } catch (err) {
@@ -275,6 +311,22 @@ export class MigrationService {
     this.authorsByPath = result;
     const nodes = this.applyAuthorsToNodes(this.state.layout.nodes);
     this.state = { ...this.state, layout: { ...this.state.layout, nodes } };
+    this.emit(this.state);
+  }
+
+  /**
+   * Applies a resolved fetchGhostBlame() batch (Task B1) to whatever state is CURRENTLY live —
+   * merged into (not replacing) `ghostBlameById` so a scan that only re-resolves SOME ids (e.g. a
+   * newly-cached hit) never wipes out ids a previous batch already found. Discards silently if a
+   * newer scan has started, or there's no state yet to patch. Unlike `applyAuthors`, this never
+   * re-lays out anything — `ghostBlame` is a plain top-level `AppState` field, not layout data.
+   */
+  private applyGhostBlame(generation: number, result: Record<string, GhostBlame | null>): void {
+    if (generation !== this.scanGeneration) return; // stale: a newer scan has since started
+    if (this.state === null) return; // nothing to patch onto
+
+    this.ghostBlameById = { ...this.ghostBlameById, ...result };
+    this.state = { ...this.state, ghostBlame: this.ghostBlameById };
     this.emit(this.state);
   }
 

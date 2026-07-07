@@ -27,7 +27,38 @@ export interface AppState {
   counts: { revisions: number; heads: number; problems: number };
   config: { showSqlPreview: boolean };
   ui: UiPrefs;
+  /**
+   * Task B1: git blame for missing (`ghost`) down_revision ids, keyed by the missing id — `{}`
+   * until the async enrichment lands (see MigrationService's `fetchGhostBlame`), an absent key
+   * means "search pending", and `null` means "searched, nothing found". JSON-serializable and
+   * repo-relative-paths-only (no repo root — see gitDeletion.ts's own doc comment for why the
+   * repo root itself never crosses postMessage).
+   */
+  ghostBlame: Record<string, GhostBlame | null>;
 }
+
+/**
+ * Blame for one missing revision id (Task B1's `src/services/gitDeletion.ts`). `deleted-here`: a
+ * commit on THIS branch deleted the file that used to define the id — restore-able via `git
+ * restore --source=<commit>^`. `never-existed`: no such deletion was ever found (the classic
+ * cherry-pick/partial-sync case — a commit was cherry-picked here whose parent was never synced);
+ * `foundOn`, when present, points at a commit on some OTHER ref that still defines the id —
+ * import-able via `git restore --source=<foundOn.commit>`.
+ */
+export type GhostBlame =
+  | { kind: "deleted-here"; commit: string; shortCommit: string; author: string; date: string; subject: string; deletedFilePath: string }
+  | {
+      kind: "never-existed";
+      introducedCommit: string;
+      introducedShortCommit: string;
+      introducedAuthor: string;
+      introducedDate: string;
+      introducedSubject: string;
+      /** sha parsed from a `(cherry picked from commit ...)` trailer in the introducing commit's
+       * body, per the `-x` convention; null when the trailer is absent. */
+      cherryPickedFrom: string | null;
+      foundOn: { ref: string; commit: string; filePath: string } | null;
+    };
 
 export interface RevisionDetail {
   id: string; hash: string; message: string;

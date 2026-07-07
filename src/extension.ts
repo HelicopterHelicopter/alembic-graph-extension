@@ -4,6 +4,7 @@ import { MigrationService, type MigrationServiceDeps } from "./services/migratio
 import { AlembicCli, resolveCommand } from "./services/alembicCli";
 import { getActivePythonPath } from "./services/pythonEnv";
 import { createAuthorProvider, type AuthorProvider } from "./services/gitAuthor";
+import { createGhostBlameProvider, type GhostBlameProvider } from "./services/gitDeletion";
 import { DEFAULT_LANE_COLOR_A, DEFAULT_LANE_COLOR_B, isValidHex } from "./core/color";
 import { createStatusBar } from "./ui/statusBar";
 import { GraphPanelManager } from "./ui/graphPanel";
@@ -40,6 +41,10 @@ interface Pipeline {
   project: AlembicProject;
   service: MigrationService;
   cli: AlembicCli;
+  /** Task B1's git-deletion-blame provider for this project's versionsDir — reachable here (like
+   * `cli`) for Task B2's restore/import action, which needs `getRepoRoot()` alongside whatever
+   * blame `service.getState()!.ghostBlame` already carries. */
+  blameProvider: GhostBlameProvider;
   panelManager: GraphPanelManager;
   actionCtx: ActionContext;
   dispose(): void;
@@ -174,6 +179,7 @@ function buildDeps(
   project: AlembicProject,
   cli: AlembicCli,
   authorProvider: AuthorProvider,
+  blameProvider: GhostBlameProvider,
 ): MigrationServiceDeps {
   return {
     async listVersionFiles() {
@@ -220,6 +226,9 @@ function buildDeps(
     },
     async fetchAuthors(filePaths) {
       return authorProvider.lookup(filePaths);
+    },
+    async fetchGhostBlame(requests) {
+      return blameProvider.lookup(requests);
     },
   };
 }
@@ -272,7 +281,14 @@ function activateForProject(
   // handles the user-facing message and resetting `currentPipeline` to "no project".
   try {
     const cli = buildAlembicCli(project);
-    const deps = buildDeps(context, project, cli, authorProvider);
+    // Task B1: one GhostBlameProvider per pipeline (rebuilt fresh per project, unlike the
+    // extension-lifetime-shared authorProvider) — its per-id cache is scoped to THIS project's
+    // versionsDir, so it never needs to reconcile ids from whatever project was active before.
+    const blameProvider = createGhostBlameProvider({
+      versionsDir: project.versionsDir,
+      log: (line) => outputChannel.appendLine(line),
+    });
+    const deps = buildDeps(context, project, cli, authorProvider, blameProvider);
     const service = new MigrationService(deps);
 
     disposables.push(createStatusBar(service));
@@ -340,6 +356,7 @@ function activateForProject(
       project,
       service,
       cli,
+      blameProvider,
       panelManager,
       actionCtx,
       dispose() {
@@ -349,6 +366,12 @@ function activateForProject(
         } catch (err) {
           outputChannel.appendLine(`error disposing MigrationService: ${err instanceof Error ? err.message : String(err)}`);
         }
+        // Belt-and-suspenders (Task B1): this pipeline's blameProvider is about to be discarded
+        // along with everything else here, but clearing its cache explicitly — rather than relying
+        // solely on garbage collection — keeps its lifecycle symmetric with authorProvider's own
+        // clearCache(), and guards against any future refactor that makes blameProvider outlive
+        // this pipeline (e.g. hoisting it to extension-lifetime scope like authorProvider).
+        blameProvider.clearCache();
       },
     };
   } catch (err) {

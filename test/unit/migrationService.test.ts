@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { MigrationService, laneColorsFor, type MigrationServiceDeps } from "../../src/services/migrationService";
 import { extractFunctionBody } from "../../src/core/parser";
-import type { UiPrefs } from "../../src/protocol/messages";
+import type { GhostBlame, UiPrefs } from "../../src/protocol/messages";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BROKEN_VERSIONS_DIR = path.join(here, "../../fixtures/broken-project/alembic/versions");
@@ -889,6 +889,150 @@ describe("MigrationService git-author enrichment (fetchAuthors)", () => {
 
     const node = service.getState()!.layout.nodes.find((n) => n.id === ROOT_ID);
     expect(node!.author).toBe("Ada Lovelace");
+  });
+});
+
+type FetchGhostBlameResult = Record<string, GhostBlame | null>;
+
+describe("MigrationService ghost-blame enrichment (fetchGhostBlame, Task B1)", () => {
+  const GHOST_ID = "deadbeef0000";
+  const BROKEN_CHILD_FILE_PATH = path.join(BROKEN_VERSIONS_DIR, "5c0d13aa7d9f_add_audit_log.py");
+  const SAMPLE_BLAME: GhostBlame = {
+    kind: "deleted-here",
+    commit: "abc123def456abc123def456abc123def456abc1",
+    shortCommit: "abc123de",
+    author: "Ada Lovelace",
+    date: "2026-01-01T00:00:00Z",
+    subject: "delete old revision",
+    deletedFilePath: "versions/deadbeef0000_old.py",
+  };
+
+  it("a. a resolved fetchGhostBlame triggers a SECOND emit with ghostBlame populated; layout object reference unchanged", async () => {
+    const fetch = deferred<FetchGhostBlameResult>();
+    const fetchGhostBlame = vi.fn((): Promise<FetchGhostBlameResult> => fetch.promise);
+    const deps = makeDeps({ fetchGhostBlame });
+    const service = new MigrationService(deps);
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+
+    await service.refresh();
+
+    // Phase 1: static state, ghostBlame empty — NOT blocked on the git search (still unresolved).
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener.mock.calls[0][0].ghostBlame).toEqual({});
+    expect(fetchGhostBlame).toHaveBeenCalledWith([{ missingId: GHOST_ID, childFilePath: BROKEN_CHILD_FILE_PATH }]);
+    const layoutBefore = listener.mock.calls[0][0].layout;
+
+    fetch.resolve({ [GHOST_ID]: SAMPLE_BLAME });
+    await flushMicrotasks();
+
+    expect(listener).toHaveBeenCalledTimes(2);
+    const enriched = listener.mock.calls[1][0];
+    expect(enriched.ghostBlame).toEqual({ [GHOST_ID]: SAMPLE_BLAME });
+    expect(enriched.layout).toBe(layoutBefore); // no re-layout: ghostBlame isn't a layout concern
+    expect(service.getState()).toBe(enriched);
+  });
+
+  it("b. generation guard: a slow ghost-blame batch from refresh#1 resolving after refresh#2 started is DISCARDED", async () => {
+    const fetch1 = deferred<FetchGhostBlameResult>();
+    const fetch2 = deferred<FetchGhostBlameResult>();
+    const fetches = [fetch1.promise, fetch2.promise];
+    const fetchGhostBlame = vi.fn((): Promise<FetchGhostBlameResult> => fetches.shift()!);
+
+    const deps = makeDeps({ fetchGhostBlame });
+    const service = new MigrationService(deps);
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+
+    await service.refresh(); // scan #1; ghost-blame fetch #1 in flight
+    await service.refresh(); // scan #2; ghost-blame fetch #2 in flight
+    expect(fetchGhostBlame).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledTimes(2); // two phase-1 emits
+
+    // The STALE response from scan #1 arrives only now, after scan #2 has started -> discarded.
+    fetch1.resolve({ [GHOST_ID]: SAMPLE_BLAME });
+    await flushMicrotasks();
+    expect(listener).toHaveBeenCalledTimes(2); // no third emit with stale data
+    expect(service.getState()!.ghostBlame).toEqual({});
+
+    // Scan #2's own response lands normally.
+    fetch2.resolve({ [GHOST_ID]: SAMPLE_BLAME });
+    await flushMicrotasks();
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(service.getState()!.ghostBlame).toEqual({ [GHOST_ID]: SAMPLE_BLAME });
+  });
+
+  it("c. no ghosts in the graph -> fetchGhostBlame is never called", async () => {
+    // Dropping the one file that revises the fixture's missing deadbeef0000 parent removes the
+    // fixture's only ghost/broken link without introducing any new one.
+    const filesWithoutBrokenChild = loadBrokenFiles().filter((f) => !f.path.endsWith("5c0d13aa7d9f_add_audit_log.py"));
+    const fetchGhostBlame = vi.fn(async (): Promise<FetchGhostBlameResult> => ({}));
+    const deps = makeDeps({ listVersionFiles: vi.fn(async () => filesWithoutBrokenChild), fetchGhostBlame });
+    const service = new MigrationService(deps);
+
+    await service.refresh();
+    await flushMicrotasks();
+
+    expect(service.getState()!.problems).toEqual([]);
+    expect(fetchGhostBlame).not.toHaveBeenCalled();
+    expect(service.getState()!.ghostBlame).toEqual({});
+  });
+
+  it("d. fetchGhostBlame rejecting -> exactly ONE emit total, error logged, nothing thrown", async () => {
+    const deps = makeDeps({
+      fetchGhostBlame: vi.fn(async (): Promise<FetchGhostBlameResult> => {
+        throw new Error("git blame search exploded unexpectedly");
+      }),
+    });
+    const service = new MigrationService(deps);
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+
+    await service.refresh();
+    await flushMicrotasks();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("git blame search exploded unexpectedly"));
+    expect(service.getState()!.ghostBlame).toEqual({});
+  });
+
+  it("e. a ghost-blame batch resolved BEFORE a later author enrichment survives that enrichment's re-emit", async () => {
+    const ghostFetch = deferred<FetchGhostBlameResult>();
+    const authorFetch = deferred<FetchAuthorsResult>();
+    const deps = makeDeps({
+      fetchGhostBlame: vi.fn((): Promise<FetchGhostBlameResult> => ghostFetch.promise),
+      fetchAuthors: vi.fn((): Promise<FetchAuthorsResult> => authorFetch.promise),
+    });
+    const service = new MigrationService(deps);
+    await service.refresh();
+
+    ghostFetch.resolve({ [GHOST_ID]: SAMPLE_BLAME });
+    await flushMicrotasks();
+    expect(service.getState()!.ghostBlame).toEqual({ [GHOST_ID]: SAMPLE_BLAME });
+
+    authorFetch.resolve(new Map());
+    await flushMicrotasks();
+
+    // The author enrichment's own re-emit must not wipe out the ghostBlame already landed.
+    expect(service.getState()!.ghostBlame).toEqual({ [GHOST_ID]: SAMPLE_BLAME });
+  });
+
+  it("f. a repeat scan re-fires fetchGhostBlame but the previous batch's result is retained until the new one lands (no flicker)", async () => {
+    const deps = makeDeps({
+      fetchGhostBlame: vi.fn(async (): Promise<FetchGhostBlameResult> => ({ [GHOST_ID]: SAMPLE_BLAME })),
+    });
+    const service = new MigrationService(deps);
+    await service.refresh();
+    await flushMicrotasks();
+    expect(service.getState()!.ghostBlame).toEqual({ [GHOST_ID]: SAMPLE_BLAME });
+
+    await service.refresh(); // a second full scan (e.g. the file watcher firing again)
+    // Phase-1 of the second scan emits synchronously before its own fetchGhostBlame resolves —
+    // the already-known blame must still be visible, not reset to {} and flicker away.
+    expect(service.getState()!.ghostBlame).toEqual({ [GHOST_ID]: SAMPLE_BLAME });
+
+    await flushMicrotasks();
+    expect(service.getState()!.ghostBlame).toEqual({ [GHOST_ID]: SAMPLE_BLAME });
   });
 });
 
