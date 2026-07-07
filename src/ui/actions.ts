@@ -9,10 +9,14 @@
  * end in a toast/log line, never an unhandled rejection back to VS Code or the webview.
  */
 import * as vscode from "vscode";
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import * as path from "node:path";
 import { bothAreCurrentHeads, mergeSuccessText, cliErrorText, repointSuccessText } from "./actionHelpers";
 import { applyRepoint } from "../services/repoint";
 import type { AlembicCli, RunResult } from "../services/alembicCli";
 import type { MigrationService } from "../services/migrationService";
+import type { GhostBlameProvider } from "../services/gitDeletion";
 import type { HostToWebviewMessage } from "../protocol/messages";
 
 export interface ActionContext {
@@ -308,5 +312,123 @@ export async function newRevisionAction(ctx: ActionContext): Promise<void> {
     // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
     // is documented never-throw.
     ctx.log(`newRevisionAction: unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+const GIT_RESTORE_TIMEOUT_MS = 10000;
+
+/** `git restore` runner — mirrors gitDeletion.ts's own `defaultExec` shape exactly (never
+ * throws/rejects; every outcome, including a missing `git` binary, resolves a `RunResult`), kept
+ * local to this file rather than shared with gitDeletion.ts's `ExecFn`: that type is scoped to
+ * gitDeletion's OWN internal git calls (all read-only searches); this is the one and only WRITE
+ * this feature ever performs, and giving it its own tiny runner keeps that boundary obvious. */
+function execGitRestore(args: string[], cwd: string): Promise<RunResult> {
+  return new Promise((resolve) => {
+    try {
+      execFile(
+        "git",
+        args,
+        { cwd, timeout: GIT_RESTORE_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 10 * 1024 * 1024 },
+        (err, stdout, stderr) => {
+          if (err === null) {
+            resolve({ ok: true, stdout, stderr });
+            return;
+          }
+          resolve({ ok: false, error: err instanceof Error ? err.message : String(err), stdout, stderr });
+        },
+      );
+    } catch (err) {
+      // execFile itself throws synchronously only in pathological cases — same defensive catch
+      // every other defaultExec in this codebase (alembicCli.ts, gitAuthor.ts, gitDeletion.ts) uses.
+      resolve({ ok: false, error: err instanceof Error ? err.message : String(err), stdout: "", stderr: "" });
+    }
+  });
+}
+
+/**
+ * Ghost card's "Restore"/"Import" button flow (Task B2): reads the blame Task B1's gitDeletion.ts
+ * already found for `ghostId` (riding `state.ghostBlame`, never re-searched here), determines the
+ * source commit/path from its `kind`, and runs `git restore --source=<commit> -- <path>` at the
+ * repo root. Deliberately NOT an `alembic` CLI call — there's no CLI surface for "bring back a
+ * deleted file" (same reasoning as repointAction's own doc comment for why IT skips `ctx.cli`
+ * too), which is why this reads `ctx.blameProvider.getRepoRoot()` for its cwd instead. No explicit
+ * `service.scheduleRefresh()` on success: the restored file landing in `versions/` trips the same
+ * workspace file watcher a manual edit would (identical reasoning to repointAction's own comment).
+ * Never throws — same golden rule as every action above.
+ */
+export async function restoreDeletedAction(
+  ctx: ActionContext & { blameProvider: GhostBlameProvider },
+  ghostId: string,
+): Promise<void> {
+  try {
+    const blame = ctx.service.getState()?.ghostBlame[ghostId];
+    if (!blame) {
+      ctx.broadcast({ type: "toast", level: "error", text: "No blame found for this missing revision yet — try rescanning." });
+      ctx.log(`restoreDeletedAction: ${ghostId}: no blame known`);
+      return;
+    }
+    if (blame.kind === "never-existed" && blame.foundOn === null) {
+      ctx.broadcast({
+        type: "toast",
+        level: "error",
+        text: "The missing revision isn't found on any ref — fetch the source branch or drag to re-point.",
+      });
+      ctx.log(`restoreDeletedAction: ${ghostId}: never-existed with no foundOn — nothing importable`);
+      return;
+    }
+
+    const repoRoot = ctx.blameProvider.getRepoRoot();
+    if (repoRoot === null) {
+      ctx.broadcast({ type: "toast", level: "error", text: "Could not resolve the repository root — try rescanning." });
+      ctx.log(`restoreDeletedAction: ${ghostId}: repo root unknown`);
+      return;
+    }
+
+    // `source`/`relPath` per the blame's kind (deleted-here restores from the DELETING commit's
+    // PARENT — `<commit>^` — since that's the last commit where the file still existed;
+    // never-existed imports straight from `foundOn`'s own commit, which already IS the one that
+    // defines the missing revision). `relPath` is repo-root-relative (see gitDeletion.ts's own doc
+    // comment on GhostBlame's path fields), so it's valid both as a `git restore` pathspec run with
+    // cwd=repoRoot and joined onto repoRoot for the exists-guard below.
+    const source = blame.kind === "deleted-here" ? `${blame.commit}^` : blame.foundOn!.commit;
+    const relPath = blame.kind === "deleted-here" ? blame.deletedFilePath : blame.foundOn!.filePath;
+    const basename = path.basename(relPath);
+
+    if (existsSync(path.join(repoRoot, relPath))) {
+      ctx.broadcast({ type: "toast", level: "error", text: "file already exists — rescan pending?" });
+      ctx.log(`restoreDeletedAction: ${ghostId}: ${relPath} already exists in the working tree — aborting`);
+      return;
+    }
+
+    const message =
+      blame.kind === "deleted-here"
+        ? `Restore ${basename} deleted in ${blame.shortCommit}? This re-adds the file to your working tree.`
+        : `Import ${basename} from ${blame.foundOn!.ref}? This copies the missing revision into your working tree.`;
+    const confirmLabel = blame.kind === "deleted-here" ? "Restore" : "Import";
+
+    const choice = await vscode.window.showWarningMessage(message, { modal: true }, confirmLabel);
+    if (choice !== confirmLabel) return; // cancelled — silent, nothing was ever broadcast
+
+    ctx.broadcast({ type: "busy", operation: "restore", active: true });
+    try {
+      const result = await execGitRestore(["restore", `--source=${source}`, "--", relPath], repoRoot);
+      if (result.ok) {
+        const successText =
+          blame.kind === "deleted-here"
+            ? `Restored ${basename} · broken link healed`
+            : `Imported ${basename} from ${blame.foundOn!.ref} · broken link healed`;
+        ctx.broadcast({ type: "toast", level: "success", text: successText });
+      } else {
+        ctx.broadcast({ type: "toast", level: "error", text: cliErrorText(result) });
+        void vscode.window.showErrorMessage("git restore failed — see Alembic Graph output");
+        ctx.log(`restoreDeletedAction: git restore failed: ${result.error}`);
+      }
+    } finally {
+      ctx.broadcast({ type: "busy", operation: "restore", active: false });
+    }
+  } catch (err) {
+    // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
+    // is documented never-throw.
+    ctx.log(`restoreDeletedAction: unexpected error: ${err instanceof Error ? err.message : String(err)}`);
   }
 }

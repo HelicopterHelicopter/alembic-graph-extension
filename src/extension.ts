@@ -85,6 +85,13 @@ export function getCli(): AlembicCli | undefined {
   return currentPipeline?.cli;
 }
 
+/** Task B2's counterpart to `getCli()`: the active project's `GhostBlameProvider`, for
+ * `restoreDeletedAction`'s `getRepoRoot()` call — mirrors `getCli()` exactly (read fresh at call
+ * time, undefined in no-project mode). */
+export function getBlameProvider(): GhostBlameProvider | undefined {
+  return currentPipeline?.blameProvider;
+}
+
 /**
  * Resolves the alembic command to run, fresh on every call (the override setting, the active
  * Python interpreter, and the project-local venv on disk can all change between calls — this must

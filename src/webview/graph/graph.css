@@ -597,6 +597,45 @@ body {
   color: #cf9b9b;
 }
 
+/* ---------- ghost blame + restore/import (Task B2) ---------- */
+/* Same absolute-below-the-card placement as .alx-broken-hint above — out of layout flow, so
+   GHOST_H (metrics.ts) never needs to change. The block itself takes no pointer input (there's no
+   card underneath it, just canvas) EXCEPT the button, which opts back in below. */
+.alx-ghost-blame {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--alx-dim);
+  pointer-events: none;
+}
+.alx-ghost-blame-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.alx-ghost-restore-btn {
+  flex: 0 0 auto;
+  pointer-events: auto;
+  cursor: pointer;
+  color: var(--alx-accent);
+  text-decoration: underline;
+  white-space: nowrap;
+}
+/* Same dim/no-pointer convention as .alx-toggle--disabled — busy(restore,true) disables this
+   button exactly like every other affordance gated on an in-flight host operation. */
+.alx-ghost-restore-btn--disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
 .alx-collapse {
   position: absolute;
   inset: 0;

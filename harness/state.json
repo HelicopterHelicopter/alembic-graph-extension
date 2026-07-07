@@ -390,5 +390,6 @@
     "density": "comfortable",
     "expandCollapsed": false,
     "axis": "horizontal"
-  }
+  },
+  "ghostBlame": {}
 }

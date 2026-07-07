@@ -91,7 +91,12 @@ export type WebviewToHostMessage =
   | { type: "setAxis"; axis: UiPrefs["axis"] }
   | { type: "expandCollapse" }
   | { type: "openFile"; id: string }
-  | { type: "openGraph" };   // sidebar only
+  | { type: "openGraph" }   // sidebar only
+  // Task B2: ghost card's inline Restore/Import button — one message for both `GhostBlame` kinds
+  // (the host picks the source commit/path from `state.ghostBlame[ghostId].kind`; see
+  // restoreDeletedAction in src/ui/actions.ts). `ghostId` is the missing revision id (the ghost
+  // node's own `id`, and the key `ghostBlame` is indexed by).
+  | { type: "restoreFile"; ghostId: string };
 
 // ---------- host -> webview ----------
 export type HostToWebviewMessage =
@@ -101,7 +106,10 @@ export type HostToWebviewMessage =
   | { type: "toast"; level: "info" | "success" | "error"; text: string }
   | {
       type: "busy";
-      operation: "merge" | "repoint" | "upgrade" | "downgrade" | "scan" | "revision" | "sql";
+      // Task B2: "restore" covers BOTH the Restore (deleted-here) and Import (never-existed +
+      // foundOn) ghost-card button flows — they're the same host action (restoreDeletedAction),
+      // distinguished only by the `GhostBlame` kind it reads, so one busy op name covers both.
+      operation: "merge" | "repoint" | "upgrade" | "downgrade" | "scan" | "revision" | "sql" | "restore";
       active: boolean;
     }
   // sidebar only: told explicitly (rather than inferred from silence) that the host found no

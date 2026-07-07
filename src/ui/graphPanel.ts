@@ -15,11 +15,13 @@ import {
   previewSqlAction,
   downgradeToAction,
   newRevisionAction,
+  restoreDeletedAction,
   type ActionContext,
   type RepointActionContext,
 } from "./actions";
-import { getCli } from "../extension";
+import { getCli, getBlameProvider } from "../extension";
 import type { MigrationService } from "../services/migrationService";
+import type { GhostBlameProvider } from "../services/gitDeletion";
 import type { HostToWebviewMessage, WebviewToHostMessage } from "../protocol/messages";
 
 const VIEW_TYPE = "alembicGraph.graphPanel";
@@ -124,6 +126,23 @@ export class GraphPanelManager {
       return null;
     }
     return { cli, service: this.service, log: this.log, broadcast: this.broadcast };
+  }
+
+  /** Task B2's counterpart to `buildActionContext`, for `restoreDeletedAction` — same shape plus
+   * `blameProvider` (extension.ts's `getBlameProvider()`, mirroring `getCli()`). Both accessors
+   * come from the same pipeline and are built/torn down together (see extension.ts's
+   * `activateForProject`), so gating on `cli` here is equivalent to gating on `blameProvider`
+   * too — this still checks both explicitly rather than asserting, so a future refactor that
+   * decouples their lifecycles can't silently reintroduce a null-pointer instead of this same,
+   * already-established "no active project" log line. */
+  private buildRestoreActionContext(what: string): (ActionContext & { blameProvider: GhostBlameProvider }) | null {
+    const cli = getCli();
+    const blameProvider = getBlameProvider();
+    if (!cli || !blameProvider) {
+      this.log(`graph panel: ${what} requested but no active alembic project is available`);
+      return null;
+    }
+    return { cli, service: this.service, log: this.log, broadcast: this.broadcast, blameProvider };
   }
 
   private webviewOptions(): vscode.WebviewOptions {
@@ -321,6 +340,15 @@ export class GraphPanelManager {
         // filesystem write. No CLI/ActionContext needed, unlike every action above.
         this.exportSvg(msg.svg).catch((err) => {
           this.log(`graph panel: exportSvg threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
+        });
+        break;
+      }
+      case "restoreFile": {
+        // Task B2: ghost card's Restore/Import button.
+        const ctx = this.buildRestoreActionContext("restoreFile");
+        if (!ctx) break;
+        restoreDeletedAction(ctx, msg.ghostId).catch((err) => {
+          this.log(`graph panel: restoreDeletedAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
         });
         break;
       }

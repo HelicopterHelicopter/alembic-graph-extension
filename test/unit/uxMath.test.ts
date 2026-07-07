@@ -9,6 +9,7 @@ import {
   fitZoom,
   findLaneNeighbor,
   findRowNeighbor,
+  ghostBlameLineText,
   matchesQuery,
   nextMatchIndex,
   prevMatchIndex,
@@ -16,6 +17,7 @@ import {
   verticalRowDelta,
   zoomAnchorScroll,
 } from "../../src/webview/graph/uxMath";
+import type { GhostBlame } from "../../src/protocol/messages";
 
 describe("uxMath — zoom clamp/step", () => {
   it("clampZoom clamps to [0.5, 1.5]", () => {
@@ -306,5 +308,78 @@ describe("uxMath — arrowKeyTarget (Task H: axis-aware arrow-key mapping)", () 
     expect(arrowKeyTarget("ArrowUp", "horizontal", "newest-top")).toEqual({ kind: "lane", delta: -1 });
     expect(arrowKeyTarget("ArrowDown", "horizontal", "newest-bottom")).toEqual({ kind: "lane", delta: 1 });
     expect(arrowKeyTarget("ArrowUp", "horizontal", "newest-bottom")).toEqual({ kind: "lane", delta: -1 });
+  });
+});
+
+describe("ghostBlameLineText (Task B2)", () => {
+  it("deleted-here -> 'deleted in <shortCommit> · <author> · <date's first 10 chars>' + Restore button + subject tooltip", () => {
+    const blame: GhostBlame = {
+      kind: "deleted-here",
+      commit: "abc123def456abc123def456abc123def456abc",
+      shortCommit: "abc123de",
+      author: "Ada Lovelace",
+      date: "2026-01-02T14:30:00Z",
+      subject: "delete old revision",
+      deletedFilePath: "alembic/versions/deadbeef0000_old.py",
+    };
+    expect(ghostBlameLineText(blame)).toEqual({
+      text: "deleted in abc123de · Ada Lovelace · 2026-01-02",
+      button: "Restore",
+      tooltip: "delete old revision",
+    });
+  });
+
+  it("never-existed + foundOn + cherryPickedFrom -> diagnosis includes '(cherry-pick)' and '· parent on <ref>' + Import button", () => {
+    const blame: GhostBlame = {
+      kind: "never-existed",
+      introducedCommit: "aaa000aaa000aaa000aaa000aaa000aaa000aaa0",
+      introducedShortCommit: "aaa000aa",
+      introducedAuthor: "Cherry Picker",
+      introducedDate: "2026-02-01T00:00:00Z",
+      introducedSubject: "add child",
+      cherryPickedFrom: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      foundOn: { ref: "branchA", commit: "bbb111bb", filePath: "alembic/versions/deadbeef0000_parent.py" },
+    };
+    expect(ghostBlameLineText(blame)).toEqual({
+      text: "never in this branch · introduced by Cherry Picker in aaa000aa (cherry-pick) · parent on branchA",
+      button: "Import",
+      tooltip: "add child",
+    });
+  });
+
+  it("never-existed + foundOn WITHOUT cherryPickedFrom -> no '(cherry-pick)' suffix", () => {
+    const blame: GhostBlame = {
+      kind: "never-existed",
+      introducedCommit: "ccc000ccc000ccc000ccc000ccc000ccc000ccc0",
+      introducedShortCommit: "ccc000cc",
+      introducedAuthor: "Regular Dev",
+      introducedDate: "2026-02-02T00:00:00Z",
+      introducedSubject: "add child normally",
+      cherryPickedFrom: null,
+      foundOn: { ref: "branchA", commit: "bbb111bb", filePath: "alembic/versions/deadbeef0000_parent.py" },
+    };
+    expect(ghostBlameLineText(blame)).toEqual({
+      text: "never in this branch · introduced by Regular Dev in ccc000cc · parent on branchA",
+      button: "Import",
+      tooltip: "add child normally",
+    });
+  });
+
+  it("never-existed WITHOUT foundOn -> no '· parent on' clause, no button, drag-to-repoint suffix", () => {
+    const blame: GhostBlame = {
+      kind: "never-existed",
+      introducedCommit: "ddd000ddd000ddd000ddd000ddd000ddd000ddd0",
+      introducedShortCommit: "ddd000dd",
+      introducedAuthor: "Someone",
+      introducedDate: "2026-02-03T00:00:00Z",
+      introducedSubject: "add child",
+      cherryPickedFrom: null,
+      foundOn: null,
+    };
+    expect(ghostBlameLineText(blame)).toEqual({
+      text: "never in this branch · introduced by Someone in ddd000dd — fetch the source branch or drag to re-point",
+      button: null,
+      tooltip: "add child",
+    });
   });
 });

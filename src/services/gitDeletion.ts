@@ -176,7 +176,6 @@ export function createGhostBlameProvider(opts: {
   const cache = new Map<string, GhostBlame | null>();
 
   let repoRoot: string | null = null;
-  let repoRootAttempted = false;
 
   function onError(message: string): void {
     opts.log(`gitDeletion: ${message}`);
@@ -199,9 +198,16 @@ export function createGhostBlameProvider(opts: {
     return result.stdout;
   }
 
+  /** Cache-on-SUCCESS only (carry-over fix from Task B1's review): a transient first-call failure
+   * (e.g. a momentary `index.lock`, or the versions dir not existing yet during a race at startup)
+   * must not wedge `repoRoot` at null for the rest of the session — every call here re-attempts
+   * `rev-parse` until one actually succeeds. Once it does, `repoRoot !== null` short-circuits every
+   * later call, so a real repo only ever pays for this once. A failed rev-parse is cheap (git exits
+   * fast on "not a repository"), so retrying it once per lookup batch until it resolves costs
+   * nothing meaningful — the alternative (caching the failure) is what let Task B2's restore action
+   * depend on a `getRepoRoot()` that could be permanently null after one bad first call. */
   async function ensureRepoRoot(): Promise<void> {
-    if (repoRootAttempted) return;
-    repoRootAttempted = true;
+    if (repoRoot !== null) return;
     const stdout = await runGit(["rev-parse", "--show-toplevel"], versionsDir);
     if (stdout !== null && stdout.trim().length > 0) repoRoot = stdout.trim();
   }

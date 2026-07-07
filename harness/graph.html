@@ -69,6 +69,19 @@
   webview builds the ENTIRE svg string itself (svgExport.ts is a pure, DOM-free builder — no host
   round trip needed to produce it), so this stub's only job is to capture what was posted for the
   test to inspect/write to a temp file for the standalone-render check.
+
+  Task B2 (ghost blame + restore/import): state.json's `ghostBlame` is `{}` (every ghost's search
+  still "pending", per the real host's own semantics) — to exercise the rendered blame line/button,
+  seed `{ "<ghostId>": <GhostBlame | null> }` either as `window.__seedGhostBlame` (set before this
+  page's scripts run) or via `?ghostBlame=<encodeURIComponent(JSON.stringify({...}))>` — the SAME
+  two-tier convention `seedInitialState()` uses for `?seed=`, read fresh by `seedGhostBlame()` at
+  "ready" time (no addInitScript/timing race: navigating straight to a `?ghostBlame=`-bearing URL
+  is enough). respondToReady overlays it onto state.json's `ghostBlame` (a shallow merge, keyed by
+  ghost id, so seeding one ghost never has to also restate every other one) rather than requiring a
+  hand-authored full state.json fixture per test. Every posted `{type:"restoreFile", ghostId}`
+  lands in `window.__postedRestoreFiles`, same dedicated-array convention as
+  __postedMerges/__postedRepoints (not lumped into __postedActions — this is the primary surface
+  under test, not a one-off menu item).
 -->
 <html lang="en">
 <head>
@@ -94,6 +107,9 @@
   window.__postedActions = [];
   // Task 20: every posted "exportSvg" message's `svg` string, in order.
   window.__exportedSvgs = [];
+  // Task B2: every posted "restoreFile" message — dedicated array, same convention as
+  // __postedMerges/__postedRepoints (see the file header comment).
+  window.__postedRestoreFiles = [];
   const RECORDED_ACTION_TYPES = new Set(["upgradeTo", "downgradeTo", "previewSql", "copyId", "openFile", "newRevision"]);
   window.acquireVsCodeApi = () => ({
     postMessage: (message) => {
@@ -117,6 +133,8 @@
         window.__postedRepoints.push({ ghostId: message.ghostId, targetId: message.targetId });
       } else if (message && message.type === "exportSvg") {
         window.__exportedSvgs.push(message.svg);
+      } else if (message && message.type === "restoreFile") {
+        window.__postedRestoreFiles.push({ ghostId: message.ghostId });
       } else if (message && RECORDED_ACTION_TYPES.has(message.type)) {
         window.__postedActions.push(message);
       }
@@ -157,6 +175,28 @@
   // clicks are round-trippable in the harness, same as a real host echoing back a new "state".
   let currentState = null;
 
+  // Task B2: same two-tier seeding as `seedInitialState()` above (`window.__seedGhostBlame` wins;
+  // else `?ghostBlame=<encodeURIComponent(JSON.stringify({...}))>`), but read fresh at "ready" time
+  // (inside respondToReady, not cached at module-load like `persisted` above) rather than at page
+  // parse time — there's no race to guard against here (the query-param branch is available the
+  // instant the page navigates, and the window-var branch only matters for a same-page programmatic
+  // set before a manual re-trigger), and it keeps this seed independent of the `persisted` flow's
+  // own timing assumptions. Returns undefined when unseeded, so respondToReady's `? :` falls back
+  // to state.json's own `ghostBlame` untouched.
+  function seedGhostBlame() {
+    if (window.__seedGhostBlame !== undefined) return window.__seedGhostBlame;
+    const params = new URLSearchParams(window.location.search);
+    const param = params.get("ghostBlame");
+    if (param) {
+      try {
+        return JSON.parse(param);
+      } catch (err) {
+        console.error("[harness] invalid ?ghostBlame= JSON, ignoring:", err);
+      }
+    }
+    return undefined;
+  }
+
   // Delivers the captured AppState the same way GraphPanelManager's real "ready" case does:
   // MigrationService.applyUiPrefs(restored) (Task 11) merges a non-null `restored` into the
   // current ui and posts state; a null `restored` just posts state as-is. Fetch (not a bare
@@ -166,7 +206,14 @@
     fetch("./state.json")
       .then((r) => r.json())
       .then((state) => {
-        currentState = restored ? { ...state, ui: { ...state.ui, ...restored } } : state;
+        // Task B2: a seeded ghostBlame shallow-merges OVER state.json's own `ghostBlame` — keyed
+        // by ghost id, so seeding one ghost's blame for a test never has to also restate the
+        // (already-correct, all-pending) rest.
+        const seeded = seedGhostBlame();
+        const ghostBlame = seeded ? { ...(state.ghostBlame ?? {}), ...seeded } : (state.ghostBlame ?? {});
+        currentState = restored
+          ? { ...state, ui: { ...state.ui, ...restored }, ghostBlame }
+          : { ...state, ghostBlame };
         window.postMessage({ type: "state", state: currentState }, "*");
       })
       .catch((err) => {

@@ -238,6 +238,12 @@ const handlers: Handlers = {
     });
     post({ type: "exportSvg", svg });
   },
+  onRestoreFile(ghostId) {
+    // Task B2: belt-and-suspenders with render.ts's --disabled styling on the button itself, same
+    // busy-guard convention as onNewRevision/onExportSvg above.
+    if (store.busyOps.size > 0) return;
+    post({ type: "restoreFile", ghostId });
+  },
 };
 
 /**

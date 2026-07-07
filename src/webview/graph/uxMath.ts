@@ -3,7 +3,13 @@
  * ancestor-set walk (hover highlight), and keyboard neighbor-finding. Mirrors metrics.ts's split
  * (pure math here, DOM wiring in zoom/search/hover/keyboardNav.ts's `attach*` functions) so the
  * fiddly parts are covered by vitest instead of only Playwright.
+ *
+ * Task B2 adds `ghostBlameLineText` (ghost-card blame line + button + tooltip) to this same
+ * pure-math module rather than a new file, per the plan's "uxMath.ts-style module" option — it's a
+ * type-only import (`GhostBlame` from protocol/messages.ts, itself DOM/vscode-free), so this file
+ * stays exactly as dependency-free as every other function here.
  */
+import type { GhostBlame } from "../../protocol/messages";
 
 // ---------- zoom ----------
 
@@ -265,4 +271,54 @@ export function arrowKeyTarget(key: ArrowKey, axis: NavAxis, order: NavOrder): A
   }
   const isPositiveDirection = key === "ArrowRight" || key === "ArrowDown";
   return { kind: "lane", delta: isPositiveDirection ? 1 : -1 };
+}
+
+// ---------- ghost blame (Task B2) ----------
+
+/** render.ts's ghost-blame line, decomposed into plain data so the wording lives here (vitest),
+ * not inline in DOM-construction code: the one visible text line, which action button (if any) to
+ * offer, and the `title` tooltip text. */
+export interface GhostBlameLine {
+  text: string;
+  button: "Restore" | "Import" | null;
+  tooltip: string;
+}
+
+/**
+ * Renders one `GhostBlame` (Task B1's gitDeletion.ts result, riding `AppState.ghostBlame`) into
+ * the ghost card's blame line, per the design spec's UI section (verbatim wording):
+ *   - `deleted-here`: "deleted in <shortCommit> · <author> · <date's first 10 chars>" + "Restore".
+ *   - `never-existed` with `foundOn`: "never in this branch · introduced by <author> in
+ *     <shortCommit>[ (cherry-pick)] · parent on <ref>" + "Import".
+ *   - `never-existed` without `foundOn`: the same diagnosis (minus the "· parent on" clause, since
+ *     there's no ref to name) plus " — fetch the source branch or drag to re-point", no button.
+ * Callers (render.ts) only invoke this for a non-null, resolved blame — pending (key absent) or
+ * `null` (searched-and-not-found) render nothing at all, per the spec, and are filtered out one
+ * layer up rather than modeled as a fourth case here.
+ */
+export function ghostBlameLineText(blame: GhostBlame): GhostBlameLine {
+  if (blame.kind === "deleted-here") {
+    return {
+      text: `deleted in ${blame.shortCommit} · ${blame.author} · ${blame.date.slice(0, 10)}`,
+      button: "Restore",
+      tooltip: blame.subject,
+    };
+  }
+
+  const cherryPickSuffix = blame.cherryPickedFrom !== null ? " (cherry-pick)" : "";
+  const diagnosis = `never in this branch · introduced by ${blame.introducedAuthor} in ${blame.introducedShortCommit}${cherryPickSuffix}`;
+
+  if (blame.foundOn !== null) {
+    return {
+      text: `${diagnosis} · parent on ${blame.foundOn.ref}`,
+      button: "Import",
+      tooltip: blame.introducedSubject,
+    };
+  }
+
+  return {
+    text: `${diagnosis} — fetch the source branch or drag to re-point`,
+    button: null,
+    tooltip: blame.introducedSubject,
+  };
 }

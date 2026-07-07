@@ -7,10 +7,11 @@
  * inline styles — every other visual rule lives in a graph.css class.
  */
 import type { GraphLayout, LayoutNode } from "../../core/types";
-import type { AppState, RevisionDetail, UiPrefs } from "../../protocol/messages";
+import type { AppState, GhostBlame, RevisionDetail, UiPrefs } from "../../protocol/messages";
 import { buildBadgeItems } from "./badges";
 import { buildDetailPanel, type DetailHandlers } from "./detail";
 import { canvasSize, edgePathD, nodeSize, nodeXY, type Density } from "./metrics";
+import { ghostBlameLineText } from "./uxMath";
 
 export interface ViewState {
   selectedId: string | null;
@@ -56,6 +57,10 @@ export interface Handlers {
    * job (it owns `store`), not render.ts's — this handler is a plain, parameterless trigger like
    * `onNewRevision`. */
   onExportSvg(): void;
+  /** Task B2: ghost card's inline Restore/Import button. `ghostId` is the ghost node's own id
+   * (the missing revision id, and the key `state.ghostBlame` is indexed by) — main.ts posts
+   * `{type:"restoreFile", ghostId}`, gated the same busy-guard way as `onNewRevision`/`onExportSvg`. */
+  onRestoreFile(ghostId: string): void;
 }
 
 interface Pos {
@@ -476,6 +481,13 @@ function buildNodeElement(
     // (see ViewState.detail / render()'s `view.detail !== null` gate).
     ghost.addEventListener("click", () => handlers.onSelect(node.id));
     wrapper.append(ghost);
+
+    // Task B2: blame line + Restore/Import button, keyed by this ghost's own id (the missing
+    // revision id `state.ghostBlame` is indexed by). Absent key (search pending) or `null`
+    // (searched-and-not-found) both render nothing — see buildGhostBlameLine.
+    const blameLine = buildGhostBlameLine(node.id, state.ghostBlame[node.id], view.busy, handlers.onRestoreFile);
+    if (blameLine) wrapper.append(blameLine);
+
     return wrapper;
   }
   if (node.kind === "collapse") {
@@ -518,6 +530,52 @@ function buildGhostCard(node: LayoutNode): HTMLElement {
 
   card.append(label, hash);
   return card;
+}
+
+/**
+ * Task B2: the ghost card's blame line — same absolute `top: calc(100% + 4px)` placement pattern
+ * as `.alx-broken-hint` (below the card, out of layout flow — keeps GHOST_H in metrics.ts
+ * untouched). Returns null (renders nothing) when `blame` is `undefined` (search pending — the key
+ * is absent from `state.ghostBlame`) or `null` (searched-and-not-found), per the spec: the ghost
+ * card looks exactly as it did before Task B2 in both of those cases.
+ *
+ * The block itself is `pointer-events: none` (graph.css) except the button, which is `auto` — a
+ * click on the text/whitespace must fall through to nothing (there's no card underneath this
+ * block, just canvas), while the button is independently busy-gated the same
+ * dim/no-pointer/pointer-events:none convention as every other toolbar affordance
+ * (`.alx-toggle--disabled`), via a dedicated `.alx-ghost-restore-btn--disabled` class.
+ */
+function buildGhostBlameLine(
+  ghostId: string,
+  blame: GhostBlame | null | undefined,
+  busy: boolean,
+  onRestoreFile: (ghostId: string) => void,
+): HTMLElement | null {
+  if (!blame) return null;
+
+  const { text, button, tooltip } = ghostBlameLineText(blame);
+
+  const line = document.createElement("div");
+  line.className = "alx-ghost-blame";
+  line.title = tooltip;
+
+  const label = document.createElement("span");
+  label.className = "alx-ghost-blame-text";
+  label.textContent = text;
+  line.append(label);
+
+  if (button !== null) {
+    const btn = document.createElement("span");
+    btn.className = busy ? "alx-ghost-restore-btn alx-ghost-restore-btn--disabled" : "alx-ghost-restore-btn";
+    btn.textContent = button;
+    btn.addEventListener("click", () => {
+      if (busy) return; // belt-and-suspenders with the --disabled class's pointer-events:none
+      onRestoreFile(ghostId);
+    });
+    line.append(btn);
+  }
+
+  return line;
 }
 
 function buildCollapseCard(node: LayoutNode, handlers: Handlers): HTMLElement {

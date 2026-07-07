@@ -256,6 +256,12 @@ describe("createGhostBlameProvider (injected fake exec)", () => {
     const commit = "555666777888555666777888555666777888abcd";
     const preimage = "revision = 'deadbeef0000'\ndown_revision = None\n";
     const exec = vi.fn<ExecFn>(async (_argv0, args) => {
+      // Explicit (non-empty) rev-parse stub: `ensureRepoRoot` now retries on every call until it
+      // gets a genuine success (see gitDeletion.ts's cache-on-SUCCESS-only fix) — a real repo's
+      // rev-parse always returns a non-empty path, so this models that instead of masking it behind
+      // the catch-all empty-string fallback below (which would otherwise cause a repoRoot re-query
+      // — and an extra exec call — on every single lookup(), defeating this test's whole point).
+      if (args[0] === "rev-parse") return ok("/proj\n");
       if (args[0] === "log" && args.some((a) => a.startsWith("-Sdeadbeef0000")) && args.includes("--diff-filter=D")) {
         return ok(nameStatusStdout([{ commit, author: "A", date: "2026-01-01T00:00:00Z", subject: "s", lines: [`D\t${VERSIONS_DIR}/deadbeef0000_old.py`] }]));
       }
@@ -326,6 +332,30 @@ describe("createGhostBlameProvider (injected fake exec)", () => {
 
     await provider.lookup([{ missingId: "deadbeef0000", childFilePath: `${VERSIONS_DIR}/child.py` }]);
     expect(provider.getRepoRoot()).toBeNull();
+  });
+
+  it("getRepoRoot(): a TRANSIENT rev-parse failure is retried on the next lookup, not wedged null forever (carry-over fix from B1's review: cache on SUCCESS only)", async () => {
+    let revParseCalls = 0;
+    const exec = vi.fn<ExecFn>(async (_argv0, args) => {
+      if (args[0] === "rev-parse") {
+        revParseCalls += 1;
+        return revParseCalls === 1 ? fail("transient: index.lock") : ok("/proj\n");
+      }
+      return ok("");
+    });
+    const provider = createGhostBlameProvider({ versionsDir: VERSIONS_DIR, log: () => {}, exec });
+
+    await provider.lookup([{ missingId: "deadbeef0000", childFilePath: `${VERSIONS_DIR}/child.py` }]);
+    expect(provider.getRepoRoot()).toBeNull(); // first attempt failed
+    expect(revParseCalls).toBe(1);
+
+    await provider.lookup([{ missingId: "otherghost00", childFilePath: `${VERSIONS_DIR}/child2.py` }]);
+    expect(provider.getRepoRoot()).toBe("/proj"); // retried (not wedged) and succeeded this time
+    expect(revParseCalls).toBe(2);
+
+    // Once resolved, a THIRD lookup must not re-query — same cache-on-success behavior as before.
+    await provider.lookup([{ missingId: "thirdghost00", childFilePath: `${VERSIONS_DIR}/child3.py` }]);
+    expect(revParseCalls).toBe(2);
   });
 });
 

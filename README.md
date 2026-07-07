@@ -17,6 +17,10 @@ graph.
   `Newest ↓`/`Newest ↑` vertical).
 - **Drag to merge** two heads onto each other to run `alembic merge`; **drag a broken (ghost)
   link** onto a real revision to repair its `down_revision` in place.
+- **Blame + one-click Restore/Import for broken links**: a ghost card shows who deleted the missing
+  revision and when (with a **Restore** button), or — for a cherry-picked/partial-sync branch where
+  the parent was never local — where it can still be found on another ref (with an **Import**
+  button), instead of only offering to re-point history.
 - **Upgrade / downgrade** to head(s) or to a specific revision, with a confirmation modal and an
   offline **Preview SQL** (`--sql`, never touches the database) before you commit to anything.
 - **New revision** from the toolbar (`alembic revision -m ...`).

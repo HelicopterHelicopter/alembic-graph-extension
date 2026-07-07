@@ -997,3 +997,74 @@ the F5-only checks that harness can't cover (real host round trip, real cursor i
    card correctly along the new axis.
 7. Open webview DevTools (**Developer: Open Webview Developer Tools**) and confirm no errors/CSP
    violations while repeating steps 2–4.
+
+## Task B2: ghost-card blame UI + Restore/Import action
+
+Builds on Task B1's `gitDeletion.ts` search (git blame for a missing `down_revision`, riding
+`AppState.ghostBlame`) with a UI: one compact line below the ghost card — `ghostBlameLineText`
+(`src/webview/graph/uxMath.ts`, unit-tested in `test/unit/uxMath.test.ts`) picks the wording per
+`GhostBlame` kind — plus an inline **Restore** (`deleted-here`) or **Import** (`never-existed` with
+a `foundOn`) button that posts `{type:"restoreFile", ghostId}`; `restoreDeletedAction`
+(`src/ui/actions.ts`) runs `git restore --source=… -- <path>` at the repo root behind a modal
+confirm. Also carries a fix from B1's own code review: `gitDeletion.ts`'s `getRepoRoot()` used to
+cache on first ATTEMPT, so one transient `rev-parse` failure wedged it at `null` for the rest of
+the session — it now caches on SUCCESS only (`test/unit/gitDeletion.test.ts`'s new "transient
+rev-parse failure" case).
+
+Verified end-to-end via Playwright against `harness/graph.html` (`npm run build` +
+`node scripts/dump-state.mjs` first — the latter now writes `ghostBlame: {}`, matching
+`AppState`'s always-present field): seeding `window.__seedGhostBlame` (or a `?ghostBlame=`-bearing
+URL — see the harness's header comment) with a `deleted-here` blame renders `deleted in <shortSha>
+· <author> · <date>` + a working **Restore** button whose click posts the exact
+`{type:"restoreFile", ghostId}` message; a `never-existed` blame with `foundOn` renders the
+"never in this branch · introduced by … (cherry-pick) · parent on <ref>" line + a working
+**Import** button; a `never-existed` blame WITHOUT `foundOn` renders the same diagnosis plus "—
+fetch the source branch or drag to re-point" and NO button; `window.__sendBusy("restore", true)`
+disables the button (dim, `pointer-events:none`, and the click handler itself also no-ops) and
+`busy(restore,false)` re-enables it; the default (unseeded) state — every real ghost's search
+still pending — renders no blame line at all, leaving the ghost card exactly as it looked before
+this task. Screenshot: `.superpowers/sdd/task-b2-screenshot.png` (deleted-here case). The steps
+below are the F5-only checks that harness can't cover: a REAL restore/import round trip against a
+real git repo (there's no host process in the harness to run `git restore` against).
+
+1. **What to expect from the checked-in broken fixture.** Press F5, select **Run Extension (broken
+   fixture)**, then **Alembic Graph: Open Migration Graph**. The `deadbeef0000` ghost's blame search
+   runs automatically (generation-guarded async enrichment, same as git-author lookup — the graph
+   never waits on it) against THIS repository's own git history. `deadbeef0000` was never a real
+   revision id anywhere in this repo, so expect a **`never-existed`** diagnosis line under the ghost
+   card within a moment — with `foundOn` most likely `null` (no button, "fetch the source branch or
+   drag to re-point" suffix), since no ref of this repo ever defined that id either. This fixture is
+   NOT a git-deleted case, so don't expect a **Restore** button here — that needs a real deletion
+   commit, staged next.
+2. **Stage a real `deleted-here` demo.** In a scratch directory outside this repo:
+   ```
+   mkdir -p /tmp/blame-demo/versions && cd /tmp/blame-demo
+   git init -q && git config user.email you@example.com && git config user.name "You"
+   cp <this-repo>/fixtures/healthy-project/alembic/versions/*.py versions/
+   cp <this-repo>/fixtures/healthy-project/alembic.ini .   # edit script_location to ./versions if needed
+   git add -A && git commit -q -m "commit 1: add all revisions"
+   rm versions/8f2a1c9d4e07_create_products_table.py       # the fixture's root revision
+   git add -A && git commit -q -m "commit 2: delete products table revision"
+   ```
+   Run **Alembic Graph: Select Alembic Project…**, pick this scratch project. The graph now shows a
+   real ghost (`8f2a1c9d4e07`) whose blame resolves to **`deleted-here`**: `deleted in <8-char sha of
+   commit 2> · You · <today's date>` + a **Restore** button, with commit 2's own message ("commit 2:
+   delete products table revision") as the line's tooltip.
+3. Click **Restore**: the modal reads `Restore 8f2a1c9d4e07_create_products_table.py deleted in
+   <sha>? This re-adds the file to your working tree.` — confirm **Restore**. A success toast
+   (`Restored … · broken link healed`) appears, the file reappears on disk (confirm in the file
+   explorer or `ls versions/`), and — no manual refresh needed, the file watcher picks it up — the
+   ghost card, its BROKEN badge, and the Problems-panel diagnostic all disappear on their own within
+   a moment.
+4. Re-run the same restore (undo the file's return by deleting it again and re-running **Alembic
+   Graph: Refresh** first): open **Developer: Open Webview Developer Tools** and confirm no
+   errors/CSP violations while the button/modal/toast flow runs.
+5. **Cancel path:** delete the file again, refresh, click **Restore**, then press **Escape** (or
+   click outside the modal) instead of confirming: nothing happens — no toast, no busy indicator
+   left showing, the ghost card unchanged.
+6. **Exists-guard:** with the file already restored (from step 3) and the ghost gone, there is no
+   button left to click — this path is effectively also covered by B1's/this task's unit tests
+   (`existsSync` guard in `restoreDeletedAction`) since it needs a stale/racy click to trigger for
+   real. Skip manually reproducing it; trust the unit coverage.
+7. Clean up: `rm -rf /tmp/blame-demo`, then **Alembic Graph: Select Alembic Project…** back to this
+   repo's own fixture.
