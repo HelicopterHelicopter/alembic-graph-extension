@@ -6,6 +6,8 @@
  * rule core/*.ts and services/alembicCli.ts already follow.
  */
 
+import type { GhostBlame as ProtocolGhostBlame } from "../protocol/messages";
+
 /** True only when both `a` and `b` are ids in `heads` — MigrationService's current heads list at
  * the moment an action was invoked. */
 export function bothAreCurrentHeads(heads: { id: string }[], a: string, b: string): boolean {
@@ -53,4 +55,34 @@ export function cliErrorText(result: { error: string; stderr: string; stdout?: s
  * toast wording, `design/Alembic Graph.dc.html`). */
 export function repointSuccessText(targetId: string): string {
   return `Re-pointed down_revision → ${targetId.slice(0, 8)} · broken link fixed`;
+}
+
+/** Task B2 ghost-card restore/import: pure decision logic for git-restore's source commit and
+ * path, factored out of restoreDeletedAction (src/ui/actions.ts) for unit testing. Given a
+ * GhostBlame, returns either { source, path } ready for `git restore --source=<source> -- <path>`,
+ * or { error } with a toast-ready message. `source` is the commit to restore FROM (preface with
+ * `^` for deleted-here's parent; never preface foundOn's commit). `path` is repo-root-relative. */
+export function restoreSource(
+  blame: ProtocolGhostBlame,
+): { source: string; path: string } | { error: string } {
+  // deleted-here: restore from the DELETING commit's parent (the last commit where file existed)
+  if (blame.kind === "deleted-here") {
+    return {
+      source: `${blame.commit}^`,
+      path: blame.deletedFilePath,
+    };
+  }
+
+  // never-existed with foundOn: import straight from the defining commit (no ^)
+  if (blame.foundOn) {
+    return {
+      source: blame.foundOn.commit,
+      path: blame.foundOn.filePath,
+    };
+  }
+
+  // never-existed without foundOn: no source — return error (toast text from actions.ts)
+  return {
+    error: "The missing revision isn't found on any ref — fetch the source branch or drag to re-point.",
+  };
 }

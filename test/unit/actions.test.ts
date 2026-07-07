@@ -4,7 +4,7 @@ import { describe, it, expect } from "vitest";
 // resolvable outside a real extension host — even importing an unrelated named export from
 // actions.ts here would fail the whole test file at load time. mergeHeadsAction itself is
 // vscode-coupled and, per the brief, intentionally NOT unit-tested; only the pure helpers are.
-import { bothAreCurrentHeads, mergeSuccessText, cliErrorText, repointSuccessText } from "../../src/ui/actionHelpers";
+import { bothAreCurrentHeads, mergeSuccessText, cliErrorText, repointSuccessText, restoreSource } from "../../src/ui/actionHelpers";
 
 describe("bothAreCurrentHeads", () => {
   const heads = [{ id: "aaa" }, { id: "bbb" }, { id: "ccc" }];
@@ -113,5 +113,63 @@ describe("repointSuccessText", () => {
 
   it("4b. a shorter id is used verbatim (no padding)", () => {
     expect(repointSuccessText("abc")).toBe("Re-pointed down_revision → abc · broken link fixed");
+  });
+});
+
+describe("restoreSource", () => {
+  it("5a. deleted-here: source gets ^ suffix, path from deletedFilePath", () => {
+    const blame = {
+      kind: "deleted-here" as const,
+      commit: "abc123def456",
+      deletedFilePath: "alembic/versions/8f2a1c9d4e07_create_products_table.py",
+      shortCommit: "abc123de",
+      author: "Test Author",
+      date: "2025-01-01",
+      subject: "Delete version file",
+    };
+    const result = restoreSource(blame);
+    expect(result).toEqual({
+      source: "abc123def456^",
+      path: "alembic/versions/8f2a1c9d4e07_create_products_table.py",
+    });
+  });
+
+  it("5b. never-existed with foundOn: source has NO ^ suffix, path from foundOn.filePath", () => {
+    const blame = {
+      kind: "never-existed" as const,
+      introducedCommit: "xyz789abc",
+      introducedShortCommit: "xyz789ab",
+      introducedAuthor: "Cherry Picker",
+      introducedDate: "2025-01-02",
+      introducedSubject: "Cherry-pick revision ref",
+      cherryPickedFrom: "def456xyz789",
+      foundOn: {
+        ref: "origin/main",
+        commit: "found789commit",
+        filePath: "alembic/versions/deadbeef0000_missing_rev.py",
+      },
+    };
+    const result = restoreSource(blame);
+    expect(result).toEqual({
+      source: "found789commit",
+      path: "alembic/versions/deadbeef0000_missing_rev.py",
+    });
+  });
+
+  it("5c. never-existed without foundOn: returns error matching the existing toast text", () => {
+    const blame = {
+      kind: "never-existed" as const,
+      introducedCommit: "xyz789abc",
+      introducedShortCommit: "xyz789ab",
+      introducedAuthor: "Cherry Picker",
+      introducedDate: "2025-01-02",
+      introducedSubject: "Cherry-pick revision ref",
+      cherryPickedFrom: null,
+      foundOn: null,
+    };
+    const result = restoreSource(blame);
+    expect(result).toEqual({
+      error: "The missing revision isn't found on any ref — fetch the source branch or drag to re-point.",
+    });
   });
 });

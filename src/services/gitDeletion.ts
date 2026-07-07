@@ -84,8 +84,8 @@ export interface GhostBlameProvider {
    * lookup, hit OR miss, never re-runs the search) — see `clearCache()`.
    */
   lookup(requests: { missingId: string; childFilePath: string }[]): Promise<Record<string, GhostBlame | null>>;
-  /** Repo root captured (and cached) at the first `lookup()` call, via `git rev-parse
-   * --show-toplevel` — null until that succeeds. Used later by Task B2's restore/import action,
+  /** Repo root cached once resolved via `git rev-parse --show-toplevel` — null until that
+   * succeeds. Failed attempts retry on later calls. Used later by Task B2's restore/import action,
    * which needs an absolute cwd to run `git restore` from; never sent over postMessage. */
   getRepoRoot(): string | null;
   /** Drops every cached blame entry — a repeat lookup afterward re-runs the full search chain for

@@ -1062,9 +1062,11 @@ real git repo (there's no host process in the harness to run `git restore` again
 5. **Cancel path:** delete the file again, refresh, click **Restore**, then press **Escape** (or
    click outside the modal) instead of confirming: nothing happens — no toast, no busy indicator
    left showing, the ghost card unchanged.
-6. **Exists-guard:** with the file already restored (from step 3) and the ghost gone, there is no
-   button left to click — this path is effectively also covered by B1's/this task's unit tests
-   (`existsSync` guard in `restoreDeletedAction`) since it needs a stale/racy click to trigger for
-   real. Skip manually reproducing it; trust the unit coverage.
+6. **Exists-guard verification:** with the file already restored (from step 3) and the ghost gone,
+   there is no button left to click — this path needs a stale/racy click to trigger for real (no
+   reliable way to reproduce manually). The `existsSync` guard in `restoreDeletedAction` is
+   host-side logic verified by code inspection; the source/path decision for each blame kind is
+   covered by unit tests (`restoreSource` in `test/unit/actions.test.ts`), which exercise all three
+   branches. The filesystem guard itself remains manual-only (or skipped, as a rare race condition).
 7. Clean up: `rm -rf /tmp/blame-demo`, then **Alembic Graph: Select Alembic Project…** back to this
    repo's own fixture.

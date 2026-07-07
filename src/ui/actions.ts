@@ -12,7 +12,7 @@ import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { bothAreCurrentHeads, mergeSuccessText, cliErrorText, repointSuccessText } from "./actionHelpers";
+import { bothAreCurrentHeads, mergeSuccessText, cliErrorText, repointSuccessText, restoreSource } from "./actionHelpers";
 import { applyRepoint } from "../services/repoint";
 import type { AlembicCli, RunResult } from "../services/alembicCli";
 import type { MigrationService } from "../services/migrationService";
@@ -367,13 +367,11 @@ export async function restoreDeletedAction(
       ctx.log(`restoreDeletedAction: ${ghostId}: no blame known`);
       return;
     }
-    if (blame.kind === "never-existed" && blame.foundOn === null) {
-      ctx.broadcast({
-        type: "toast",
-        level: "error",
-        text: "The missing revision isn't found on any ref — fetch the source branch or drag to re-point.",
-      });
-      ctx.log(`restoreDeletedAction: ${ghostId}: never-existed with no foundOn — nothing importable`);
+
+    const sourceDecision = restoreSource(blame);
+    if ("error" in sourceDecision) {
+      ctx.broadcast({ type: "toast", level: "error", text: sourceDecision.error });
+      ctx.log(`restoreDeletedAction: ${ghostId}: ${sourceDecision.error}`);
       return;
     }
 
@@ -384,14 +382,14 @@ export async function restoreDeletedAction(
       return;
     }
 
-    // `source`/`relPath` per the blame's kind (deleted-here restores from the DELETING commit's
-    // PARENT — `<commit>^` — since that's the last commit where the file still existed;
-    // never-existed imports straight from `foundOn`'s own commit, which already IS the one that
-    // defines the missing revision). `relPath` is repo-root-relative (see gitDeletion.ts's own doc
-    // comment on GhostBlame's path fields), so it's valid both as a `git restore` pathspec run with
-    // cwd=repoRoot and joined onto repoRoot for the exists-guard below.
-    const source = blame.kind === "deleted-here" ? `${blame.commit}^` : blame.foundOn!.commit;
-    const relPath = blame.kind === "deleted-here" ? blame.deletedFilePath : blame.foundOn!.filePath;
+    // `source`/`relPath` from the pure restoreSource decision (deleted-here restores from the
+    // DELETING commit's PARENT — `<commit>^` — since that's the last commit where the file still
+    // existed; never-existed imports straight from `foundOn`'s own commit, which already IS the one
+    // that defines the missing revision). `relPath` is repo-root-relative (see gitDeletion.ts's own
+    // doc comment on GhostBlame's path fields), so it's valid both as a `git restore` pathspec run
+    // with cwd=repoRoot and joined onto repoRoot for the exists-guard below.
+    const source = sourceDecision.source;
+    const relPath = sourceDecision.path;
     const basename = path.basename(relPath);
 
     if (existsSync(path.join(repoRoot, relPath))) {
