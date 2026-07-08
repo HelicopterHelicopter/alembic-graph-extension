@@ -48,16 +48,15 @@ function updateItems(
   }
 
   // Heads item
-  const headCount = state.counts.heads;
-  headsItem.text = `$(type-hierarchy) ${headCount} head${headCount === 1 ? "" : "s"}`;
-  if (headCount > 1) {
+  if (state.counts.heads <= 1) {
+    headsItem.hide();
+  } else {
+    const headCount = state.counts.heads;
+    headsItem.text = `$(type-hierarchy) ${headCount} heads`;
     headsItem.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
     headsItem.tooltip = `${headCount} migration heads — open the graph to merge`;
-  } else {
-    headsItem.backgroundColor = undefined;
-    headsItem.tooltip = "Alembic migration heads";
+    headsItem.show();
   }
-  headsItem.show();
 
   // Current item
   if (state.currentIds.length === 0) {

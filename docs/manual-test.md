@@ -60,8 +60,7 @@ against the fixture produces.
    Migration Graph** command, showing an information toast "Alembic Graph: Open Migration Graph —
    not implemented yet" (stub until Task 8).
 5. Repeat with **Run Extension (healthy fixture)** launch config: expect `$(type-hierarchy) 2 heads`
-   with no warning background (singular check: text is `1 head` if only one head), and
-   `11 revisions`.
+   with no warning background, and `11 revisions`.
 
 ## Task 8: webview panel infrastructure
 
