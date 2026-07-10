@@ -2,7 +2,7 @@
   "name": "alembic-graph",
   "displayName": "Alembic Graph",
   "description": "Interactive graph of your Alembic migration history — visualize heads, merges, and broken links; drag to merge heads or repair broken down_revisions.",
-  "publisher": "jheelr",
+  "publisher": "OmniaInc",
   "version": "0.0.1",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/HelicopterHelicopter/alembic-graph-extension.git" },
