@@ -87,15 +87,40 @@ describe("findProjectEnvCommand", () => {
     });
   });
 
-  it("8b. python-only venv -> -m alembic form", () => {
+  it("8b. python-only venv WITH the alembic package installed -> -m alembic form", () => {
     tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-findenv-"));
     const iniDir = makeDir("proj");
     const binDir = makeDir("proj", ".venv", "bin");
     writeFileSync(path.join(binDir, "python"), "");
+    makeDir("proj", ".venv", "lib", "python3.12", "site-packages", "alembic");
 
     expect(findProjectEnvCommand({ iniDir, workspaceRoot: null })).toEqual({
       argv0: path.join(binDir, "python"),
       prefixArgs: ["-m", "alembic"],
+    });
+  });
+
+  it("8b2. python-only venv WITHOUT the alembic package -> null (falls through to PATH)", () => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-findenv-"));
+    const iniDir = makeDir("proj");
+    const binDir = makeDir("proj", ".venv", "bin");
+    writeFileSync(path.join(binDir, "python"), "");
+    makeDir("proj", ".venv", "lib", "python3.12", "site-packages"); // site-packages exists, alembic does not
+
+    expect(findProjectEnvCommand({ iniDir, workspaceRoot: null })).toBeNull();
+  });
+
+  it("8b3. package-less iniDir venv is skipped; workspaceRoot venv with alembic binary still wins", () => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-findenv-"));
+    const iniDir = makeDir("proj");
+    const workspaceRoot = makeDir("workspace");
+    writeFileSync(path.join(makeDir("proj", ".venv", "bin"), "python"), ""); // no alembic package
+    const wsBin = makeDir("workspace", ".venv", "bin");
+    writeFileSync(path.join(wsBin, "alembic"), "");
+
+    expect(findProjectEnvCommand({ iniDir, workspaceRoot })).toEqual({
+      argv0: path.join(wsBin, "alembic"),
+      prefixArgs: [],
     });
   });
 
@@ -136,6 +161,7 @@ describe("findProjectEnvCommand", () => {
     const iniDir = makeDir("proj");
     const workspaceRoot = makeDir("workspace");
     writeFileSync(path.join(makeDir("workspace", ".venv", "bin"), "python"), "");
+    makeDir("workspace", ".venv", "lib", "python3.11", "site-packages", "alembic");
 
     expect(findProjectEnvCommand({ iniDir, workspaceRoot })).toEqual({
       argv0: path.join(workspaceRoot, ".venv", "bin", "python"),
@@ -154,15 +180,24 @@ describe("findProjectEnvCommand", () => {
     });
   });
 
-  it("8h. win32 branch (injected platform + exists): Scripts/python.exe found when no alembic.exe", () => {
+  it("8h. win32 branch (injected platform + exists): Scripts/python.exe + Lib/site-packages/alembic -> -m form", () => {
     const iniDir = "C:\\proj";
     const pythonExe = path.join(iniDir, ".venv", "Scripts", "python.exe");
-    const exists = (p: string) => p === pythonExe;
+    const alembicPkg = path.join(iniDir, ".venv", "Lib", "site-packages", "alembic");
+    const exists = (p: string) => p === pythonExe || p === alembicPkg;
 
     expect(findProjectEnvCommand({ iniDir, workspaceRoot: null, platform: "win32", exists })).toEqual({
       argv0: pythonExe,
       prefixArgs: ["-m", "alembic"],
     });
+  });
+
+  it("8h2. win32 python.exe WITHOUT Lib/site-packages/alembic -> null", () => {
+    const iniDir = "C:\\proj";
+    const pythonExe = path.join(iniDir, ".venv", "Scripts", "python.exe");
+    const exists = (p: string) => p === pythonExe;
+
+    expect(findProjectEnvCommand({ iniDir, workspaceRoot: null, platform: "win32", exists })).toBeNull();
   });
 
   it("8i. never throws even if exists() throws", () => {

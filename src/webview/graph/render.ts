@@ -384,7 +384,7 @@ function buildCanvasViewport(
     canvas.append(buildNodeElement(node, state, view, handlers, pos, density, brokenParentByChild));
   }
 
-  const mergeHint = buildMergeHint(state, view, positions, ui.axis, handlers);
+  const mergeHint = buildMergeHint(state, view, positions, ui.axis, handlers, size);
   if (mergeHint) canvas.append(mergeHint);
 
   scaleWrapper.append(canvas);
@@ -749,8 +749,15 @@ function buildMergeHint(
   positions: Map<string, Pos>,
   axis: UiPrefs["axis"],
   handlers: Handlers,
+  canvas: { w: number; h: number },
 ): HTMLElement | null {
   if (state.counts.heads < 2 || state.heads.length < 2) return null;
+
+  // Heads can legitimately sit at ANY row (a stale branch tip can be the graph's oldest node), so
+  // every placement below clamps into the canvas — without this, the bulk-side offsets overflow
+  // the scrollable area whenever a head lands on the far edge (review finding, 2026-07-08).
+  const clampX = (x: number, hintWidth: number): number =>
+    Math.max(0, Math.min(x, canvas.w - hintWidth));
 
   if (state.heads.length === 2) {
     const a = positions.get(state.heads[0].id);
@@ -770,13 +777,13 @@ function buildMergeHint(
       const bulkIsRightward = state.ui.order === "newest-top";
       const leftX = bulkIsRightward
         ? Math.max(a.right, b.right) + MERGE_HINT_GAP
-        : Math.max(0, Math.min(a.left, b.left) - MERGE_HINT_GAP - MERGE_HINT_WIDTH);
-      hint.style.left = `${leftX}px`;
+        : Math.min(a.left, b.left) - MERGE_HINT_GAP - MERGE_HINT_WIDTH;
+      hint.style.left = `${clampX(leftX, MERGE_HINT_WIDTH)}px`;
       hint.style.top = `${midy - 17}px`;
     } else {
       const midx = (a.cx + b.cx) / 2;
       const topY = Math.max(0, Math.min(a.top, b.top) - 34);
-      hint.style.left = `${midx - MERGE_HINT_WIDTH / 2}px`;
+      hint.style.left = `${clampX(midx - MERGE_HINT_WIDTH / 2, MERGE_HINT_WIDTH)}px`;
       hint.style.top = `${topY}px`;
     }
     return hint;
@@ -816,12 +823,12 @@ function buildMergeHint(
     const bulkIsRightward = state.ui.order === "newest-top";
     const leftX = bulkIsRightward
       ? maxRight + MERGE_HINT_GAP
-      : Math.max(0, minLeft - MERGE_HINT_GAP - MERGE_HINT_MULTI_WIDTH);
-    hint.style.left = `${leftX}px`;
+      : minLeft - MERGE_HINT_GAP - MERGE_HINT_MULTI_WIDTH;
+    hint.style.left = `${clampX(leftX, MERGE_HINT_MULTI_WIDTH)}px`;
     hint.style.top = `${cy - 17}px`;
   } else {
     const topY = Math.max(0, minTop - 34);
-    hint.style.left = `${cx - MERGE_HINT_MULTI_WIDTH / 2}px`;
+    hint.style.left = `${clampX(cx - MERGE_HINT_MULTI_WIDTH / 2, MERGE_HINT_MULTI_WIDTH)}px`;
     hint.style.top = `${topY}px`;
   }
   return hint;

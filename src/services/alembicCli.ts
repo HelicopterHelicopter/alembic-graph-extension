@@ -10,7 +10,7 @@
  * interpreter path by pythonEnv.ts + extension.ts.
  */
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import * as path from "node:path";
 
 export interface AlembicCommand {
@@ -23,20 +23,25 @@ export interface AlembicCommand {
  * for a project-local Python environment holding alembic: for each of `[".venv", "venv"]` (`.venv`
  * wins over `venv` within the same base), a direct `<envDir>/{bin|Scripts}/alembic[.exe]` binary is
  * preferred over falling back to `<envDir>/{bin|Scripts}/python[.exe]` run as `python -m alembic`.
+ * The python fallback additionally requires the alembic PACKAGE to be present in the env's
+ * site-packages — pip/uv-installed alembic virtually always creates the `bin/alembic` entry point,
+ * so a python-only env most likely lacks the package, and trusting it would hijack resolution from
+ * a working PATH-level alembic only to fail with "No module named alembic".
  * This is the tier `resolveCommand` falls back to between "ms-python's active interpreter" and "a
  * bare `alembic` on PATH" — most real projects have alembic installed in a project-local venv that
  * was never explicitly selected as the active Python interpreter.
  *
- * `platform`/`exists` are injectable purely for testing the win32 branch from any host OS; both
- * default to the real `process.platform` / `fs.existsSync`. Never throws — an `exists` that throws
- * (e.g. a permission error) is treated as "not found" for that candidate, same as `existsSync`
- * itself never throwing in practice.
+ * `platform`/`exists`/`listDir` are injectable purely for testing the win32 branch from any host
+ * OS; they default to the real `process.platform` / `fs.existsSync` / `fs.readdirSync`. Never
+ * throws — an `exists`/`listDir` that throws (e.g. a permission error) is treated as "not found"
+ * for that candidate.
  */
 export function findProjectEnvCommand(opts: {
   iniDir: string;
   workspaceRoot: string | null;
   platform?: NodeJS.Platform;
   exists?: (p: string) => boolean;
+  listDir?: (p: string) => string[];
 }): AlembicCommand | null {
   const platform = opts.platform ?? process.platform;
   const rawExists = opts.exists ?? existsSync;
@@ -46,6 +51,23 @@ export function findProjectEnvCommand(opts: {
     } catch {
       return false;
     }
+  };
+  const rawListDir = opts.listDir ?? ((p: string) => readdirSync(p));
+  const listDir = (p: string): string[] => {
+    try {
+      return rawListDir(p);
+    } catch {
+      return [];
+    }
+  };
+
+  /** Is the alembic package importable from this env? win32 keeps one fixed site-packages path;
+   * unix nests it under a version dir (lib/python3.x) we have to enumerate. */
+  const hasAlembicPackage = (envRoot: string): boolean => {
+    if (platform === "win32") return exists(path.join(envRoot, "Lib", "site-packages", "alembic"));
+    return listDir(path.join(envRoot, "lib"))
+      .filter((name) => name.startsWith("python"))
+      .some((name) => exists(path.join(envRoot, "lib", name, "site-packages", "alembic")));
   };
 
   const bases = opts.workspaceRoot !== null && opts.workspaceRoot !== opts.iniDir
@@ -63,7 +85,9 @@ export function findProjectEnvCommand(opts: {
       if (exists(alembicPath)) return { argv0: alembicPath, prefixArgs: [] };
 
       const pythonPath = path.join(envBinDir, `python${exeSuffix}`);
-      if (exists(pythonPath)) return { argv0: pythonPath, prefixArgs: ["-m", "alembic"] };
+      if (exists(pythonPath) && hasAlembicPackage(path.join(base, envDir))) {
+        return { argv0: pythonPath, prefixArgs: ["-m", "alembic"] };
+      }
     }
   }
 
