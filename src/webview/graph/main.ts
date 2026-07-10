@@ -199,6 +199,11 @@ const handlers: Handlers = {
   onOpenFile(id) {
     post({ type: "openFile", id });
   },
+  onNavigateToRevision(id) {
+    // Detail panel's down_revision links: jump to the parent revision exactly like a sidebar/
+    // CodeLens selectNode would.
+    selectAndCenterNode(id);
+  },
   onNewRevision() {
     // Belt-and-suspenders with render.ts's --disabled styling (pointer-events:none) — same
     // convention as the sidebar's onUpgrade guard (src/webview/sidebar/main.ts).
@@ -589,26 +594,8 @@ onMessage((msg) => {
       break;
     case "selectNode": {
       // Task 12: a click in the sidebar heads list routes here via GraphPanelManager.
-      // revealAndSelect() — same selection side effects as clicking the card directly (onSelect
-      // above), plus centering the canvas on the node since it may be scrolled out of view.
-      // Task 17: also dismiss any open context menu — selection just moved somewhere else
-      // entirely (and the centering scroll below may be a no-op, so the menu's own
-      // scroll-dismiss listener can't be relied on to fire).
-      closeContextMenu();
-      store.selectedId = msg.id;
-      store.detail = null;
-      store.detailOpen = true;
-      post({ type: "select", id: msg.id });
-      requestRender();
-      // Deferred the same way the render itself is (final-review fix): scrollNodeIntoView reads
-      // the just-rendered canvas' layout, so jumping the (still mid-drag, about-to-be-orphaned)
-      // OLD viewport here would be pointless at best — stash the id and let
-      // `onDragActiveChange(false)` run it right after the deferred render actually applies.
-      if (dragActive) {
-        pendingScrollId = msg.id;
-      } else {
-        scrollNodeIntoView(msg.id);
-      }
+      // revealAndSelect().
+      selectAndCenterNode(msg.id);
       break;
     }
     case "busy": {
@@ -774,8 +761,36 @@ function renderStore(scrollOverride?: ScrollPoint): void {
   persist();
 }
 
-/** Scrolls the canvas viewport so `id`'s card is roughly centered — used by the "selectNode"
- * handler (Task 12) to bring a sidebar-selected node into view. Computes the target position from
+/** Jump selection to `id` and center it: the shared path behind the host's "selectNode" message
+ * (sidebar heads / CodeLens, Task 12) and the detail panel's clickable down_revision links — same
+ * selection side effects as clicking the card directly (onSelect), plus centering the canvas on
+ * the node since it may be scrolled out of view. Dismisses any open context menu first — selection
+ * just moved somewhere else entirely (and the centering scroll may be a no-op, so the menu's own
+ * scroll-dismiss listener can't be relied on to fire). For an id hidden inside the collapse node
+ * the scroll/highlight are no-ops but the detail fetch still works (getDetail reads the graph, not
+ * the layout). Distinct from `navigateToNode` (Task 19's keyboard/search jump), which renders
+ * synchronously via onSelect and moves keyboard FOCUS to the card — this one is drag-safe
+ * (deferred render/scroll) and focus-neutral, matching what a host-initiated jump needs. */
+function selectAndCenterNode(id: string): void {
+  closeContextMenu();
+  store.selectedId = id;
+  store.detail = null;
+  store.detailOpen = true;
+  post({ type: "select", id });
+  requestRender();
+  // Deferred the same way the render itself is (final-review fix): scrollNodeIntoView reads
+  // the just-rendered canvas' layout, so jumping the (still mid-drag, about-to-be-orphaned)
+  // OLD viewport here would be pointless at best — stash the id and let
+  // `onDragActiveChange(false)` run it right after the deferred render actually applies.
+  if (dragActive) {
+    pendingScrollId = id;
+  } else {
+    scrollNodeIntoView(id);
+  }
+}
+
+/** Scrolls the canvas viewport so `id`'s card is roughly centered — used by `selectAndCenterNode`
+ * (Task 12) and `navigateToNode` (Task 19) to bring a just-selected node into view. Computes the target position from
  * the pure metrics.ts math (the same formulas render.ts's computePositions uses) rather than
  * querying the just-rendered DOM node's offset, so it works even for a node whose wrapper doesn't
  * expose its own position lookup. Must run AFTER renderStore() so `.alx-canvas-viewport` reflects

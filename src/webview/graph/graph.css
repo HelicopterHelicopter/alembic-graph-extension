@@ -849,6 +849,12 @@ body {
   font-size: 11px;
   color: #9cdcfe;
 }
+.alx-detail-parent--link {
+  cursor: pointer;
+}
+.alx-detail-parent--link:hover {
+  text-decoration: underline;
+}
 .alx-detail-parent--missing {
   color: #f14c4c;
 }

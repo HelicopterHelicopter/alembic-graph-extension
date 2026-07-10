@@ -11,6 +11,8 @@ import { buildBadgeItems } from "./badges";
 export interface DetailHandlers {
   onClose(): void;
   onOpenFile(id: string): void;
+  /** Clickable down_revision ids: jump selection/detail to that parent revision. */
+  onNavigateToRevision(id: string): void;
 }
 
 /** Builds the 328px "Revision detail" panel. */
@@ -87,7 +89,7 @@ function buildKeyValueRows(detail: RevisionDetail, handlers: DetailHandlers): HT
     buildRow("author", detail.author ?? "—"),
     buildRow("date", detail.date ?? "—"),
     buildStatusRow(detail.applied),
-    buildDownRevisionRow(detail.downRevisions),
+    buildDownRevisionRow(detail.downRevisions, handlers),
     buildFileRow(detail, handlers),
   );
   return kv;
@@ -127,7 +129,10 @@ function buildStatusRow(applied: boolean | null): HTMLElement {
   return row;
 }
 
-function buildDownRevisionRow(downRevisions: RevisionDetail["downRevisions"]): HTMLElement {
+function buildDownRevisionRow(
+  downRevisions: RevisionDetail["downRevisions"],
+  handlers: DetailHandlers,
+): HTMLElement {
   const row = document.createElement("div");
   row.className = "alx-detail-row alx-detail-row--start";
 
@@ -146,8 +151,17 @@ function buildDownRevisionRow(downRevisions: RevisionDetail["downRevisions"]): H
   } else {
     for (const parent of downRevisions) {
       const span = document.createElement("span");
-      span.className = parent.missing ? "alx-detail-parent alx-detail-parent--missing" : "alx-detail-parent";
-      span.textContent = parent.missing ? `${parent.id} (missing)` : parent.id;
+      if (parent.missing) {
+        // Missing parents aren't navigable — their ghost card carries the repair affordances
+        // (drag-repoint, blame Restore/Import), and selecting a ghost yields no detail anyway.
+        span.className = "alx-detail-parent alx-detail-parent--missing";
+        span.textContent = `${parent.id} (missing)`;
+      } else {
+        span.className = "alx-detail-parent alx-detail-parent--link";
+        span.textContent = parent.id;
+        span.title = "Go to revision";
+        span.addEventListener("click", () => handlers.onNavigateToRevision(parent.id));
+      }
       stack.append(span);
     }
   }

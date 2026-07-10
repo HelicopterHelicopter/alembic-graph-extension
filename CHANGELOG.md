@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.3 — 2026-07-10
+
+- Added: `down_revision` ids in the revision detail panel are now clickable — jump straight to the parent revision (selection, detail, and centering follow, matching the sidebar/CodeLens navigation). Missing parents stay non-clickable; their ghost card carries the repair actions.
+
 ## 0.0.2 — 2026-07-10
 
 - Fixed: the graph toolbar now wraps onto additional rows on narrow panels instead of clipping its rightmost controls; the search box shrinks before wrapping kicks in.

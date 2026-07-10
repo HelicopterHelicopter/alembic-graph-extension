@@ -44,6 +44,8 @@ export interface Handlers {
   onExpandCollapse(): void;
   onCloseDetail(): void;
   onOpenFile(id: string): void;
+  /** Detail panel's clickable down_revision ids — jump selection to that parent revision. */
+  onNavigateToRevision(id: string): void;
   /** Task 17: toolbar "+ New revision" button — `showInputBox`/QuickPick flow lives host-side
    * (newRevisionAction), this just posts the request. */
   onNewRevision(): void;
@@ -106,7 +108,11 @@ export function render(root: HTMLElement, state: AppState, view: ViewState, hand
   canvasRow.append(canvasViewport);
 
   if (view.detailOpen && view.detail !== null) {
-    const detailHandlers: DetailHandlers = { onClose: handlers.onCloseDetail, onOpenFile: handlers.onOpenFile };
+    const detailHandlers: DetailHandlers = {
+      onClose: handlers.onCloseDetail,
+      onOpenFile: handlers.onOpenFile,
+      onNavigateToRevision: handlers.onNavigateToRevision,
+    };
     canvasRow.append(buildDetailPanel(view.detail, detailHandlers));
   }
 
