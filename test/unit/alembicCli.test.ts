@@ -516,6 +516,98 @@ describe.skipIf(!existsSync(VENV_PYTHON))("AlembicCli real-fixture integration (
     }, 30000);
   });
 
+  describe("6d2. N-way octopus merge integration (N-way task — real alembic, tmp copy)", () => {
+    // Same golden rule as 6d: never mutate HEALTHY_PROJECT directly — copy first, always clean up.
+    let tmpDir: string | undefined;
+
+    afterAll(() => {
+      if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("6d2. a third head + merge -m with 3 ids: ONE new file whose down_revision tuple names all three; heads collapses to one", async () => {
+      tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-graph-octopus-"));
+      const projectDir = path.join(tmpDir, "healthy-project");
+      cpSync(HEALTHY_PROJECT, projectDir, { recursive: true });
+
+      const versionsDir = path.join(projectDir, "alembic/versions");
+      // A brand-new third head, alembic-style filename + docstring, revising the same parent
+      // (29dae0774a6c) HEALTHY_PROJECT's existing two heads (3aebf1885b7d, 4bfc02996c8e) already
+      // do — bringing this fixture from 2 heads to 3, exactly the shape an octopus merge needs.
+      const thirdHeadId = "a1c2d3e4f5a6";
+      const thirdHeadPath = path.join(versionsDir, `${thirdHeadId}_add_webhook_queue.py`);
+      writeFileSync(
+        thirdHeadPath,
+        [
+          '"""add webhook queue',
+          "",
+          `Revision ID: ${thirdHeadId}`,
+          "Revises: 29dae0774a6c",
+          "Create Date: 2026-05-12 10:12:00.000000",
+          "",
+          '"""',
+          "from alembic import op",
+          "import sqlalchemy as sa",
+          "",
+          "",
+          "# revision identifiers, used by Alembic.",
+          `revision = "${thirdHeadId}"`,
+          'down_revision = "29dae0774a6c"',
+          "branch_labels = None",
+          "depends_on = None",
+          "",
+          "",
+          "def upgrade() -> None:",
+          "    pass",
+          "",
+          "",
+          "def downgrade() -> None:",
+          "    pass",
+          "",
+        ].join("\n"),
+      );
+
+      const cli = makeFixtureCli(projectDir);
+
+      // Sanity check: the fixture really is at 3 heads now, before the merge.
+      const headsBefore = await cli.run(["heads"]);
+      expect(headsBefore.ok).toBe(true);
+      if (headsBefore.ok) {
+        const headLinesBefore = headsBefore.stdout
+          .split("\n")
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0);
+        expect(headLinesBefore).toHaveLength(3);
+      }
+
+      const before = new Set(readdirSync(versionsDir).filter((f) => f.endsWith(".py")));
+
+      const result = await cli.run(["merge", "-m", "test octopus", "3aebf1885b7d", "4bfc02996c8e", thirdHeadId]);
+      expect(result.ok).toBe(true);
+
+      const after = readdirSync(versionsDir).filter((f) => f.endsWith(".py"));
+      const newFiles = after.filter((f) => !before.has(f));
+      expect(newFiles).toHaveLength(1);
+
+      // Use the REAL parser (not a hand-rolled regex) to confirm the new file's down_revision
+      // tuple names exactly the three merged heads, order-independent — same style as 6d's own
+      // pairwise check, generalized to three ids.
+      const newFilePath = path.join(versionsDir, newFiles[0]);
+      const parsed = parseRevisionSource(readFileSync(newFilePath, "utf-8"), newFilePath);
+      expect(parsed).not.toBeNull();
+      expect(new Set(parsed?.downRevisions)).toEqual(new Set(["3aebf1885b7d", "4bfc02996c8e", thirdHeadId]));
+
+      const headsAfter = await cli.run(["heads"]);
+      expect(headsAfter.ok).toBe(true);
+      if (headsAfter.ok) {
+        const headLinesAfter = headsAfter.stdout
+          .split("\n")
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0);
+        expect(headLinesAfter).toHaveLength(1); // all three original heads merged into a single new head
+      }
+    }, 30000);
+  });
+
   /** Recursively deletes every `__pycache__` dir under `dir`. Python's default bytecode-cache
    * invalidation stores the source file's mtime with WHOLE-SECOND resolution — copying a fixture
    * (whose versions/*.py already ship a checked-in __pycache__/*.pyc, see fixtures/broken-project)

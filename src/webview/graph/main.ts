@@ -244,6 +244,18 @@ const handlers: Handlers = {
     if (store.busyOps.size > 0) return;
     post({ type: "restoreFile", ghostId });
   },
+  onMergeAllHeads(ids) {
+    // N-way task: the merge-hint banner's "Merge all N heads" button (heads >= 3) — belt-and-
+    // suspenders with render.ts's --disabled styling on the button itself (same busy-guard
+    // convention as onNewRevision/onExportSvg/onRestoreFile above), PLUS `dropGuardActive`: a
+    // click lands here through the same "posts merge, then waits on mergeHeadsAction's
+    // showInputBox before any busy:true" window a drag drop does (see dropGuardActive's own doc
+    // comment) — arming the guard exactly like `dndCallbacks.onMergeDrop` below closes that same
+    // narrow double-fire race for the button, not just the drag gesture.
+    if (store.busyOps.size > 0 || dropGuardActive) return;
+    armDropGuard();
+    post({ type: "merge", ids });
+  },
 };
 
 /**
@@ -477,7 +489,9 @@ const dndCallbacks: DndCallbacks = {
   },
   onMergeDrop(a, b) {
     armDropGuard();
-    post({ type: "merge", a, b });
+    // N-way task: the protocol's "merge" message now always carries `ids` (length 2 for a plain
+    // drag-drop) — see protocol/messages.ts's doc comment.
+    post({ type: "merge", ids: [a, b] });
   },
   onRepointDrop(ghostId, targetId) {
     // Task 15: repointAction (host) has no interactive prompt like mergeHeadsAction's

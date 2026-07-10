@@ -252,12 +252,13 @@ export class GraphPanelManager {
         break;
       }
       case "merge": {
-        // Task 14: drag-to-merge drop.
+        // Task 14: drag-to-merge drop (msg.ids.length === 2); N-way task: also the banner's
+        // "Merge all N heads" button (msg.ids.length >= 3) — same handler either way.
         const ctx = this.buildActionContext("merge");
         if (!ctx) break;
         // mergeHeadsAction never throws in practice (see its own doc comment) — the .catch is
         // defensive only, per the brief.
-        mergeHeadsAction(ctx, msg.a, msg.b).catch((err) => {
+        mergeHeadsAction(ctx, msg.ids).catch((err) => {
           this.log(`graph panel: mergeHeadsAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
         });
         break;

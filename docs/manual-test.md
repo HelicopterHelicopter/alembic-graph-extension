@@ -319,7 +319,7 @@ gitignored, but delete it after testing so future runs start from "nothing appli
 `harness/graph.html` (after `npm run build`, served over http — see the file's header comment)
 covers the pointer mechanics in isolation: drag threshold, target-ring hit-testing, transform-based
 follow, revert-on-empty-drop, non-head/busy gating, Escape-cancel, and the posted `{type:"merge",
-a, b}` message (recorded into `window.__postedMerges`; `window.__sendBusy(operation, active)`
+ids}` message (recorded into `window.__postedMerges`; `window.__sendBusy(operation, active)`
 simulates the host's busy round trip). The steps below are the F5-only checks that harness can't
 cover: a real `alembic merge` subprocess, the input box, the busy toast/spinner round trip, a real
 file-watcher-triggered re-render, and the command-palette QuickPick flow.
@@ -359,9 +359,10 @@ stray `fixtures/*/fixture.db`) once you're done, before committing or handing of
    plain click-to-select on it still works normally.
 9. Command palette flow: run **Alembic Graph: Merge Heads…**. A multi-select QuickPick lists both
    heads (10-char hash label, message description). Select only **one** and confirm: a warning
-   toast-style message "select exactly 2 heads..." appears and the QuickPick re-opens. Select
-   **both**, confirm: same input box → busy → success toast → one-head graph flow as steps 2–3.
-   `git checkout -- fixtures/healthy-project` again afterward.
+   toast-style message "select at least 2 heads..." appears and the QuickPick re-opens (N-way
+   task: this fixture only HAS 2 heads, so 3+ isn't reachable here — see the N-way section below
+   for the 3-heads case). Select **both**, confirm: same input box → busy → success toast →
+   one-head graph flow as steps 2–3. `git checkout -- fixtures/healthy-project` again afterward.
 10. With the graph panel **closed**, run **Alembic Graph: Merge Heads…** again and complete a
     merge: the input box, busy state, and success/error toasts all still work correctly even
     though `postToPanel` has nothing to post to (no panel-related errors in the Output channel).
@@ -378,6 +379,46 @@ stray `fixtures/*/fixture.db`) once you're done, before committing or handing of
     afterward (`5c0d13aa7d9f` remains). `git checkout -- fixtures/broken-project` afterward.
 14. Final cleanup: confirm `git status` shows no stray changes under `fixtures/` and no
     `fixtures/*/fixture.db` files remain, then remove the `alembicCommand` override setting.
+
+## N-way task: octopus merge (merge-all-heads button)
+
+`harness/graph.html` covers the banner/button rendering and posted-message shape in isolation, same
+as Task 14 above — the broken-project fixture it's dumped from already has exactly 3 heads
+(`3aebf1885b7d`, `4bfc02996c8e`, `5c0d13aa7d9f`), so it exercises the 3+-heads banner without any
+extra seeding: open `harness/graph.html`, confirm the green banner reads `drag one head onto
+another to merge ·` followed by an underlined `Merge all 3 heads` button, click it, and confirm
+`window.__postedMerges` gets one entry `{ids: ["5c0d13aa7d9f", "4bfc02996c8e", "3aebf1885b7d"]}`
+(state.heads order). `window.__sendBusy("merge", true)` dims the button
+(`.alx-merge-all-btn--disabled`, `pointer-events: none`) and a click on it while busy posts
+nothing. The steps below are the F5-only checks harness can't cover: a real `alembic merge`
+subprocess with 3+ revisions, the input box default message, and the resulting tuple
+`down_revision`.
+
+Setup: same override as Task 14 — `"alembicGraph.alembicCommand": "<absolute repo
+path>/.venv/bin/python -m alembic"`. **Fixture mutations from this section must be reverted** —
+`git checkout -- fixtures/` (and delete any stray `fixtures/*/fixture.db`) when done.
+
+1. Press F5, select **Run Extension (broken fixture)** (3 real heads:
+   `3aebf1885b7d`/`4bfc02996c8e`/`5c0d13aa7d9f`), set the override, then **Alembic Graph: Open
+   Migration Graph**.
+2. Confirm the green banner near the heads reads `drag one head onto another to merge ·` with an
+   underlined `Merge all 3 heads` button (not the plain 2-head `drag one head onto the other to
+   merge ⇄` wording).
+3. Click **Merge all 3 heads**. An input box appears, pre-filled `merge 3 heads` (not the pairwise
+   `<a8> and <b8>` wording — that's 2-heads-only). Accept the default. Expect the same busy
+   spinner → green success toast → file-watcher-triggered re-render flow as Task 14's pairwise
+   merge, landing on exactly **one** head afterward (badges HEAD + MERGE).
+4. Inspect the new file under `fixtures/broken-project/alembic/versions/`: `down_revision` is a
+   3-tuple naming all three original heads (order-independent).
+5. `git checkout -- fixtures/broken-project`, **Alembic Graph: Refresh** — back to 3 heads (plus
+   the pre-existing ghost/broken card, unaffected by this section).
+6. Command palette flow: run **Alembic Graph: Merge Heads…**, multi-select all 3 heads in the
+   QuickPick (placeholder now reads "Select at least 2 heads to merge"), confirm — same merge flow
+   as step 3. Selecting only 1 still re-prompts with a warning ("select at least 2 heads…");
+   selecting exactly 2 still works exactly as Task 14 (pairwise, `<a8> and <b8>` default message).
+   `git checkout -- fixtures/broken-project` again afterward.
+7. Final cleanup: confirm `git status` shows no stray changes under `fixtures/` and no
+   `fixtures/*/fixture.db` files remain, then remove the `alembicCommand` override setting.
 
 ## Task 15: ghost-drag repoint
 

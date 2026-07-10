@@ -61,6 +61,12 @@ export interface Handlers {
    * (the missing revision id, and the key `state.ghostBlame` is indexed by) — main.ts posts
    * `{type:"restoreFile", ghostId}`, gated the same busy-guard way as `onNewRevision`/`onExportSvg`. */
   onRestoreFile(ghostId: string): void;
+  /** N-way task: the merge-hint banner's inline "Merge all N heads" button, shown only once there
+   * are 3+ current heads (with exactly 2, the banner stays drag-hint-only, same as before this
+   * task). `ids` is every current head id, in `state.heads` order — main.ts arms the drop guard
+   * (mirroring a drag-merge drop) and posts `{type:"merge", ids}`, gated the same busy-guard way
+   * as `onNewRevision`/`onExportSvg`/`onRestoreFile`. */
+  onMergeAllHeads(ids: string[]): void;
 }
 
 interface Pos {
@@ -378,7 +384,7 @@ function buildCanvasViewport(
     canvas.append(buildNodeElement(node, state, view, handlers, pos, density, brokenParentByChild));
   }
 
-  const mergeHint = buildMergeHint(state, positions, ui.axis);
+  const mergeHint = buildMergeHint(state, view, positions, ui.axis, handlers);
   if (mergeHint) canvas.append(mergeHint);
 
   scaleWrapper.append(canvas);
@@ -723,35 +729,99 @@ function buildBadges(node: LayoutNode): HTMLElement | null {
 
 /** Matches graph.css's `.alx-merge-hint` fixed width. */
 const MERGE_HINT_WIDTH = 250;
+/** N-way task: matches graph.css's `.alx-merge-hint--multi` fixed width — wider than the plain
+ * 2-head hint to fit the "Merge all N heads" button alongside the (slightly longer) hint text. */
+const MERGE_HINT_MULTI_WIDTH = 300;
 /** Clearance between the hint box and whichever card edge it sits beside. */
 const MERGE_HINT_GAP = 16;
 
-function buildMergeHint(state: AppState, positions: Map<string, Pos>, axis: UiPrefs["axis"]): HTMLElement | null {
+/**
+ * The green drag-to-merge banner. With exactly 2 current heads this is UNCHANGED from before the
+ * N-way task (same text, same class, same position math) — a separate code path below, rather
+ * than a single generalized one, specifically so that 2-head case stays byte-identical rather than
+ * risking drift through shared aggregate math. With 3+ heads it instead reads "drag one head onto
+ * another to merge · " followed by an inline "Merge all N heads" button (N-way task) that posts a
+ * single octopus-merge request for every current head at once — see `Handlers.onMergeAllHeads`.
+ */
+function buildMergeHint(
+  state: AppState,
+  view: ViewState,
+  positions: Map<string, Pos>,
+  axis: UiPrefs["axis"],
+  handlers: Handlers,
+): HTMLElement | null {
   if (state.counts.heads < 2 || state.heads.length < 2) return null;
-  const a = positions.get(state.heads[0].id);
-  const b = positions.get(state.heads[1].id);
-  if (!a || !b) return null;
+
+  if (state.heads.length === 2) {
+    const a = positions.get(state.heads[0].id);
+    const b = positions.get(state.heads[1].id);
+    if (!a || !b) return null;
+
+    const hint = document.createElement("div");
+    hint.className = "alx-merge-hint";
+    hint.textContent = "drag one head onto the other to merge  ⇄";
+
+    if (axis === "horizontal") {
+      // Heads cluster toward the newest end of the chain — the min-x edge under "newest-top", the
+      // max-x edge under "newest-bottom" (see nodeXY's effRow mapping). Placing the hint toward
+      // the OLDER/bulk side (rather than "above", as in vertical) keeps it inside the canvas
+      // instead of risking a clip against whichever screen edge the newest end happens to sit at.
+      const midy = (a.cy + b.cy) / 2;
+      const bulkIsRightward = state.ui.order === "newest-top";
+      const leftX = bulkIsRightward
+        ? Math.max(a.right, b.right) + MERGE_HINT_GAP
+        : Math.max(0, Math.min(a.left, b.left) - MERGE_HINT_GAP - MERGE_HINT_WIDTH);
+      hint.style.left = `${leftX}px`;
+      hint.style.top = `${midy - 17}px`;
+    } else {
+      const midx = (a.cx + b.cx) / 2;
+      const topY = Math.max(0, Math.min(a.top, b.top) - 34);
+      hint.style.left = `${midx - MERGE_HINT_WIDTH / 2}px`;
+      hint.style.top = `${topY}px`;
+    }
+    return hint;
+  }
+
+  // N-way task: 3+ heads. Same banner family (`.alx-merge-hint`, plus a `--multi` modifier for the
+  // wider box/flex layout the inline button needs), positioned from the AGGREGATE of every head's
+  // position rather than just the first two — for exactly 2 heads this would reduce to the exact
+  // same math as the branch above, but that branch is kept separate anyway (see the doc comment).
+  const headPositions = state.heads.map((h) => positions.get(h.id)).filter((p): p is Pos => p !== undefined);
+  if (headPositions.length < 2) return null;
 
   const hint = document.createElement("div");
-  hint.className = "alx-merge-hint";
-  hint.textContent = "drag one head onto the other to merge  ⇄";
+  hint.className = "alx-merge-hint alx-merge-hint--multi";
+
+  const text = document.createElement("span");
+  text.textContent = "drag one head onto another to merge · ";
+  hint.append(text);
+
+  const headIds = state.heads.map((h) => h.id);
+  const btn = document.createElement("span");
+  btn.className = view.busy ? "alx-merge-all-btn alx-merge-all-btn--disabled" : "alx-merge-all-btn";
+  btn.textContent = `Merge all ${headIds.length} heads`;
+  btn.addEventListener("click", () => {
+    if (view.busy) return; // belt-and-suspenders with the --disabled class's pointer-events:none
+    handlers.onMergeAllHeads(headIds);
+  });
+  hint.append(btn);
+
+  const cy = headPositions.reduce((sum, p) => sum + p.cy, 0) / headPositions.length;
+  const cx = headPositions.reduce((sum, p) => sum + p.cx, 0) / headPositions.length;
+  const maxRight = Math.max(...headPositions.map((p) => p.right));
+  const minLeft = Math.min(...headPositions.map((p) => p.left));
+  const minTop = Math.min(...headPositions.map((p) => p.top));
 
   if (axis === "horizontal") {
-    // Heads cluster toward the newest end of the chain — the min-x edge under "newest-top", the
-    // max-x edge under "newest-bottom" (see nodeXY's effRow mapping). Placing the hint toward the
-    // OLDER/bulk side (rather than "above", as in vertical) keeps it inside the canvas instead of
-    // risking a clip against whichever screen edge the newest end happens to sit at.
-    const midy = (a.cy + b.cy) / 2;
     const bulkIsRightward = state.ui.order === "newest-top";
     const leftX = bulkIsRightward
-      ? Math.max(a.right, b.right) + MERGE_HINT_GAP
-      : Math.max(0, Math.min(a.left, b.left) - MERGE_HINT_GAP - MERGE_HINT_WIDTH);
+      ? maxRight + MERGE_HINT_GAP
+      : Math.max(0, minLeft - MERGE_HINT_GAP - MERGE_HINT_MULTI_WIDTH);
     hint.style.left = `${leftX}px`;
-    hint.style.top = `${midy - 17}px`;
+    hint.style.top = `${cy - 17}px`;
   } else {
-    const midx = (a.cx + b.cx) / 2;
-    const topY = Math.max(0, Math.min(a.top, b.top) - 34);
-    hint.style.left = `${midx - MERGE_HINT_WIDTH / 2}px`;
+    const topY = Math.max(0, minTop - 34);
+    hint.style.left = `${cx - MERGE_HINT_MULTI_WIDTH / 2}px`;
     hint.style.top = `${topY}px`;
   }
   return hint;

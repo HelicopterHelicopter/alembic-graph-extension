@@ -12,7 +12,7 @@ import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { bothAreCurrentHeads, mergeSuccessText, cliErrorText, repointSuccessText, restoreSource } from "./actionHelpers";
+import { allAreCurrentHeads, mergeSuccessText, cliErrorText, repointSuccessText, restoreSource } from "./actionHelpers";
 import { applyRepoint } from "../services/repoint";
 import type { AlembicCli, RunResult } from "../services/alembicCli";
 import type { MigrationService } from "../services/migrationService";
@@ -41,28 +41,38 @@ export interface ActionContext {
 export type RepointActionContext = Pick<ActionContext, "service" | "log" | "broadcast">;
 
 /**
- * Drag-to-merge / "Merge Heads…" command flow: validates both ids are current heads, prompts for
- * a merge message, runs `alembic merge -m <message> <a> <b>`, and schedules a refresh on success.
- * Never throws — every failure path (stale heads, a cancelled prompt, a CLI failure, or any
- * genuinely unexpected exception) degrades to a toast/log line and returns.
+ * Drag-to-merge / merge-all-heads button / "Merge Heads…" command flow: validates `ids` (>= 2,
+ * every distinct one a current head — see `allAreCurrentHeads`), prompts for a merge message, runs
+ * `alembic merge -m <message> <id1> <id2> ...` — a plain 2-id call is exactly the pairwise
+ * `alembic merge -m <message> <a> <b>` this used to be — and schedules a refresh on success. Also
+ * covers N-way "octopus" merges (N-way task): `alembic merge` natively accepts any number of
+ * revisions and produces ONE merge revision with a tuple `down_revision`; every call site (drag
+ * drop, the banner's "Merge all N heads" button, the QuickPick command) just hands this whatever
+ * `ids` it collected. Never throws — every failure path (stale heads, a cancelled prompt, a CLI
+ * failure, or any genuinely unexpected exception) degrades to a toast/log line and returns.
  */
-export async function mergeHeadsAction(ctx: ActionContext, a: string, b: string): Promise<void> {
+export async function mergeHeadsAction(ctx: ActionContext, ids: string[]): Promise<void> {
   try {
     const heads = ctx.service.getState()?.heads ?? [];
-    if (!bothAreCurrentHeads(heads, a, b)) {
-      ctx.broadcast({ type: "toast", level: "error", text: "Both revisions must be current heads to merge." });
+    if (!allAreCurrentHeads(heads, ids)) {
+      ctx.broadcast({ type: "toast", level: "error", text: "All selected revisions must be current heads to merge." });
       // The webview armed its drop guard the instant the drop posted "merge", and (Task 16) only
       // a merge/repoint `busy:false` disarms it — toasts no longer do. Send that definitive
       // "transaction over" signal even though `busy:true` was never broadcast (deleting an op that
       // was never added is a webview-side no-op), or an aborted drop would leave dragging locked
       // out for the guard's full 30s timeout.
       ctx.broadcast({ type: "busy", operation: "merge", active: false });
-      ctx.log(`mergeHeadsAction: ${a} / ${b} are not both current heads — aborting`);
+      ctx.log(`mergeHeadsAction: [${ids.join(", ")}] are not all current heads — aborting`);
       return;
     }
 
+    // Default message wording (N-way task): a 2-id call keeps the exact original "merge heads <a8>
+    // and <b8>" text (byte-identical to the pre-N-way behavior); 3+ ids fall back to a plain count
+    // — spelling out every 8-char id would blow past a reasonable input-box default.
+    const defaultMessage =
+      ids.length === 2 ? `merge heads ${ids[0].slice(0, 8)} and ${ids[1].slice(0, 8)}` : `merge ${ids.length} heads`;
     const message = await vscode.window.showInputBox({
-      value: `merge heads ${a.slice(0, 8)} and ${b.slice(0, 8)}`,
+      value: defaultMessage,
       prompt: "Merge revision message",
     });
     if (message === undefined) {
@@ -76,7 +86,7 @@ export async function mergeHeadsAction(ctx: ActionContext, a: string, b: string)
 
     ctx.broadcast({ type: "busy", operation: "merge", active: true });
     try {
-      const result: RunResult = await ctx.cli.run(["merge", "-m", message, a, b]);
+      const result: RunResult = await ctx.cli.run(["merge", "-m", message, ...ids]);
       if (result.ok) {
         ctx.broadcast({ type: "toast", level: "success", text: mergeSuccessText(result.stdout, message) });
         ctx.service.scheduleRefresh();

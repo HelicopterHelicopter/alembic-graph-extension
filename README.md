@@ -15,8 +15,11 @@ graph.
   left-to-right layout (root left, heads right — the default, so a wide editor tab isn't wasted) and
   the original top-to-bottom layout; **Order** adapts to match (`Newest →`/`Newest ←` horizontal,
   `Newest ↓`/`Newest ↑` vertical).
-- **Drag to merge** two heads onto each other to run `alembic merge`; **drag a broken (ghost)
-  link** onto a real revision to repair its `down_revision` in place.
+- **Drag to merge** two heads onto each other to run `alembic merge`, or click **Merge all N
+  heads** in the banner (shown once there are 3+ heads) to merge every current head at once — an
+  N-way "octopus" merge with a single tuple `down_revision`, exactly like `alembic merge rev1 rev2
+  rev3 ...` on the command line; **drag a broken (ghost) link** onto a real revision to repair its
+  `down_revision` in place.
 - **Blame + one-click Restore/Import for broken links**: a ghost card shows who deleted the missing
   revision and when (with a **Restore** button), or — for a cherry-picked/partial-sync branch where
   the parent was never local — where it can still be found on another ref (with an **Import**

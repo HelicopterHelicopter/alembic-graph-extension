@@ -76,7 +76,13 @@ export interface RevisionDetail {
 export type WebviewToHostMessage =
   | { type: "ready"; restored: Partial<UiPrefs> | null }
   | { type: "select"; id: string | null }
-  | { type: "merge"; a: string; b: string }
+  // N-way task: `ids` is every revision the merge should include — length 2 for the original
+  // drag-one-head-onto-another gesture (`[dragged, target]`, dnd.ts), length >= 3 for the banner's
+  // "Merge all N heads" button (every current head, order per `state.heads`) or the QuickPick
+  // command's multi-select. The host (mergeHeadsAction, src/ui/actions.ts) runs a single
+  // `alembic merge -m <msg> <...ids>` regardless of length — alembic itself accepts any number of
+  // revisions and produces one merge revision with a tuple `down_revision`.
+  | { type: "merge"; ids: string[] }
   | { type: "repoint"; ghostId: string; targetId: string }
   | { type: "upgrade" }
   | { type: "upgradeTo"; id: string }

@@ -665,6 +665,32 @@ body {
   animation: alxpulse 2s ease-in-out infinite;
   z-index: 2;
 }
+/* N-way task: 3+ heads — wider box, laid out as a wrapping flex row so the inline "Merge all N
+   heads" button sits beside the hint text instead of forcing a hard line break. */
+.alx-merge-hint--multi {
+  width: 300px;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+/* Same visual family as .alx-ghost-restore-btn (Task B2) — underlined accent-colored inline text
+   that opts back into pointer events against its `pointer-events: none` ancestor, busy-disabled
+   via the exact same dim/no-pointer convention as every other toolbar-adjacent affordance. */
+.alx-merge-all-btn {
+  pointer-events: auto;
+  cursor: pointer;
+  color: #89d185;
+  font-weight: 600;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+.alx-merge-all-btn--disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
 
 /* ---------- context menu (Task 17) ---------- */
 .alx-menu {

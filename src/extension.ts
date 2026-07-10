@@ -127,9 +127,10 @@ interface HeadQuickPickItem extends vscode.QuickPickItem {
 }
 
 /**
- * `alembicGraph.mergeHeads` command body: needs at least 2 current heads, lets the user pick
- * exactly 2 via a multi-select QuickPick (re-prompting on any other selection count), then hands
- * off to the same `mergeHeadsAction` the graph panel's drag-and-drop uses.
+ * `alembicGraph.mergeHeads` command body: needs at least 2 current heads, lets the user pick at
+ * least 2 via a multi-select QuickPick (re-prompting on a sub-2 selection count — N-way task: 3+
+ * is now a valid, intentional "octopus merge" selection, not just 2), then hands off to the same
+ * `mergeHeadsAction` the graph panel's drag-and-drop / "Merge all N heads" button use.
  */
 async function runMergeHeadsCommand(ctx: ActionContext): Promise<void> {
   const heads = ctx.service.getState()?.heads ?? [];
@@ -147,15 +148,15 @@ async function runMergeHeadsCommand(ctx: ActionContext): Promise<void> {
   for (;;) {
     const picked = await vscode.window.showQuickPick(items, {
       canPickMany: true,
-      placeHolder: "Select exactly 2 heads to merge",
+      placeHolder: "Select at least 2 heads to merge",
     });
     if (picked === undefined) return; // cancelled outright
-    if (picked.length === 2) {
-      await mergeHeadsAction(ctx, picked[0].headId, picked[1].headId);
+    if (picked.length >= 2) {
+      await mergeHeadsAction(ctx, picked.map((p) => p.headId));
       return;
     }
     void vscode.window.showWarningMessage(
-      `Alembic Graph: select exactly 2 heads to merge (${picked.length} selected).`,
+      `Alembic Graph: select at least 2 heads to merge (${picked.length} selected).`,
     );
     // loop: re-prompt
   }

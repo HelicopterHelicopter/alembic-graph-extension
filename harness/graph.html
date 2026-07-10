@@ -43,11 +43,15 @@
   standing by its own workspaceState-backed prefs.
 
   Task 14 (drag-to-merge): the stub does NOT run a real `alembic merge` (there's no host process
-  here) — it just records every posted `{type:"merge", a, b}` into `window.__postedMerges` (a
+  here) — it just records every posted `{type:"merge", ids}` into `window.__postedMerges` (a
   Playwright test asserts against that array directly, rather than scraping console text) and
   leaves it at that; no `busy`/`toast`/`state` follow-up is synthesized automatically. To exercise
   the busy-gates-drag path, a test calls `window.__sendBusy(operation, active)`, which dispatches a
   `busy` message the same shape GraphPanelManager would post for real.
+
+  N-way task: `ids` is length 2 for a plain drag-drop (`[dragged, target]`) and length >= 3 for the
+  merge-hint banner's "Merge all N heads" button (every current head, from `state.heads`) — same
+  `window.__postedMerges` array either way, one entry per posted "merge" message, each `{ids}`.
 
   Task 15 (ghost-drag repoint): same idea — every posted `{type:"repoint", ghostId, targetId}`
   lands in `window.__postedRepoints` instead of driving a real text edit. state.json (dumped from
@@ -128,7 +132,7 @@
       } else if (message && message.type === "expandCollapse") {
         respondToUiPatch({ expandCollapsed: !currentState?.ui.expandCollapsed });
       } else if (message && message.type === "merge") {
-        window.__postedMerges.push({ a: message.a, b: message.b });
+        window.__postedMerges.push({ ids: message.ids });
       } else if (message && message.type === "repoint") {
         window.__postedRepoints.push({ ghostId: message.ghostId, targetId: message.targetId });
       } else if (message && message.type === "exportSvg") {

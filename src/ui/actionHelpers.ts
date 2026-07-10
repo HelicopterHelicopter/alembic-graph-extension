@@ -8,11 +8,29 @@
 
 import type { GhostBlame as ProtocolGhostBlame } from "../protocol/messages";
 
-/** True only when both `a` and `b` are ids in `heads` — MigrationService's current heads list at
- * the moment an action was invoked. */
-export function bothAreCurrentHeads(heads: { id: string }[], a: string, b: string): boolean {
-  const ids = new Set(heads.map((h) => h.id));
-  return ids.has(a) && ids.has(b);
+/**
+ * True only when `ids.length >= 2` (the RAW, pre-dedup array — see below) and every DISTINCT id
+ * among `ids` is a current head — MigrationService's current heads list at the moment an action
+ * was invoked. Generalized from the original two-id `bothAreCurrentHeads` (Task 14) to support
+ * N-way octopus merges (`alembic merge rev1 rev2 rev3 ...`, N-way task): a plain 2-id call behaves
+ * identically to the old function for every input, including its degenerate a===a case (drop onto
+ * self) — `allAreCurrentHeads(heads, [x, x])` is `true` iff `x` alone is a head, same as
+ * `bothAreCurrentHeads(heads, x, x)` used to be.
+ *
+ * The length gate is checked on `ids` AS GIVEN, not the deduped set — so `["x", "x"]` still passes
+ * the length gate (preserving the a===a case above) even though it collapses to one distinct id;
+ * only the "is every one of them a head" check itself dedupes, since re-checking the same id twice
+ * is pointless work, not a correctness difference. `ids.length < 2` (0 or 1 ids, pre-dedup) is
+ * always `false` outright — merging requires at least two things to merge, regardless of what they
+ * dedupe to.
+ */
+export function allAreCurrentHeads(heads: { id: string }[], ids: string[]): boolean {
+  if (ids.length < 2) return false;
+  const headIds = new Set(heads.map((h) => h.id));
+  for (const id of new Set(ids)) {
+    if (!headIds.has(id)) return false;
+  }
+  return true;
 }
 
 /** Success-toast text for a completed `alembic merge` run — alembic's own

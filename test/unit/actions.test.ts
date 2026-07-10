@@ -4,34 +4,52 @@ import { describe, it, expect } from "vitest";
 // resolvable outside a real extension host — even importing an unrelated named export from
 // actions.ts here would fail the whole test file at load time. mergeHeadsAction itself is
 // vscode-coupled and, per the brief, intentionally NOT unit-tested; only the pure helpers are.
-import { bothAreCurrentHeads, mergeSuccessText, cliErrorText, repointSuccessText, restoreSource } from "../../src/ui/actionHelpers";
+import { allAreCurrentHeads, mergeSuccessText, cliErrorText, repointSuccessText, restoreSource } from "../../src/ui/actionHelpers";
 
-describe("bothAreCurrentHeads", () => {
+describe("allAreCurrentHeads", () => {
   const heads = [{ id: "aaa" }, { id: "bbb" }, { id: "ccc" }];
 
-  it("1a. both ids present -> true", () => {
-    expect(bothAreCurrentHeads(heads, "aaa", "bbb")).toBe(true);
+  it("1a. two distinct head ids -> true", () => {
+    expect(allAreCurrentHeads(heads, ["aaa", "bbb"])).toBe(true);
   });
 
   it("1b. order doesn't matter", () => {
-    expect(bothAreCurrentHeads(heads, "ccc", "aaa")).toBe(true);
+    expect(allAreCurrentHeads(heads, ["ccc", "aaa"])).toBe(true);
   });
 
   it("1c. one id missing -> false", () => {
-    expect(bothAreCurrentHeads(heads, "aaa", "zzz")).toBe(false);
+    expect(allAreCurrentHeads(heads, ["aaa", "zzz"])).toBe(false);
   });
 
   it("1d. neither id present -> false", () => {
-    expect(bothAreCurrentHeads(heads, "yyy", "zzz")).toBe(false);
+    expect(allAreCurrentHeads(heads, ["yyy", "zzz"])).toBe(false);
   });
 
   it("1e. empty heads list -> false", () => {
-    expect(bothAreCurrentHeads([], "aaa", "bbb")).toBe(false);
+    expect(allAreCurrentHeads([], ["aaa", "bbb"])).toBe(false);
   });
 
-  it("1f. a === b (degenerate drop onto self) -> true only if that single id is a head", () => {
-    expect(bothAreCurrentHeads(heads, "aaa", "aaa")).toBe(true);
-    expect(bothAreCurrentHeads(heads, "zzz", "zzz")).toBe(false);
+  it("1f. two equal ids (degenerate drop onto self) -> true only if that single id is a head", () => {
+    expect(allAreCurrentHeads(heads, ["aaa", "aaa"])).toBe(true);
+    expect(allAreCurrentHeads(heads, ["zzz", "zzz"])).toBe(false);
+  });
+
+  it("1g. N-way task: three distinct head ids -> true (octopus merge)", () => {
+    expect(allAreCurrentHeads(heads, ["aaa", "bbb", "ccc"])).toBe(true);
+  });
+
+  it("1h. N-way task: three ids, one not a head -> false", () => {
+    expect(allAreCurrentHeads(heads, ["aaa", "bbb", "zzz"])).toBe(false);
+  });
+
+  it("1i. N-way task: duplicate ids collapse to their distinct set for the head check", () => {
+    expect(allAreCurrentHeads(heads, ["aaa", "aaa", "bbb"])).toBe(true);
+    expect(allAreCurrentHeads(heads, ["aaa", "aaa", "zzz"])).toBe(false);
+  });
+
+  it("1j. fewer than 2 ids -> false even when every one given is a valid head", () => {
+    expect(allAreCurrentHeads(heads, ["aaa"])).toBe(false);
+    expect(allAreCurrentHeads(heads, [])).toBe(false);
   });
 });
 
