@@ -115,14 +115,18 @@ body {
 
 /* ---------- toolbar ---------- */
 .alx-toolbar {
-  height: 42px;
+  /* min-height (not height) + wrap: the toolbar has outgrown one row on narrow panels — controls
+   * flow onto extra rows instead of clipping (user-reported crop, 2026-07-10). The panel is a
+   * flex column, so the canvas viewport below absorbs the height change automatically. */
+  min-height: 42px;
   flex: none;
   background: var(--alx-bg);
   border-bottom: 1px solid var(--alx-border);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  padding: 0 14px;
-  gap: 12px;
+  padding: 4px 14px;
+  gap: 4px 12px;
   user-select: none;
 }
 
@@ -180,7 +184,10 @@ body {
   margin-right: 4px;
 }
 .alx-search-input {
+  /* Shrinks before the toolbar wraps, so moderate narrowing costs search-box width, not a row. */
   width: 200px;
+  min-width: 90px;
+  flex-shrink: 1;
   padding: 4px 8px;
   font-size: 11.5px;
   border-radius: 5px;
