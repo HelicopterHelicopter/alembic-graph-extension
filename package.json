@@ -3,7 +3,7 @@
   "displayName": "Alembic Graph",
   "description": "Interactive graph of your Alembic migration history — visualize heads, merges, and broken links; drag to merge heads or repair broken down_revisions.",
   "publisher": "OmniaInc",
-  "version": "0.0.3",
+  "version": "0.0.2",
   "license": "MIT",
   "repository": {
     "type": "git",
