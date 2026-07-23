@@ -109,7 +109,20 @@
         "alembicGraph.alembicCommand": {
           "type": "string",
           "default": "",
+          "scope": "resource",
           "description": "Override the alembic executable (default: selected Python interpreter → `python -m alembic`, else `alembic` on PATH)."
+        },
+        "alembicGraph.environmentFile": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Optional `.env` file loaded for Alembic subprocesses. Relative paths resolve from `alembic.ini`; supports `~`, `${workspaceFolder}`, `${gitMainWorktree}`, and `${gitMainProject}`. Existing process variables take precedence."
+        },
+        "alembicGraph.pythonEnvironmentPath": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Optional virtual-environment directory or Python executable used for Alembic. Relative paths resolve from `alembic.ini`; supports `~`, `${workspaceFolder}`, `${gitMainWorktree}`, and `${gitMainProject}`."
         },
         "alembicGraph.collapseThreshold": {
           "type": "number",
@@ -133,5 +146,8 @@
     "esbuild": "^0.25",
     "typescript": "^5",
     "vitest": "^3"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2"
   }
 }

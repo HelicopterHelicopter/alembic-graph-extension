@@ -1,8 +1,10 @@
 import * as vscode from "vscode";
 import { pickProject, selectProject, type AlembicProject } from "./services/discovery";
 import { MigrationService, type MigrationServiceDeps } from "./services/migrationService";
-import { AlembicCli, resolveCommand } from "./services/alembicCli";
+import { AlembicCli } from "./services/alembicCli";
 import { getActivePythonPath } from "./services/pythonEnv";
+import { createProjectRuntimeResolver } from "./services/projectRuntime";
+import { resolveWorktreeContext } from "./services/worktree";
 import { createAuthorProvider, type AuthorProvider } from "./services/gitAuthor";
 import { createGhostBlameProvider, type GhostBlameProvider } from "./services/gitDeletion";
 import { DEFAULT_LANE_COLOR_A, DEFAULT_LANE_COLOR_B, isValidHex } from "./core/color";
@@ -93,31 +95,38 @@ export function getBlameProvider(): GhostBlameProvider | undefined {
 }
 
 /**
- * Resolves the alembic command to run, fresh on every call (the override setting, the active
- * Python interpreter, and the project-local venv on disk can all change between calls — this must
- * never be cached). Precedence: a non-empty `alembicGraph.alembicCommand` override wins outright;
- * otherwise fall back to the ms-python extension's active interpreter (`python -m alembic`); then a
- * project-local `.venv`/`venv` discovered under `iniDir` or the first workspace folder
- * (`findProjectEnvCommand` — the common case where alembic is installed in the project but was
- * never explicitly selected as the active interpreter); then a bare `alembic` on PATH. Cheap even
- * though it's called fresh per run: at most a handful of `existsSync` calls.
+ * Builds the worktree-aware Alembic runtime for `project`. Configuration and ms-python lookup are
+ * scoped to the workspace folder containing this project's alembic.ini; the child cwd always
+ * remains `project.iniDir`, even when its interpreter or environment file comes from the main
+ * checkout.
  */
-async function resolveAlembicCommand(iniDir: string) {
-  const override = vscode.workspace.getConfiguration("alembicGraph").get<string>("alembicCommand", "");
-  if (override.trim().length > 0) {
-    return resolveCommand({ override, pythonPath: null, iniDir });
-  }
-  const pythonPath = await getActivePythonPath();
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
-  return resolveCommand({ override: "", pythonPath, iniDir, workspaceRoot });
-}
-
-/** Builds the AlembicCli for `project`, rooted at its alembic.ini directory (the cwd alembic
- * itself expects to run from). */
 function buildAlembicCli(project: AlembicProject): AlembicCli {
+  const resource = vscode.Uri.file(project.iniPath);
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(resource)?.uri.fsPath ?? null;
+  const runtimeResolver = createProjectRuntimeResolver({
+    iniDir: project.iniDir,
+    workspaceFolder,
+    getSettings: () => {
+      const cfg = vscode.workspace.getConfiguration("alembicGraph", resource);
+      return {
+        alembicCommand: cfg.get<string>("alembicCommand", ""),
+        environmentFile: cfg.get<string>("environmentFile", ""),
+        pythonEnvironmentPath: cfg.get<string>("pythonEnvironmentPath", ""),
+      };
+    },
+    getActivePythonPath: () => getActivePythonPath(resource),
+    getWorktreeContext: () =>
+      resolveWorktreeContext({
+        cwd: project.iniDir,
+        projectDir: project.iniDir,
+        log: (line) => outputChannel.appendLine(line),
+      }),
+    log: (line) => outputChannel.appendLine(line),
+  });
+
   return new AlembicCli({
     cwd: project.iniDir,
-    resolve: () => resolveAlembicCommand(project.iniDir),
+    resolve: () => runtimeResolver.resolve(),
     log: (line) => outputChannel.appendLine(line),
   });
 }
@@ -342,9 +351,9 @@ function activateForProject(
     // in migrationService.ts for why this is NOT the same as `service.refresh()`: a full refresh
     // re-reads every file from disk, resets DB/author enrichment to "unknown" for a moment, and
     // re-fires a real `alembic` subprocess plus a full git-log batch — all for a change that has
-    // nothing to do with file contents). alembicCommand is already resolved fresh on every CLI
-    // call (resolveAlembicCommand above) — nothing is cached to invalidate, just a log line so a
-    // change is visible in the Output channel.
+    // nothing to do with file contents). Runtime settings are resolved fresh for every CLI call,
+    // but trigger a full refresh so the current-revision state updates immediately.
+    const projectResource = vscode.Uri.file(project.iniPath);
     disposables.push(
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (
@@ -354,8 +363,14 @@ function activateForProject(
           e.affectsConfiguration("alembicGraph.collapseThreshold")
         ) {
           service.applyConfigChange();
-        } else if (e.affectsConfiguration("alembicGraph.alembicCommand")) {
-          outputChannel.appendLine("alembicGraph.alembicCommand changed — resolved fresh on the next CLI invocation");
+        }
+        if (
+          e.affectsConfiguration("alembicGraph.alembicCommand", projectResource) ||
+          e.affectsConfiguration("alembicGraph.environmentFile", projectResource) ||
+          e.affectsConfiguration("alembicGraph.pythonEnvironmentPath", projectResource)
+        ) {
+          outputChannel.appendLine("Alembic runtime settings changed — refreshing the active project");
+          void service.refresh();
         }
       }),
     );

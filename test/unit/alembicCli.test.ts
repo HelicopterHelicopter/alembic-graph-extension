@@ -416,6 +416,50 @@ describe("AlembicCli.current (injected exec)", () => {
   });
 });
 
+describe("AlembicCli worktree-aware runtime execution", () => {
+  it("passes the resolved environment to the child while keeping the configured project cwd", async () => {
+    const env = { DATABASE_URL: "sqlite:///shared.db", PATH: "/usr/bin" };
+    const exec = vi.fn<ExecFn>(async () => ({ ok: true, stdout: "", stderr: "" }));
+    const cli = new AlembicCli({
+      cwd: "/linked/services/api",
+      resolve: async () => ({
+        command: { argv0: "/main/.venv/bin/python", prefixArgs: ["-m", "alembic"] },
+        env,
+        commandSource: "main-worktree-venv",
+        environmentFile: "/main/services/api/.env",
+      }),
+      log: () => {},
+      exec,
+    });
+
+    await cli.run(["revision", "-m", "from worktree"]);
+
+    expect(exec).toHaveBeenCalledWith(
+      "/main/.venv/bin/python",
+      ["-m", "alembic", "revision", "-m", "from worktree"],
+      { cwd: "/linked/services/api", timeoutMs: 30000, env },
+    );
+  });
+
+  it("does not spawn when runtime resolution fails", async () => {
+    const exec = vi.fn<ExecFn>();
+    const cli = new AlembicCli({
+      cwd: "/linked/services/api",
+      resolve: async () => {
+        throw new Error('configured environment file "/main/.env" could not be read');
+      },
+      log: () => {},
+      exec,
+    });
+
+    const result = await cli.run(["upgrade", "heads"]);
+
+    expect(result.ok).toBe(false);
+    expect(exec).not.toHaveBeenCalled();
+    if (!result.ok) expect(result.error).toContain("could not be read");
+  });
+});
+
 describe("AlembicCli.run ENOENT rewrite (actionable message)", () => {
   it("10a. a spawn ENOENT error is rewritten to name the resolved argv0 and hint at the fixes", async () => {
     const exec = vi.fn<ExecFn>(async () => ({ ok: false, error: "spawn alembic ENOENT", stdout: "", stderr: "" }));
@@ -432,6 +476,7 @@ describe("AlembicCli.run ENOENT rewrite (actionable message)", () => {
       expect(result.error).toContain("alembic not found");
       expect(result.error).toContain('tried "alembic"');
       expect(result.error).toContain("alembicGraph.alembicCommand");
+      expect(result.error).toContain("alembicGraph.pythonEnvironmentPath");
       expect(result.error).toContain("ms-python");
     }
   });
