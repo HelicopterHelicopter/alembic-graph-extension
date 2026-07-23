@@ -129,6 +129,7 @@ describe("createProjectRuntimeResolver", () => {
     activePython?: string | null;
     worktree?: WorktreeContext | null;
     baseEnv?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
     log?: ReturnType<typeof vi.fn>;
   } = {}) {
     tmpDir = mkdtempSync(path.join(os.tmpdir(), "alembic-project-runtime-"));
@@ -149,6 +150,7 @@ describe("createProjectRuntimeResolver", () => {
       getActivePythonPath: async () => overrides.activePython ?? null,
       getWorktreeContext: async () => worktree,
       baseEnv: overrides.baseEnv ?? {},
+      platform: overrides.platform,
       log,
     });
     return { resolver, currentRoot, iniDir, workspaceFolder, mainRoot, mainProjectDir, log };
@@ -181,6 +183,27 @@ describe("createProjectRuntimeResolver", () => {
       SECRET_VALUE: "do-not-log",
     });
     expect(log.mock.calls.flat().join("\n")).not.toContain("do-not-log");
+  });
+
+  it("preserves process values across case-insensitive environment collisions on Windows", async () => {
+    const state = setup({
+      runtimeSettings: settings({ environmentFile: "${gitMainProject}/.env" }),
+      baseEnv: {
+        Path: "from-process",
+        Database_Url: "process-db",
+      },
+      platform: "win32",
+    });
+    writeFileSync(
+      path.join(state.mainProjectDir, ".env"),
+      "PATH=from-file\nDATABASE_URL=file-db\nFILE_ONLY=file-only\n",
+    );
+
+    expect((await state.resolver.resolve()).env).toEqual({
+      Path: "from-process",
+      Database_Url: "process-db",
+      FILE_ONLY: "file-only",
+    });
   });
 
   it("uses configured Python before the project-scoped ms-python interpreter", async () => {

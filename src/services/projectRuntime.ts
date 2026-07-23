@@ -220,6 +220,30 @@ export interface ProjectRuntimeResolver {
   resolve(): Promise<ResolvedAlembicRuntime>;
 }
 
+function mergeEnvironment(
+  fileEnv: NodeJS.ProcessEnv,
+  baseEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
+  if (platform !== "win32") return { ...fileEnv, ...baseEnv };
+
+  const merged: NodeJS.ProcessEnv = {};
+  const keysByCanonicalName = new Map<string, string>();
+  const apply = (values: NodeJS.ProcessEnv): void => {
+    for (const [key, value] of Object.entries(values)) {
+      const canonicalName = key.toLowerCase();
+      const previousKey = keysByCanonicalName.get(canonicalName);
+      if (previousKey !== undefined && previousKey !== key) delete merged[previousKey];
+      merged[key] = value;
+      keysByCanonicalName.set(canonicalName, key);
+    }
+  };
+
+  apply(fileEnv);
+  apply(baseEnv);
+  return merged;
+}
+
 /** Builds a per-project runtime resolver. Settings and env files are read fresh for every run. */
 export function createProjectRuntimeResolver(opts: {
   iniDir: string;
@@ -230,6 +254,7 @@ export function createProjectRuntimeResolver(opts: {
   log: (line: string) => void;
   homeDir?: string;
   baseEnv?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 }): ProjectRuntimeResolver {
   let cachedWorktree: WorktreeContext | undefined;
   let worktreeInFlight: Promise<WorktreeContext | null> | undefined;
@@ -288,7 +313,10 @@ export function createProjectRuntimeResolver(opts: {
 
     const fileEnv = parseDotenv(text);
     opts.log(`runtime: environment file=${environmentFile} (process environment takes precedence)`);
-    return { env: { ...fileEnv, ...baseEnv }, environmentFile };
+    return {
+      env: mergeEnvironment(fileEnv, baseEnv, opts.platform ?? process.platform),
+      environmentFile,
+    };
   };
 
   const findRuntimeCommand = async (
