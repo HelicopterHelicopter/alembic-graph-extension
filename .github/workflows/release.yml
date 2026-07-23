@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify release prerequisites
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          test -n "$OVSX_PAT"
+          git rev-parse --verify "refs/tags/v0.0.3^{commit}"
+          git merge-base --is-ancestor v0.0.3 HEAD
+
+      - name: Validate commits since the latest release
+        run: |
+          latest_tag="$(git describe --tags --abbrev=0)"
+          npm run commitlint -- \
+            --from "$latest_tag" \
+            --to HEAD \
+            --git-log-args="--no-merges" \
+            --verbose
+
+      - name: Check types
+        run: npm run check
+
+      - name: Run unit tests
+        run: npm run test:unit
+
+      - name: Publish release
+        run: npm run release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          VSCE_TARGET: universal
+
+      - name: Upload VSIX after a failed release
+        if: failure() && hashFiles('*.vsix') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-release-vsix-${{ github.sha }}
+          path: "*.vsix"
+          if-no-files-found: ignore
+          retention-days: 14

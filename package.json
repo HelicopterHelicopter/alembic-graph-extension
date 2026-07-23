@@ -137,13 +137,20 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "check": "tsc --noEmit -p . && tsc --noEmit -p src/webview",
+    "commitlint": "commitlint",
+    "release": "semantic-release",
     "test:unit": "vitest run",
     "vscode:prepublish": "node esbuild.mjs --production"
   },
   "devDependencies": {
+    "@commitlint/cli": "^21.2.1",
+    "@commitlint/config-conventional": "^21.2.0",
     "@types/node": "^20",
     "@types/vscode": "1.90.0",
+    "conventional-changelog-conventionalcommits": "^10.2.1",
     "esbuild": "^0.25",
+    "semantic-release": "^25.0.8",
+    "semantic-release-vsce": "^6.1.5",
     "typescript": "^5",
     "vitest": "^3"
   },
