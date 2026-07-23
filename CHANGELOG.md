@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added: linked-worktree runtime support can reuse a main-checkout virtualenv, load an explicitly
+  configured environment file, expand portable worktree path tokens, and resolve settings and the
+  ms-python interpreter against the selected project in multi-root workspaces.
+
 ## 0.0.2 — 2026-07-10
 
 - Added: `down_revision` ids in the revision detail panel are now clickable — jump straight to the parent revision (selection, detail, and centering follow, matching the sidebar/CodeLens navigation). Missing parents stay non-clickable; their ghost card carries the repair actions.

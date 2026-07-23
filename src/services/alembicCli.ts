@@ -10,124 +10,9 @@
  * interpreter path by pythonEnv.ts + extension.ts.
  */
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
-import * as path from "node:path";
-
-export interface AlembicCommand {
-  argv0: string;
-  prefixArgs: string[];
-}
-
-/**
- * Searches `[iniDir, workspaceRoot]` (deduped, in that order — iniDir wins when both have an env)
- * for a project-local Python environment holding alembic: for each of `[".venv", "venv"]` (`.venv`
- * wins over `venv` within the same base), a direct `<envDir>/{bin|Scripts}/alembic[.exe]` binary is
- * preferred over falling back to `<envDir>/{bin|Scripts}/python[.exe]` run as `python -m alembic`.
- * The python fallback additionally requires the alembic PACKAGE to be present in the env's
- * site-packages — pip/uv-installed alembic virtually always creates the `bin/alembic` entry point,
- * so a python-only env most likely lacks the package, and trusting it would hijack resolution from
- * a working PATH-level alembic only to fail with "No module named alembic".
- * This is the tier `resolveCommand` falls back to between "ms-python's active interpreter" and "a
- * bare `alembic` on PATH" — most real projects have alembic installed in a project-local venv that
- * was never explicitly selected as the active Python interpreter.
- *
- * `platform`/`exists`/`listDir` are injectable purely for testing the win32 branch from any host
- * OS; they default to the real `process.platform` / `fs.existsSync` / `fs.readdirSync`. Never
- * throws — an `exists`/`listDir` that throws (e.g. a permission error) is treated as "not found"
- * for that candidate.
- */
-export function findProjectEnvCommand(opts: {
-  iniDir: string;
-  workspaceRoot: string | null;
-  platform?: NodeJS.Platform;
-  exists?: (p: string) => boolean;
-  listDir?: (p: string) => string[];
-}): AlembicCommand | null {
-  const platform = opts.platform ?? process.platform;
-  const rawExists = opts.exists ?? existsSync;
-  const exists = (p: string): boolean => {
-    try {
-      return rawExists(p);
-    } catch {
-      return false;
-    }
-  };
-  const rawListDir = opts.listDir ?? ((p: string) => readdirSync(p));
-  const listDir = (p: string): string[] => {
-    try {
-      return rawListDir(p);
-    } catch {
-      return [];
-    }
-  };
-
-  /** Is the alembic package importable from this env? win32 keeps one fixed site-packages path;
-   * unix nests it under a version dir (lib/python3.x) we have to enumerate. */
-  const hasAlembicPackage = (envRoot: string): boolean => {
-    if (platform === "win32") return exists(path.join(envRoot, "Lib", "site-packages", "alembic"));
-    return listDir(path.join(envRoot, "lib"))
-      .filter((name) => name.startsWith("python"))
-      .some((name) => exists(path.join(envRoot, "lib", name, "site-packages", "alembic")));
-  };
-
-  const bases = opts.workspaceRoot !== null && opts.workspaceRoot !== opts.iniDir
-    ? [opts.iniDir, opts.workspaceRoot]
-    : [opts.iniDir];
-
-  const binDirName = platform === "win32" ? "Scripts" : "bin";
-  const exeSuffix = platform === "win32" ? ".exe" : "";
-
-  for (const base of bases) {
-    for (const envDir of [".venv", "venv"]) {
-      const envBinDir = path.join(base, envDir, binDirName);
-
-      const alembicPath = path.join(envBinDir, `alembic${exeSuffix}`);
-      if (exists(alembicPath)) return { argv0: alembicPath, prefixArgs: [] };
-
-      const pythonPath = path.join(envBinDir, `python${exeSuffix}`);
-      if (exists(pythonPath) && hasAlembicPackage(path.join(base, envDir))) {
-        return { argv0: pythonPath, prefixArgs: ["-m", "alembic"] };
-      }
-    }
-  }
-
-  return null;
-}
-
-/**
- * Precedence: a non-empty override setting (whitespace-split: first token is argv0, the rest are
- * prefix args, e.g. `"poetry run alembic"` -> `poetry run alembic <args>`) beats a resolved
- * interpreter path (`<pythonPath> -m alembic <args>`), which beats a discoverable project-local
- * venv (`findProjectEnvCommand`, only attempted when `iniDir` is supplied), which beats a bare
- * `alembic` on PATH.
- */
-export function resolveCommand(opts: {
-  override: string;
-  pythonPath: string | null;
-  iniDir?: string;
-  workspaceRoot?: string | null;
-  platform?: NodeJS.Platform;
-  exists?: (p: string) => boolean;
-}): AlembicCommand {
-  const trimmedOverride = opts.override.trim();
-  if (trimmedOverride.length > 0) {
-    const [argv0, ...prefixArgs] = trimmedOverride.split(/\s+/);
-    return { argv0, prefixArgs };
-  }
-  if (opts.pythonPath !== null) {
-    return { argv0: opts.pythonPath, prefixArgs: ["-m", "alembic"] };
-  }
-  if (opts.iniDir !== undefined) {
-    const found = findProjectEnvCommand({
-      iniDir: opts.iniDir,
-      workspaceRoot: opts.workspaceRoot ?? null,
-      platform: opts.platform,
-      exists: opts.exists,
-    });
-    if (found !== null) return found;
-  }
-  return { argv0: "alembic", prefixArgs: [] };
-}
+import type { AlembicCommand, ResolvedAlembicRuntime } from "./projectRuntime";
+export { findProjectEnvCommand, resolveCommand } from "./projectRuntime";
+export type { AlembicCommand } from "./projectRuntime";
 
 /**
  * Pure: parse `alembic current` stdout into revision ids. A line contributes its id if, once
@@ -154,7 +39,7 @@ export type RunResult =
 export type ExecFn = (
   argv0: string,
   args: string[],
-  opts: { cwd: string; timeoutMs: number },
+  opts: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
 ) => Promise<RunResult>;
 
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -170,13 +55,23 @@ function errorMessage(err: unknown): string {
  * child (as opposed to a plain non-zero exit, where `killed` is false) — that's what distinguishes
  * the timeout case below.
  */
-function defaultExec(argv0: string, args: string[], opts: { cwd: string; timeoutMs: number }): Promise<RunResult> {
+function defaultExec(
+  argv0: string,
+  args: string[],
+  opts: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
+): Promise<RunResult> {
   return new Promise((resolve) => {
     try {
       execFile(
         argv0,
         args,
-        { cwd: opts.cwd, timeout: opts.timeoutMs, killSignal: "SIGKILL", maxBuffer: 10 * 1024 * 1024 },
+        {
+          cwd: opts.cwd,
+          timeout: opts.timeoutMs,
+          killSignal: "SIGKILL",
+          maxBuffer: 10 * 1024 * 1024,
+          env: opts.env,
+        },
         (err, stdout, stderr) => {
           if (err === null) {
             resolve({ ok: true, stdout, stderr });
@@ -197,7 +92,7 @@ function defaultExec(argv0: string, args: string[], opts: { cwd: string; timeout
 
 export class AlembicCli {
   private readonly cwd: string;
-  private readonly resolve: () => Promise<AlembicCommand>;
+  private readonly resolve: () => Promise<AlembicCommand | ResolvedAlembicRuntime>;
   private readonly log: (line: string) => void;
   private readonly timeoutMs: number;
   private readonly exec: ExecFn;
@@ -211,7 +106,7 @@ export class AlembicCli {
 
   constructor(opts: {
     cwd: string;
-    resolve: () => Promise<AlembicCommand>;
+    resolve: () => Promise<AlembicCommand | ResolvedAlembicRuntime>;
     log: (line: string) => void;
     timeoutMs?: number;
     exec?: ExecFn;
@@ -235,10 +130,17 @@ export class AlembicCli {
 
   private async runNow(args: string[]): Promise<RunResult> {
     let command: AlembicCommand;
+    let env: NodeJS.ProcessEnv | undefined;
     try {
-      command = await this.resolve();
+      const resolved = await this.resolve();
+      if ("command" in resolved) {
+        command = resolved.command;
+        env = resolved.env;
+      } else {
+        command = resolved;
+      }
     } catch (err) {
-      const error = `failed to resolve alembic command: ${errorMessage(err)}`;
+      const error = `failed to resolve alembic runtime: ${errorMessage(err)}`;
       this.log(error);
       return { ok: false, error, stdout: "", stderr: "" };
     }
@@ -248,7 +150,11 @@ export class AlembicCli {
 
     let result: RunResult;
     try {
-      result = await this.exec(command.argv0, fullArgs, { cwd: this.cwd, timeoutMs: this.timeoutMs });
+      result = await this.exec(command.argv0, fullArgs, {
+        cwd: this.cwd,
+        timeoutMs: this.timeoutMs,
+        ...(env === undefined ? {} : { env }),
+      });
     } catch (err) {
       // Defensive only: the default exec never rejects, but an injected test/custom ExecFn might.
       result = { ok: false, error: errorMessage(err), stdout: "", stderr: "" };
@@ -268,8 +174,8 @@ export class AlembicCli {
           ...result,
           error:
             `alembic not found (tried "${command.argv0}"). Install alembic in your project's ` +
-            `environment, select a Python interpreter with alembic (ms-python), or set the ` +
-            `alembicGraph.alembicCommand setting.`,
+            `environment, select a Python interpreter with alembic (ms-python), set ` +
+            `alembicGraph.pythonEnvironmentPath, or set alembicGraph.alembicCommand.`,
         };
       }
     }

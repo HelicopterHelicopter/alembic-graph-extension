@@ -1110,3 +1110,34 @@ real git repo (there's no host process in the harness to run `git restore` again
    branches. The filesystem guard itself remains manual-only (or skipped, as a rare race condition).
 7. Clean up: `rm -rf /tmp/blame-demo`, then **Alembic Graph: Select Alembic Project…** back to this
    repo's own fixture.
+
+## Worktree-aware Alembic runtime
+
+Use a real Alembic project whose main checkout contains a working `.venv` and a `.env` pointing at
+a disposable development database.
+
+1. Create and open a linked worktree of that project, but do not copy or symlink its `.venv` or
+   `.env`.
+2. In the linked worktree's resource-scoped VS Code settings, set:
+   ```json
+   {
+     "alembicGraph.environmentFile": "${gitMainProject}/.env"
+   }
+   ```
+3. Launch this extension in an Extension Development Host against the linked worktree and open the
+   migration graph. In **Output → Alembic Graph**, expect:
+   - `runtime: linked worktree current=<linked path> main=<main path>`
+   - `runtime: environment file=<main project>/.env (process environment takes precedence)`
+   - `runtime: command source=main-project-venv` or `main-worktree-venv`
+   - The `$ … alembic current (…)` line uses an executable under the main checkout but shows the
+     linked project's `alembic.ini` directory in parentheses.
+4. Confirm the current-revision state matches the disposable database named by the main `.env`.
+5. Create a revision from the graph. Confirm the generated file appears under the linked
+   worktree's `versions/` directory and the main checkout remains unchanged.
+6. Set `alembicGraph.pythonEnvironmentPath` to `${gitMainWorktree}/.venv`; refresh and confirm the
+   command source changes to `configured-python`.
+7. Set `alembicGraph.environmentFile` to `${gitMainProject}/missing.env`. Refresh and confirm the
+   Output channel reports a runtime-resolution failure with the path, no new `$ …` subprocess line
+   follows it, and no environment keys or values are printed.
+8. Remove both settings. Refresh and confirm the main-checkout virtualenv fallback still works but
+   no environment file is loaded automatically.

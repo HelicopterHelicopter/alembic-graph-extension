@@ -48,19 +48,45 @@ graph.
   Python environment is required just to view it.
 - To run actions that shell out to the real `alembic` CLI (upgrade, downgrade, merge, preview SQL,
   new revision, and the "current revision" badge), you need a Python environment with `alembic`
-  installed, reachable one of four ways (in order of precedence):
+  installed. Resolution is project-scoped and uses this precedence:
   1. `alembicGraph.alembicCommand`, if set (e.g. `poetry run alembic`).
-  2. The [ms-python](https://marketplace.visualstudio.com/items?itemName=ms-python.python)
+  2. `alembicGraph.pythonEnvironmentPath`, if set to a virtualenv directory or Python executable.
+  3. The [ms-python](https://marketplace.visualstudio.com/items?itemName=ms-python.python)
      extension's active interpreter (`<python> -m alembic`) — installed, but optional; if it's
      absent this step is simply skipped.
-  3. A project-local `.venv`/`venv`, auto-discovered under the project's `alembic.ini` directory
-     and then the first workspace folder — this covers the common case of `alembic` installed in
+  4. A project-local `.venv`/`venv`, auto-discovered under the project's `alembic.ini` directory
+     and then its containing workspace folder — this covers the common case of `alembic` installed in
      the project's own virtualenv without it ever being selected as the active Python interpreter.
-  4. A bare `alembic` on `PATH`.
+  5. When the project is a linked Git worktree, `.venv`/`venv` under the corresponding project
+     directory and repository root in the main checkout.
+  6. A bare `alembic` on `PATH`.
 
   If none of these resolve to a real `alembic`, the error names exactly what was tried and how to
   fix it (pick an interpreter, install alembic, or set `alembicGraph.alembicCommand`).
 - Git, on `PATH`, for author enrichment (optional — cards just show no author if it's missing).
+
+## Linked Git Worktrees
+
+The extension keeps Alembic's working directory in the open worktree, so new migrations and other
+file changes stay on the active branch. If that worktree has no local virtualenv, the extension
+automatically tries a usable `.venv` or `venv` in the main checkout.
+
+Environment files outside the open worktree are never loaded automatically. Opt in with portable,
+resource-scoped settings:
+
+```json
+{
+  "alembicGraph.environmentFile": "${gitMainProject}/.env",
+  "alembicGraph.pythonEnvironmentPath": "${gitMainWorktree}/.venv"
+}
+```
+
+Paths may be absolute, relative to `alembic.ini`, or use `~`, `${workspaceFolder}`,
+`${gitMainWorktree}`, and `${gitMainProject}`. Existing process variables override values from the
+configured file. A missing configured file/environment fails before Alembic starts, avoiding an
+accidental command against the wrong database. Shared virtualenvs can be unsuitable when the
+project was editable-installed from the main checkout; use a worktree-local virtualenv if imports
+resolve to main-checkout source.
 
 ## Extension Settings
 
@@ -70,10 +96,12 @@ graph.
 | `alembicGraph.laneColorB` | `#c586c0` | Color of branch lanes (lane 1, and the base color that lanes 2+ hue-rotate from). |
 | `alembicGraph.showSqlPreview` | `true` | Show `upgrade()`/`downgrade()` bodies in the revision detail panel. |
 | `alembicGraph.alembicCommand` | `""` | Override the alembic executable (default: the selected Python interpreter → `python -m alembic`, else `alembic` on PATH). |
+| `alembicGraph.environmentFile` | `""` | Optional `.env` file for Alembic subprocesses; supports portable worktree path tokens. |
+| `alembicGraph.pythonEnvironmentPath` | `""` | Optional virtualenv directory or exact Python executable; supports portable worktree path tokens. |
 | `alembicGraph.collapseThreshold` | `20` | Minimum run of linear (non-head, non-merge, non-broken) revisions at the root end to collapse into a single placeholder card. |
 
-Changes to any of the above (except `alembicCommand`, which is already re-resolved on every CLI
-call) take effect immediately — no reload needed.
+Changes to any of the above take effect immediately — no reload needed. Runtime paths and
+environment files are re-resolved on every Alembic call.
 
 ## How it works
 

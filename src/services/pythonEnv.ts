@@ -21,8 +21,8 @@ interface PythonExtensionApi {
   };
 }
 
-/** Active interpreter path via the ms-python extension, or null. Never throws. */
-export async function getActivePythonPath(): Promise<string | null> {
+/** Active interpreter path via the ms-python extension, scoped to `resource`, or null. Never throws. */
+export async function getActivePythonPath(resource?: vscode.Uri): Promise<string | null> {
   try {
     const ext = vscode.extensions.getExtension<PythonExtensionApi>("ms-python.python");
     if (ext === undefined) return null;
@@ -31,7 +31,7 @@ export async function getActivePythonPath(): Promise<string | null> {
     const environments = api?.environments;
     if (environments === undefined) return null;
 
-    const activeEnv = environments.getActiveEnvironmentPath?.();
+    const activeEnv = environments.getActiveEnvironmentPath?.(resource);
     if (activeEnv === undefined) return null;
 
     const resolved = await environments.resolveEnvironment?.(activeEnv);
