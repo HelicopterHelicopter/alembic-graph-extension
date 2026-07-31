@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { currentRevisionLabel } from "./statusBarText";
 import type { MigrationService } from "../services/migrationService";
 import type { AppState } from "../protocol/messages";
 
@@ -58,12 +59,14 @@ function updateItems(
     headsItem.show();
   }
 
-  // Current item
-  if (state.currentIds.length === 0) {
+  // Current item — a multi-head DB has one current revision per applied branch head; the label
+  // shows the first + an explicit "+N" for the rest (see currentRevisionLabel).
+  const currentLabel = currentRevisionLabel(state.currentIds);
+  if (currentLabel === null) {
     currentItem.hide();
   } else {
-    currentItem.text = `current: ${state.currentIds[0].substring(0, 10)}`;
-    currentItem.tooltip = "Current database revision";
+    currentItem.text = currentLabel.text;
+    currentItem.tooltip = currentLabel.tooltip;
     currentItem.show();
   }
 

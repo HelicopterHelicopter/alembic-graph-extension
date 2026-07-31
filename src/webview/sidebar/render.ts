@@ -135,29 +135,48 @@ function buildHeadRow(head: AppState["heads"][number], handlers: Handlers): HTML
 
 function buildCurrentSection(state: AppState): DocumentFragment {
   const frag = document.createDocumentFragment();
-  frag.append(buildSectionHeader("Current revision", { spaced: true }));
-
-  const row = document.createElement("div");
-  row.className = "alx-side-current-row";
+  // A multi-head DB legitimately has several current revisions (one per applied branch head) —
+  // every one gets a row, with the header pluralized + counted, instead of only currentIds[0].
+  const count = state.currentIds.length;
+  frag.append(
+    buildSectionHeader(count > 1 ? "Current revisions" : "Current revision", {
+      spaced: true,
+      ...(count > 1 ? { count } : {}),
+    }),
+  );
 
   // DB state enrichment (Task 13) is what ever populates currentIds — until then this is always
-  // empty and the row shows the hollow-dot "unknown" state.
-  const currentId = state.currentIds[0] ?? null;
+  // empty and the single row shows the hollow-dot "unknown" state.
+  if (count === 0) {
+    const row = document.createElement("div");
+    row.className = "alx-side-current-row";
 
-  const dot = document.createElement("span");
-  dot.className = currentId !== null ? "alx-side-current-dot" : "alx-side-current-dot alx-side-current-dot--hollow";
+    const dot = document.createElement("span");
+    dot.className = "alx-side-current-dot alx-side-current-dot--hollow";
 
-  const hash = document.createElement("span");
-  if (currentId !== null) {
-    hash.className = "alx-side-hash";
-    hash.textContent = currentId.slice(0, 10);
-  } else {
+    const hash = document.createElement("span");
     hash.className = "alx-side-dim";
     hash.textContent = "unknown";
+
+    row.append(dot, hash);
+    frag.append(row);
+    return frag;
   }
 
-  row.append(dot, hash);
-  frag.append(row);
+  for (const currentId of state.currentIds) {
+    const row = document.createElement("div");
+    row.className = "alx-side-current-row";
+
+    const dot = document.createElement("span");
+    dot.className = "alx-side-current-dot";
+
+    const hash = document.createElement("span");
+    hash.className = "alx-side-hash";
+    hash.textContent = currentId.slice(0, 10);
+
+    row.append(dot, hash);
+    frag.append(row);
+  }
   return frag;
 }
 
