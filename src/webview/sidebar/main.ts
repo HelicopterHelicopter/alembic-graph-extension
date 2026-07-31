@@ -15,6 +15,7 @@
 import "./sidebar.css";
 import { onMessage, post } from "../shared/vscodeApi";
 import { render, renderScanning, renderNoProject, type Handlers } from "./render";
+import { applyBusyMessage } from "../../core/broadcastGate";
 import type { AppState } from "../../protocol/messages";
 
 const appRoot = document.getElementById("app");
@@ -52,11 +53,22 @@ onMessage((msg) => {
       renderCurrent();
       break;
     case "noProject":
+      // Also drop the cached state: without this, a later re-render trigger (e.g. a stale
+      // busy:false delivered on purpose — see core/broadcastGate.ts) would repaint the switched-
+      // away-from project's UI right over the no-project screen via renderCurrent().
+      lastState = null;
       renderNoProject(app);
       break;
+    case "scanning":
+      // Project switch onto a service whose first scan hasn't landed: drop the old project's
+      // cached state and show the same neutral placeholder the initial boot shows — see the
+      // message's comment in protocol/messages.ts.
+      lastState = null;
+      renderScanning(app);
+      break;
     case "busy":
-      if (msg.active) busyOps.add(msg.operation);
-      else busyOps.delete(msg.operation);
+      // Tracked by per-invocation token, not operation name — see applyBusyMessage's doc comment.
+      applyBusyMessage(busyOps, msg);
       // No-op until the first "state" lands — the scanning/no-project placeholders have no
       // upgrade button to disable.
       renderCurrent();

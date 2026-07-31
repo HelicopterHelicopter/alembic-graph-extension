@@ -6,6 +6,7 @@
  */
 import "./graph.css";
 import { onMessage, post, getPersisted, setPersisted } from "../shared/vscodeApi";
+import { applyBusyMessage } from "../../core/broadcastGate";
 import type { AppState, RevisionDetail, UiPrefs } from "../../protocol/messages";
 import { render, showToast, type Handlers, type ViewState } from "./render";
 import { canvasSize, edgePathD, nodeAnchor, nodeSize, nodeXY } from "./metrics";
@@ -117,29 +118,43 @@ let pendingScrollId: string | null = null;
  * the host's "busy" response: mergeHeadsAction (src/ui/actions.ts) shows an interactive
  * `showInputBox` BEFORE ever posting `busy:true`, so there's a real, human-timescale window after
  * a drop where `store.busyOps` is still empty and a second drag could start. Armed the instant a
- * drop fires; disarmed ONLY by a `busy` message with operation "merge" or "repoint" and
- * active:false — the drop's own transaction ending (Task 16 scoping; previously ANY busy/toast
- * message disarmed it, so an unrelated operation's toast — e.g. an upgrade finishing — could
- * reopen the double-drop race mid-window). The host now guarantees that terminal busy:false on
- * EVERY merge/repoint outcome, including a cancelled input box and pre-busy validation aborts
- * (see mergeHeadsAction/repointAction) — the generous fixed timeout below stays as a
+ * drop fires, carrying a webview-generated `busyToken` the host echoes back in every busy message
+ * for that invocation (see the merge/repoint messages' comment in protocol/messages.ts); disarmed
+ * ONLY by a merge/repoint `busy:false` whose token MATCHES the arming drop's — the drop's own
+ * transaction ending. Matching by token (not just operation name) matters because a stale
+ * merge/repoint busy:false from a switched-away-from project is deliberately still delivered
+ * (core/broadcastGate.ts) and must not disarm a freshly-armed guard in the new project — the
+ * double-drop race this guard exists for would reopen exactly during mergeHeadsAction's
+ * showInputBox window. The host guarantees that terminal busy:false on EVERY merge/repoint
+ * outcome, including a cancelled input box and pre-busy validation aborts (see
+ * mergeHeadsAction/repointAction) — the generous fixed timeout below stays as a
  * belt-and-suspenders floor so a dropped message can never wedge dragging off forever.
  */
 let dropGuardActive = false;
 let dropGuardTimer: ReturnType<typeof setTimeout> | null = null;
+/** The `busyToken` the currently-armed drop posted with — the only token whose terminal
+ * busy:false may disarm the guard. Null whenever the guard is disarmed. */
+let armedDropToken: string | null = null;
+let dropTokenSeq = 0;
 const DROP_GUARD_TIMEOUT_MS = 30000;
 
-function armDropGuard(): void {
+/** Arms the guard for one drop/click and returns the fresh token to post with. */
+function armDropGuard(): string {
+  const token = `drop#${++dropTokenSeq}`;
   dropGuardActive = true;
+  armedDropToken = token;
   if (dropGuardTimer !== null) clearTimeout(dropGuardTimer);
   dropGuardTimer = setTimeout(() => {
     dropGuardTimer = null;
     dropGuardActive = false;
+    armedDropToken = null;
   }, DROP_GUARD_TIMEOUT_MS);
+  return token;
 }
 
 function clearDropGuard(): void {
   dropGuardActive = false;
+  armedDropToken = null;
   if (dropGuardTimer !== null) {
     clearTimeout(dropGuardTimer);
     dropGuardTimer = null;
@@ -258,8 +273,7 @@ const handlers: Handlers = {
     // comment) — arming the guard exactly like `dndCallbacks.onMergeDrop` below closes that same
     // narrow double-fire race for the button, not just the drag gesture.
     if (store.busyOps.size > 0 || dropGuardActive) return;
-    armDropGuard();
-    post({ type: "merge", ids });
+    post({ type: "merge", ids, busyToken: armDropGuard() });
   },
 };
 
@@ -493,10 +507,9 @@ const dndCallbacks: DndCallbacks = {
     return store.busyOps.size === 0 && !dropGuardActive;
   },
   onMergeDrop(a, b) {
-    armDropGuard();
     // N-way task: the protocol's "merge" message now always carries `ids` (length 2 for a plain
     // drag-drop) — see protocol/messages.ts's doc comment.
-    post({ type: "merge", ids: [a, b] });
+    post({ type: "merge", ids: [a, b], busyToken: armDropGuard() });
   },
   onRepointDrop(ghostId, targetId) {
     // Task 15: repointAction (host) has no interactive prompt like mergeHeadsAction's
@@ -504,8 +517,7 @@ const dndCallbacks: DndCallbacks = {
     // guard here anyway costs nothing (it's disarmed by repoint's busy:false moments later) and
     // keeps this callback's shape identical to onMergeDrop's rather than special-casing one drag
     // kind.
-    armDropGuard();
-    post({ type: "repoint", ghostId, targetId });
+    post({ type: "repoint", ghostId, targetId, busyToken: armDropGuard() });
   },
   onDragMove(id, dxCanvas, dyCanvas) {
     updateDraggedEdges(id, dxCanvas, dyCanvas);
@@ -599,16 +611,17 @@ onMessage((msg) => {
       break;
     }
     case "busy": {
-      // Drop-guard clearing is scoped (Task 16) to the two DRAG-initiated operations' terminal
-      // busy:false — the definitive "that drop's host-side transaction is over" signal. While a
-      // merge/repoint is actually running, busy:true keeps drags gated via store.busyOps anyway,
-      // so not clearing on it loses nothing; an unrelated op's busy traffic (upgrade/sql/...)
-      // must leave the guard alone entirely.
-      if (!msg.active && (msg.operation === "merge" || msg.operation === "repoint")) {
+      // Drop-guard clearing is scoped (Task 16) to the arming drop's OWN terminal busy:false,
+      // matched by the echoed token — the definitive "that drop's host-side transaction is over"
+      // signal. While a merge/repoint is actually running, busy:true keeps drags gated via
+      // store.busyOps anyway, so not clearing on it loses nothing; an unrelated op's busy traffic
+      // (upgrade/sql/..., another invocation's merge, a stale project's merge) must leave the
+      // guard alone entirely — see dropGuardActive's doc comment.
+      if (!msg.active && msg.token === armedDropToken && (msg.operation === "merge" || msg.operation === "repoint")) {
         clearDropGuard();
       }
-      if (msg.active) store.busyOps.add(msg.operation);
-      else store.busyOps.delete(msg.operation);
+      // Tracked by per-invocation token, not operation name — see applyBusyMessage's doc comment.
+      applyBusyMessage(store.busyOps, msg);
       // Task 17: an open context menu must not outlive the busy gate coming down — its items
       // would post actions the isEnabled() check at open time could no longer veto.
       if (msg.active) closeContextMenu();

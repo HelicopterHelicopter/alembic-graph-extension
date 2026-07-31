@@ -82,8 +82,14 @@ export type WebviewToHostMessage =
   // command's multi-select. The host (mergeHeadsAction, src/ui/actions.ts) runs a single
   // `alembic merge -m <msg> <...ids>` regardless of length — alembic itself accepts any number of
   // revisions and produces one merge revision with a tuple `down_revision`.
-  | { type: "merge"; ids: string[] }
-  | { type: "repoint"; ghostId: string; targetId: string }
+  // `busyToken` (both messages): a webview-generated token for this request. The host action uses
+  // it as the invocation's busy token, so every `busy` message that invocation broadcasts echoes
+  // it back — which is what lets the graph webview's drop guard disarm ONLY on its own drop's
+  // terminal busy:false (matched by token), never on a same-named operation from another
+  // invocation or a stale pipeline. Optional: host-side callers (command palette) invoke the
+  // actions directly without one and get a host-generated token instead.
+  | { type: "merge"; ids: string[]; busyToken?: string }
+  | { type: "repoint"; ghostId: string; targetId: string; busyToken?: string }
   | { type: "upgrade" }
   | { type: "upgradeTo"; id: string }
   | { type: "downgradeTo"; id: string }
@@ -116,6 +122,13 @@ export type HostToWebviewMessage =
       // foundOn) ghost-card button flows — they're the same host action (restoreDeletedAction),
       // distinguished only by the `GhostBlame` kind it reads, so one busy op name covers both.
       operation: "merge" | "repoint" | "upgrade" | "downgrade" | "scan" | "revision" | "sql" | "restore";
+      // Unique per action INVOCATION (src/ui/actions.ts's newBusyToken) — webviews key their
+      // busyOps sets on this, not on `operation`, so the stale terminal busy:false that
+      // shouldDeliverStale (core/broadcastGate.ts) deliberately lets through from a superseded
+      // pipeline can only ever clear its own invocation's entry, never a same-named operation the
+      // CURRENT pipeline still has in flight. `operation` remains for operation-scoped consumers
+      // (the graph webview's drop guard disarms on merge/repoint terminal messages by name).
+      token: string;
       active: boolean;
     }
   // sidebar only: told explicitly (rather than inferred from silence) that the host found no
@@ -123,6 +136,13 @@ export type HostToWebviewMessage =
   // src/webview/sidebar/main.ts for why this exists as its own message instead of just never
   // sending "state".
   | { type: "noProject" }
+  // sidebar only: sent by SidebarViewProvider.rebind when a project switch lands on a service
+  // whose first scan hasn't completed yet. The sidebar webview survives the switch with the OLD
+  // project's state still rendered (and cached as its `lastState`) — this message drops that
+  // cache and shows the neutral "Scanning migrations…" placeholder, so a slow or failing first
+  // scan can never leave the previous project's data on screen with commands targeting the new
+  // one.
+  | { type: "scanning" }
   // Belt-and-braces reset sent on every project switch (SidebarViewProvider.rebind, extension.ts):
   // unconditionally wipe whichever busy operations this webview thinks are in flight and re-render,
   // regardless of whether every matching "busy" active:false ever arrived. Closes the same gap as

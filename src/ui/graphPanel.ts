@@ -258,7 +258,7 @@ export class GraphPanelManager {
         if (!ctx) break;
         // mergeHeadsAction never throws in practice (see its own doc comment) — the .catch is
         // defensive only, per the brief.
-        mergeHeadsAction(ctx, msg.ids).catch((err) => {
+        mergeHeadsAction(ctx, msg.ids, msg.busyToken).catch((err) => {
           this.log(`graph panel: mergeHeadsAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
         });
         break;
@@ -274,7 +274,7 @@ export class GraphPanelManager {
         };
         // repointAction never throws in practice (see its own doc comment) — the .catch is
         // defensive only, per the brief.
-        repointAction(ctx, msg.ghostId, msg.targetId).catch((err) => {
+        repointAction(ctx, msg.ghostId, msg.targetId, msg.busyToken).catch((err) => {
           this.log(`graph panel: repointAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
         });
         break;

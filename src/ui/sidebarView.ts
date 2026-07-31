@@ -86,10 +86,13 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
    * If the webview happens to not be resolved yet (never opened), there's nothing to push — the
    * next `resolveWebviewView` call (or the `ready` handler within it) picks up these new refs
    * naturally. If it IS resolved, tears down the old state subscription, wires a new one, and
-   * immediately re-pushes: the new service's current state if it has one yet, or `noProject` if
-   * switching to a project-less state. (A brand new project's service has no state until its first
-   * `refresh()` lands a moment later — that brief window is covered the same way the initial
-   * "Scanning migrations…" placeholder covers it on first load: no message posted yet.)
+   * immediately re-pushes: the new service's current state if it has one yet, `scanning` if its
+   * first `refresh()` hasn't landed yet, or `noProject` if switching to a project-less state. The
+   * `scanning` message is load-bearing, not cosmetic: unlike first load (where the webview is
+   * showing its own neutral placeholder), at switch time the webview is still rendering — and
+   * caching, as its `lastState` — the PREVIOUS project's data, and a scan that fails emits no
+   * state at all (see doRefresh's keep-previous-state-no-emit path), so without an explicit reset
+   * the old project's UI would sit there indefinitely while every command targets the new one.
    *
    * Also unconditionally posts `busyReset` (belt-and-braces, alongside `shouldDeliverStale` in
    * core/broadcastGate.ts): this sidebar instance is never recreated across a switch, so whatever
@@ -116,6 +119,7 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
     if (service) {
       const state = service.getState();
       if (state) void view.webview.postMessage({ type: "state", state });
+      else void view.webview.postMessage({ type: "scanning" });
     } else {
       void view.webview.postMessage({ type: "noProject" });
     }

@@ -16,21 +16,33 @@
  * in place — see its doc comment), so its `busyOps` Set (webview/sidebar/main.ts) just stays stuck
  * with that operation's name in it forever, no self-heal short of a full window reload.
  *
- * Delivering a stale `busy:false` anyway is NOT a full fix — it trades the "wedged forever" bug
- * for a smaller, self-limiting one. If the new (current-epoch) pipeline happens to have an
- * identically-named operation genuinely in flight when the stale `busy:false` lands, it will
- * transiently clear that operation's flag and re-enable the UI (button/drag-gate) for a moment
- * even though the NEW project's own action is still running — a real, if narrow, over-enable
- * window. It self-corrects rather than compounds: the new action's own terminal `busy:false`
- * hasn't been double-counted away (busyOps is a Set, not a counter), so its own `busy:true`
- * already re-added the flag, and its own eventual `busy:false` still clears it correctly once it
- * actually finishes. Only that direction (over-eagerly RE-ENABLING) is judged tolerable; a stale
- * `busy:true` or `toast` has no equivalent self-correction — over-eagerly showing a toast or
- * greying out a button for a project the user already switched away from would just sit there, so
- * those stay gated.
+ * Delivering a stale `busy:false` is safe because busy messages carry a per-invocation `token`
+ * and every token-keyed consumer matches on it: the webviews' busyOps sets (see `applyBusyMessage`
+ * below) only ever delete the stale invocation's OWN entry, and the graph webview's drop guard
+ * (dropGuardActive in webview/graph/main.ts) disarms only on the token its own drop posted with.
+ * A same-named operation the current pipeline has genuinely in flight sits under a different
+ * token and stays tracked, so a stale terminal message can neither re-enable controls mid-run nor
+ * disarm a freshly-armed drop guard. A stale `busy:true` or `toast` has no such self-limiting
+ * shape — over-eagerly showing a toast or greying out a button for a project the user already
+ * switched away from would just sit there, so those stay gated.
  */
 import type { HostToWebviewMessage } from "../protocol/messages";
 
 export function shouldDeliverStale(msg: HostToWebviewMessage): boolean {
   return msg.type === "busy" && msg.active === false;
+}
+
+/**
+ * The one shared implementation of "apply a busy message to a webview's busyOps set" (sidebar and
+ * graph main.ts both call this): tracked by `token`, NOT by operation name — see the module doc
+ * comment above and the `token` field's comment in protocol/messages.ts. Deleting a token that
+ * was never added is deliberately a no-op: actions post a terminal `busy:false` on cancel/abort
+ * paths where no `busy:true` was ever broadcast (see mergeHeadsAction in src/ui/actions.ts).
+ */
+export function applyBusyMessage(
+  busyOps: Set<string>,
+  msg: Extract<HostToWebviewMessage, { type: "busy" }>,
+): void {
+  if (msg.active) busyOps.add(msg.token);
+  else busyOps.delete(msg.token);
 }

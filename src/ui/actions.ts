@@ -40,6 +40,17 @@ export interface ActionContext {
  */
 export type RepointActionContext = Pick<ActionContext, "service" | "log" | "broadcast">;
 
+let busySeq = 0;
+
+/** Fresh busy token, one per action INVOCATION — every `busy` message that invocation broadcasts
+ * (the `busy:true`, its terminal `busy:false`, and any cancel/abort-path `busy:false`) carries the
+ * same token, and no other invocation ever shares it. Webviews key their busyOps tracking on this
+ * (see applyBusyMessage in core/broadcastGate.ts) so a stale terminal `busy:false` from a
+ * superseded pipeline can't clear a same-named operation the current pipeline still has running. */
+function newBusyToken(operation: string): string {
+  return `${operation}#${++busySeq}`;
+}
+
 /**
  * Drag-to-merge / merge-all-heads button / "Merge Heads…" command flow: validates `ids` (>= 2,
  * every distinct one a current head — see `allAreCurrentHeads`), prompts for a merge message, runs
@@ -51,8 +62,12 @@ export type RepointActionContext = Pick<ActionContext, "service" | "log" | "broa
  * `ids` it collected. Never throws — every failure path (stale heads, a cancelled prompt, a CLI
  * failure, or any genuinely unexpected exception) degrades to a toast/log line and returns.
  */
-export async function mergeHeadsAction(ctx: ActionContext, ids: string[]): Promise<void> {
+export async function mergeHeadsAction(ctx: ActionContext, ids: string[], clientBusyToken?: string): Promise<void> {
   try {
+    // A webview-supplied token (the drop guard's — see protocol/messages.ts) is echoed back in
+    // every busy message so the guard can match its own transaction; host-side callers (command
+    // palette) get a fresh host token instead.
+    const busyToken = clientBusyToken ?? newBusyToken("merge");
     const heads = ctx.service.getState()?.heads ?? [];
     if (!allAreCurrentHeads(heads, ids)) {
       ctx.broadcast({ type: "toast", level: "error", text: "All selected revisions must be current heads to merge." });
@@ -61,7 +76,7 @@ export async function mergeHeadsAction(ctx: ActionContext, ids: string[]): Promi
       // "transaction over" signal even though `busy:true` was never broadcast (deleting an op that
       // was never added is a webview-side no-op), or an aborted drop would leave dragging locked
       // out for the guard's full 30s timeout.
-      ctx.broadcast({ type: "busy", operation: "merge", active: false });
+      ctx.broadcast({ type: "busy", operation: "merge", token: busyToken, active: false });
       ctx.log(`mergeHeadsAction: [${ids.join(", ")}] are not all current heads — aborting`);
       return;
     }
@@ -80,11 +95,11 @@ export async function mergeHeadsAction(ctx: ActionContext, ids: string[]): Promi
       // carry-over): a cancelled input box previously sent NOTHING back to the webview, leaving
       // its drop guard silently armed until the 30s timeout. Same never-added/no-op-delete note
       // as the abort path above.
-      ctx.broadcast({ type: "busy", operation: "merge", active: false });
+      ctx.broadcast({ type: "busy", operation: "merge", token: busyToken, active: false });
       return;
     }
 
-    ctx.broadcast({ type: "busy", operation: "merge", active: true });
+    ctx.broadcast({ type: "busy", operation: "merge", token: busyToken, active: true });
     try {
       const result: RunResult = await ctx.cli.run(["merge", "-m", message, ...ids]);
       if (result.ok) {
@@ -96,7 +111,7 @@ export async function mergeHeadsAction(ctx: ActionContext, ids: string[]): Promi
         ctx.log(`mergeHeadsAction: alembic merge failed: ${result.error}`);
       }
     } finally {
-      ctx.broadcast({ type: "busy", operation: "merge", active: false });
+      ctx.broadcast({ type: "busy", operation: "merge", token: busyToken, active: false });
     }
   } catch (err) {
     // Defensive only — every awaited call above is documented never-throw, but the same golden
@@ -107,27 +122,34 @@ export async function mergeHeadsAction(ctx: ActionContext, ids: string[]): Promi
 
 /**
  * Ghost-drag repoint drop flow: plans the edit set from the cached graph (cycle-guarded — see
- * MigrationService.getRepointPlan), applies it (services/repoint.ts's WorkspaceEdit-per-file text
- * surgery), and toasts the result. Unlike mergeHeadsAction there's no interactive prompt to
+ * MigrationService.getRepointPlan), applies it (services/repoint.ts's validate-all-then-one-
+ * WorkspaceEdit text surgery), and toasts the result. Unlike mergeHeadsAction there's no interactive prompt to
  * confirm — alembic has no CLI for this operation, so the drop itself is the only user gesture —
  * and no explicit `service.scheduleRefresh()` call on success: the file(s) `applyRepoint` saves
  * trip the same workspace file watcher a manual edit would, which schedules its own rescan. Never
  * throws — every failure path (an unknown/invalid plan, a text-surgery rejection, or a write
  * failure) degrades to a toast/log line and returns.
  */
-export async function repointAction(ctx: RepointActionContext, ghostId: string, targetId: string): Promise<void> {
+export async function repointAction(
+  ctx: RepointActionContext,
+  ghostId: string,
+  targetId: string,
+  clientBusyToken?: string,
+): Promise<void> {
   try {
+    // Same client-token echo as mergeHeadsAction — see the comment there.
+    const busyToken = clientBusyToken ?? newBusyToken("repoint");
     const plan = ctx.service.getRepointPlan(ghostId, targetId);
     if (!plan.ok) {
       ctx.broadcast({ type: "toast", level: "error", text: plan.reason });
       // Same drop-guard release as mergeHeadsAction's abort path (see the comment there): the
       // webview armed its guard on drop, and only a merge/repoint busy:false disarms it now.
-      ctx.broadcast({ type: "busy", operation: "repoint", active: false });
+      ctx.broadcast({ type: "busy", operation: "repoint", token: busyToken, active: false });
       ctx.log(`repointAction: ${ghostId} -> ${targetId}: ${plan.reason}`);
       return;
     }
 
-    ctx.broadcast({ type: "busy", operation: "repoint", active: true });
+    ctx.broadcast({ type: "busy", operation: "repoint", token: busyToken, active: true });
     try {
       const result = await applyRepoint(plan.edits, ghostId, targetId);
       if (result.ok) {
@@ -138,7 +160,7 @@ export async function repointAction(ctx: RepointActionContext, ghostId: string, 
         ctx.log(`repointAction: applyRepoint failed: ${result.reason}`);
       }
     } finally {
-      ctx.broadcast({ type: "busy", operation: "repoint", active: false });
+      ctx.broadcast({ type: "busy", operation: "repoint", token: busyToken, active: false });
     }
   } catch (err) {
     // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
@@ -174,7 +196,8 @@ export async function upgradeAction(ctx: ActionContext, target: string): Promise
     }
     if (choice !== "Upgrade") return; // cancelled — silent, nothing was ever broadcast
 
-    ctx.broadcast({ type: "busy", operation: "upgrade", active: true });
+    const busyToken = newBusyToken("upgrade");
+    ctx.broadcast({ type: "busy", operation: "upgrade", token: busyToken, active: true });
     try {
       const result: RunResult = await ctx.cli.run(["upgrade", target]);
       if (result.ok) {
@@ -186,7 +209,7 @@ export async function upgradeAction(ctx: ActionContext, target: string): Promise
         ctx.log(`upgradeAction: alembic upgrade ${target} failed: ${result.error}`);
       }
     } finally {
-      ctx.broadcast({ type: "busy", operation: "upgrade", active: false });
+      ctx.broadcast({ type: "busy", operation: "upgrade", token: busyToken, active: false });
     }
   } catch (err) {
     // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
@@ -206,7 +229,8 @@ export async function upgradeAction(ctx: ActionContext, target: string): Promise
  */
 export async function previewSqlAction(ctx: ActionContext, to: string): Promise<void> {
   try {
-    ctx.broadcast({ type: "busy", operation: "sql", active: true });
+    const busyToken = newBusyToken("sql");
+    ctx.broadcast({ type: "busy", operation: "sql", token: busyToken, active: true });
     try {
       const result: RunResult = await ctx.cli.run(["upgrade", to, "--sql"]);
       if (result.ok) {
@@ -218,7 +242,7 @@ export async function previewSqlAction(ctx: ActionContext, to: string): Promise<
         ctx.log(`previewSqlAction: alembic upgrade ${to} --sql failed: ${result.error}`);
       }
     } finally {
-      ctx.broadcast({ type: "busy", operation: "sql", active: false });
+      ctx.broadcast({ type: "busy", operation: "sql", token: busyToken, active: false });
     }
   } catch (err) {
     // Not purely defensive here: openTextDocument/showTextDocument CAN reject (e.g. the window
@@ -248,7 +272,8 @@ export async function downgradeToAction(ctx: ActionContext, id: string): Promise
     );
     if (choice !== "Downgrade") return; // cancelled — silent, nothing was ever broadcast
 
-    ctx.broadcast({ type: "busy", operation: "downgrade", active: true });
+    const busyToken = newBusyToken("downgrade");
+    ctx.broadcast({ type: "busy", operation: "downgrade", token: busyToken, active: true });
     try {
       const result: RunResult = await ctx.cli.run(["downgrade", id]);
       if (result.ok) {
@@ -260,7 +285,7 @@ export async function downgradeToAction(ctx: ActionContext, id: string): Promise
         ctx.log(`downgradeToAction: alembic downgrade ${id} failed: ${result.error}`);
       }
     } finally {
-      ctx.broadcast({ type: "busy", operation: "downgrade", active: false });
+      ctx.broadcast({ type: "busy", operation: "downgrade", token: busyToken, active: false });
     }
   } catch (err) {
     // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
@@ -304,7 +329,8 @@ export async function newRevisionAction(ctx: ActionContext): Promise<void> {
     const args = ["revision", "-m", message];
     if (choice === AUTOGENERATE_LABEL) args.push("--autogenerate");
 
-    ctx.broadcast({ type: "busy", operation: "revision", active: true });
+    const busyToken = newBusyToken("revision");
+    ctx.broadcast({ type: "busy", operation: "revision", token: busyToken, active: true });
     try {
       const result: RunResult = await ctx.cli.run(args);
       if (result.ok) {
@@ -316,7 +342,7 @@ export async function newRevisionAction(ctx: ActionContext): Promise<void> {
         ctx.log(`newRevisionAction: alembic revision failed: ${result.error}`);
       }
     } finally {
-      ctx.broadcast({ type: "busy", operation: "revision", active: false });
+      ctx.broadcast({ type: "busy", operation: "revision", token: busyToken, active: false });
     }
   } catch (err) {
     // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
@@ -417,7 +443,8 @@ export async function restoreDeletedAction(
     const choice = await vscode.window.showWarningMessage(message, { modal: true }, confirmLabel);
     if (choice !== confirmLabel) return; // cancelled — silent, nothing was ever broadcast
 
-    ctx.broadcast({ type: "busy", operation: "restore", active: true });
+    const busyToken = newBusyToken("restore");
+    ctx.broadcast({ type: "busy", operation: "restore", token: busyToken, active: true });
     try {
       const result = await execGitRestore(["restore", `--source=${source}`, "--", relPath], repoRoot);
       if (result.ok) {
@@ -432,7 +459,7 @@ export async function restoreDeletedAction(
         ctx.log(`restoreDeletedAction: git restore failed: ${result.error}`);
       }
     } finally {
-      ctx.broadcast({ type: "busy", operation: "restore", active: false });
+      ctx.broadcast({ type: "busy", operation: "restore", token: busyToken, active: false });
     }
   } catch (err) {
     // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
