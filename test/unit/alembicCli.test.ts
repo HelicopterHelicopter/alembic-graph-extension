@@ -45,6 +45,36 @@ describe("resolveCommand", () => {
     });
   });
 
+  it("1a2. double-quoted argv0 with spaces stays one token (Windows install paths)", () => {
+    expect(
+      resolveCommand({ override: '"C:\\Program Files\\Python\\python.exe" -m alembic', pythonPath: null }),
+    ).toEqual({
+      argv0: "C:\\Program Files\\Python\\python.exe",
+      prefixArgs: ["-m", "alembic"],
+    });
+  });
+
+  it("1a3. single-quoted tokens are unwrapped anywhere in the override; backslashes stay literal", () => {
+    expect(resolveCommand({ override: "'/opt/my tools/alembic' --name 'my env'", pythonPath: null })).toEqual({
+      argv0: "/opt/my tools/alembic",
+      prefixArgs: ["--name", "my env"],
+    });
+  });
+
+  it("1a5. a quote character INSIDE a token is literal — apostrophe paths must pass through verbatim", () => {
+    expect(resolveCommand({ override: "/Users/o'brien/venv/bin/alembic", pythonPath: null })).toEqual({
+      argv0: "/Users/o'brien/venv/bin/alembic",
+      prefixArgs: [],
+    });
+  });
+
+  it("1a4. an override that is only quotes yields no tokens and falls through", () => {
+    expect(resolveCommand({ override: '""', pythonPath: "/venv/bin/python" })).toEqual({
+      argv0: "/venv/bin/python",
+      prefixArgs: ["-m", "alembic"],
+    });
+  });
+
   it("1b. pythonPath (no override) -> python -m alembic", () => {
     expect(resolveCommand({ override: "", pythonPath: "/venv/bin/python" })).toEqual({
       argv0: "/venv/bin/python",
@@ -296,6 +326,16 @@ describe("parseCurrentOutput", () => {
 
   it("2d. uppercase hex accepted; bare id (no suffix) accepted", () => {
     expect(parseCurrentOutput("3AEBF1885B7D (head)\n4bfc02996c8e\n")).toEqual(["3AEBF1885B7D", "4bfc02996c8e"]);
+  });
+
+  it("2e. custom --rev-id identifiers (non-hex) are accepted, log noise still ignored", () => {
+    const stdout = [
+      "INFO  [alembic.runtime.migration] Context impl SQLiteImpl.",
+      "release_1 (head)",
+      "sprint-42 (effective head)",
+      "rc_2024_07",
+    ].join("\n");
+    expect(parseCurrentOutput(stdout)).toEqual(["release_1", "sprint-42", "rc_2024_07"]);
   });
 });
 

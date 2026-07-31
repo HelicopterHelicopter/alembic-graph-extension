@@ -282,7 +282,20 @@ export class MigrationService {
     if (generation !== this.scanGeneration) return; // stale: a newer scan has since started
     if (!result.dbReachable || this.state === null) return; // nothing new to emit
 
-    this.enrichment = { dbReachable: true, currentIds: result.currentIds };
+    // Keep only ids that name a graph node. parseCurrentOutput (alembicCli.ts) is deliberately
+    // permissive about token shape — custom `--rev-id` values are arbitrary — so a single-token
+    // stdout line printed by the project's own env.py ("Done", a schema name, ...) is
+    // indistinguishable from a bare revision id at parse time. This membership check is what keeps
+    // such junk out of every display path (status bar, sidebar, isCurrent badges); the dropped
+    // tokens are logged so the rarer legitimate case (the DB's current revision missing from the
+    // local files) stays diagnosable instead of silently reading as "unknown".
+    const currentIds = result.currentIds.filter((id) => Object.hasOwn(graph.nodes, id));
+    const dropped = result.currentIds.filter((id) => !Object.hasOwn(graph.nodes, id));
+    if (dropped.length > 0) {
+      this.deps.log(`current revision ids not in the local graph (ignored): ${dropped.join(", ")}`);
+    }
+
+    this.enrichment = { dbReachable: true, currentIds };
 
     const config = this.deps.getConfig();
     const layout = this.buildLayout(graph, config, this.state.ui.expandCollapsed);
@@ -290,7 +303,7 @@ export class MigrationService {
     this.state = {
       ...this.state,
       layout,
-      currentIds: result.currentIds,
+      currentIds,
       dbReachable: true,
       laneColors: laneColorsFor(layout.laneCount, config.laneColorA, config.laneColorB),
     };

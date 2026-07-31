@@ -185,6 +185,20 @@ describe("createProjectRuntimeResolver", () => {
     expect(log.mock.calls.flat().join("\n")).not.toContain("do-not-log");
   });
 
+  it("a quotes-only override is ignored (falls through to the next resolution step, not labeled 'override')", async () => {
+    const log = vi.fn();
+    const state = setup({
+      runtimeSettings: settings({ alembicCommand: '""' }),
+      activePython: "/selected/python",
+      log,
+    });
+
+    const runtime = await state.resolver.resolve();
+    expect(runtime.command).toEqual({ argv0: "/selected/python", prefixArgs: ["-m", "alembic"] });
+    expect(runtime.commandSource).toBe("ms-python");
+    expect(log.mock.calls.flat().join("\n")).toContain("ignoring");
+  });
+
   it("preserves process values across case-insensitive environment collisions on Windows", async () => {
     const state = setup({
       runtimeSettings: settings({ environmentFile: "${gitMainProject}/.env" }),

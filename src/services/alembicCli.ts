@@ -16,17 +16,21 @@ export type { AlembicCommand } from "./projectRuntime";
 
 /**
  * Pure: parse `alembic current` stdout into revision ids. A line contributes its id if, once
- * trimmed, it matches /^([0-9a-f]+)(?:\s.*)?$/i — i.e. it starts with a run of hex digits followed
- * by nothing or whitespace-then-anything (covers alembic's `<id> (head)` / `<id> (effective
- * head)` / bare `<id>` formats). Everything else (blank lines, `INFO [alembic...] ...` logging,
- * warnings, tracebacks) is ignored. Empty stdout -> [].
+ * trimmed, it matches /^(\S+)(?:\s+\(.*\))?$/ — a single token, optionally followed by
+ * parenthesized annotations running to end-of-line (covers alembic's `<id> (head)` /
+ * `<id> (effective head)` / bare `<id>` formats). The token itself is NOT constrained to hex:
+ * `--rev-id` lets projects use ids like `release_1`, and rejecting those made every migration
+ * look unapplied. Log noise still stays out because it never fits the shape — `INFO
+ * [alembic...] ...` lines put brackets (not parens) after the first token, tracebacks/warnings
+ * put prose there — and any single-word line that does slip through is harmless downstream
+ * (computeAppliedSet ignores ids that aren't graph nodes). Empty stdout -> [].
  */
 export function parseCurrentOutput(stdout: string): string[] {
   const ids: string[] = [];
   for (const rawLine of stdout.split("\n")) {
     const line = rawLine.trim();
     if (line.length === 0) continue;
-    const match = /^([0-9a-f]+)(?:\s.*)?$/i.exec(line);
+    const match = /^(\S+)(?:\s+\(.*\))?$/.exec(line);
     if (match !== null) ids.push(match[1]);
   }
   return ids;

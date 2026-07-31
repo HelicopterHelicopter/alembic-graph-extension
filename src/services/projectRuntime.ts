@@ -67,6 +67,39 @@ export function findProjectEnvCommand(opts: {
   return null;
 }
 
+/**
+ * Splits a command-line override into tokens. A double/single quote AT A TOKEN BOUNDARY groups
+ * the token (so `"C:\Program Files\Python\python.exe" -m alembic` keeps the executable whole);
+ * a quote character INSIDE a token is a literal character — `/Users/o'brien/venv/bin/alembic`
+ * must pass through verbatim, exactly as the pre-quoting whitespace split did. Backslashes are
+ * always literal, never escapes — Windows paths are the main reason quoting exists here at all.
+ * An unterminated quote runs to end-of-input rather than erroring. Empty tokens (`""`) are
+ * dropped.
+ */
+function splitCommandLine(input: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  /** The quote character currently open, if any — only ever set at a token boundary. */
+  let quote: '"' | "'" | null = null;
+  for (const ch of input) {
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      else current += ch;
+    } else if ((ch === '"' || ch === "'") && current.length === 0) {
+      quote = ch;
+    } else if (/\s/.test(ch)) {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = "";
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (current.length > 0) tokens.push(current);
+  return tokens;
+}
+
 /** Legacy pure command resolver retained for callers/tests while runtime resolution moves here. */
 export function resolveCommand(opts: {
   override: string;
@@ -78,8 +111,9 @@ export function resolveCommand(opts: {
 }): AlembicCommand {
   const override = opts.override.trim();
   if (override.length > 0) {
-    const [argv0, ...prefixArgs] = override.split(/\s+/);
-    return { argv0, prefixArgs };
+    const [argv0, ...prefixArgs] = splitCommandLine(override);
+    // No tokens at all (an override of bare quotes) falls through like an empty override.
+    if (argv0 !== undefined) return { argv0, prefixArgs };
   }
   if (opts.pythonPath !== null) return { argv0: opts.pythonPath, prefixArgs: ["-m", "alembic"] };
   if (opts.iniDir !== undefined) {
@@ -203,8 +237,11 @@ export function findPythonEnvironmentCommand(
   );
 }
 
-function parseOverride(override: string): AlembicCommand {
-  return resolveCommand({ override, pythonPath: null });
+/** Null when the override contains no tokens at all (e.g. a stray pair of quotes) — the caller
+ * must then fall through to the next resolution step rather than reporting a phantom override. */
+function parseOverride(override: string): AlembicCommand | null {
+  const [argv0, ...prefixArgs] = splitCommandLine(override.trim());
+  return argv0 === undefined ? null : { argv0, prefixArgs };
 }
 
 function discoveredEnvAt(base: string): AlembicCommand | null {
@@ -324,7 +361,11 @@ export function createProjectRuntimeResolver(opts: {
     worktree: WorktreeContext | null,
   ): Promise<{ command: AlembicCommand; commandSource: RuntimeCommandSource }> => {
     if (settings.alembicCommand.trim().length > 0) {
-      return { command: parseOverride(settings.alembicCommand), commandSource: "override" };
+      const command = parseOverride(settings.alembicCommand);
+      if (command !== null) return { command, commandSource: "override" };
+      // A set-but-token-less override (stray quotes) must not be reported as commandSource
+      // "override" while actually running something else — log it and resolve as if unset.
+      opts.log(`runtime: alembicCommand ${JSON.stringify(settings.alembicCommand)} contains no command — ignoring override`);
     }
 
     if (settings.pythonEnvironmentPath.trim().length > 0) {

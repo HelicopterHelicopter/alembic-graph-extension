@@ -219,6 +219,25 @@ describe("MigrationService.setExpandCollapsed", () => {
   });
 });
 
+describe("MigrationService enrichment filtering", () => {
+  it("junk stdout tokens in fetchCurrent's currentIds are dropped before display; known ids kept", async () => {
+    // env.py is arbitrary user Python and can print to stdout ("Done", a schema name, ...) —
+    // parseCurrentOutput can't tell those single-token lines from a bare custom rev-id, so the
+    // graph-membership filter here is what keeps them out of the status bar / sidebar.
+    const deps = makeDeps({
+      fetchCurrent: vi.fn(async () => ({ dbReachable: true, currentIds: ["Done", "d4c7f5309b2e"] })),
+    });
+    const service = new MigrationService(deps);
+    await service.refresh();
+    await flushMicrotasks();
+
+    const state = service.getState()!;
+    expect(state.currentIds).toEqual(["d4c7f5309b2e"]); // "Done" is not a graph node
+    expect(state.dbReachable).toBe(true);
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("Done"));
+  });
+});
+
 describe("MigrationService.applyConfigChange (Task 21 config live-reload)", () => {
   const CURRENT_ID = "d4c7f5309b2e";
 
