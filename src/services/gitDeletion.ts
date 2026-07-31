@@ -80,8 +80,11 @@ function defaultExec(argv0: string, args: string[], opts: { cwd: string; timeout
 export interface GhostBlameProvider {
   /**
    * Resolves to exactly one entry per request id — `null` when searched-and-not-found (or every
-   * underlying git call failed); never a thrown/rejected promise. Cached per `missingId` (a repeat
-   * lookup, hit OR miss, never re-runs the search) — see `clearCache()`.
+   * underlying git call failed); never a thrown/rejected promise. Cached per `missingId` for hits
+   * AND clean misses (a search that ran to completion with no git failures), but NOT for a null
+   * tainted by any failed git call — a momentary `index.lock`, timeout, or shallow history must
+   * not wedge "no blame known" for the rest of the session when the UI offers a rescan. Same
+   * cache-on-success-only principle as `getRepoRoot()`. See `clearCache()`.
    */
   lookup(requests: { missingId: string; childFilePath: string }[]): Promise<Record<string, GhostBlame | null>>;
   /** Repo root cached once resolved via `git rev-parse --show-toplevel` — null until that
@@ -181,17 +184,28 @@ export function createGhostBlameProvider(opts: {
     opts.log(`gitDeletion: ${message}`);
   }
 
+  /** Per-`findBlame`-call failure flag, threaded explicitly through the search chain (NOT a
+   * provider-wide counter: `lookup()` calls can overlap — migrationService fires fetchGhostBlame
+   * un-awaited per refresh — and ambient state would let one call's failure taint a concurrent
+   * call's genuinely clean miss into looking uncacheable). */
+  interface FailureTally {
+    failed: boolean;
+  }
+
   /** Runs one git subcommand; resolves its stdout on success, or `null` (+ one log line) on ANY
-   * failure — a non-zero exit, git missing, not a repo, or the exec itself throwing. Never throws. */
-  async function runGit(args: string[], cwd: string): Promise<string | null> {
+   * failure — a non-zero exit, git missing, not a repo, or the exec itself throwing. Never throws.
+   * A failure also marks `tally` (when given) so the owning search can be classified. */
+  async function runGit(args: string[], cwd: string, tally?: FailureTally): Promise<string | null> {
     let result: ExecResult;
     try {
       result = await exec("git", args, { cwd, timeoutMs: TIMEOUT_MS });
     } catch (err) {
+      if (tally) tally.failed = true;
       onError(`git ${args.join(" ")} threw: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
     if (!result.ok) {
+      if (tally) tally.failed = true;
       onError(`git ${args.join(" ")} failed: ${result.error}`);
       return null;
     }
@@ -216,19 +230,19 @@ export function createGhostBlameProvider(opts: {
    * introduction candidates (post-image, `<sha>:<path>`): the file's content at that revision must
    * itself DEFINE `revision == missingId` (not merely reference it), or the candidate is rejected
    * and the caller moves on to the next one. */
-  async function verifyContentDefines(showArg: string, path: string, missingId: string): Promise<boolean> {
-    const content = await runGit(["show", showArg], versionsDir);
+  async function verifyContentDefines(showArg: string, path: string, missingId: string, tally: FailureTally): Promise<boolean> {
+    const content = await runGit(["show", showArg], versionsDir, tally);
     if (content === null) return false;
     const parsed = parseRevisionSource(content, path);
     return parsed !== null && parsed.revision === missingId;
   }
 
-  async function verifyDeletionCandidates(records: NameStatusRecord[], missingId: string): Promise<GhostBlame | null> {
+  async function verifyDeletionCandidates(records: NameStatusRecord[], missingId: string, tally: FailureTally): Promise<GhostBlame | null> {
     for (const rec of records) {
       for (const line of rec.statusLines) {
         const split = splitStatusLine(line);
         if (split === null || split.status !== "D") continue;
-        const verified = await verifyContentDefines(`${rec.commit}^:${split.path}`, split.path, missingId);
+        const verified = await verifyContentDefines(`${rec.commit}^:${split.path}`, split.path, missingId, tally);
         if (!verified) continue;
         return {
           kind: "deleted-here",
@@ -244,26 +258,28 @@ export function createGhostBlameProvider(opts: {
     return null;
   }
 
-  async function searchDeletionPickaxe(missingId: string): Promise<GhostBlame | null> {
+  async function searchDeletionPickaxe(missingId: string, tally: FailureTally): Promise<GhostBlame | null> {
     const stdout = await runGit(
       ["log", `-S${missingId}`, "--diff-filter=D", "--format=%H%x00%an%x00%aI%x00%s", "--name-status", "--", versionsDir],
       versionsDir,
+      tally,
     );
     if (stdout === null) return null;
-    return verifyDeletionCandidates(parseNameStatusLog(stdout), missingId);
+    return verifyDeletionCandidates(parseNameStatusLog(stdout), missingId, tally);
   }
 
-  async function searchDeletionGlob(missingId: string): Promise<GhostBlame | null> {
+  async function searchDeletionGlob(missingId: string, tally: FailureTally): Promise<GhostBlame | null> {
     const pattern = `${versionsDir}/*${missingId}*`;
     const stdout = await runGit(
       ["log", "--diff-filter=D", "--format=%H%x00%an%x00%aI%x00%s", "--name-status", "--", pattern],
       versionsDir,
+      tally,
     );
     if (stdout === null) return null;
-    return verifyDeletionCandidates(parseNameStatusLog(stdout), missingId);
+    return verifyDeletionCandidates(parseNameStatusLog(stdout), missingId, tally);
   }
 
-  async function searchAcrossRefs(missingId: string): Promise<{ ref: string; commit: string; filePath: string } | null> {
+  async function searchAcrossRefs(missingId: string, tally: FailureTally): Promise<{ ref: string; commit: string; filePath: string } | null> {
     const stdout = await runGit(
       [
         "log",
@@ -276,6 +292,7 @@ export function createGhostBlameProvider(opts: {
         versionsDir,
       ],
       versionsDir,
+      tally,
     );
     if (stdout === null) return null;
 
@@ -283,10 +300,10 @@ export function createGhostBlameProvider(opts: {
       for (const line of rec.statusLines) {
         const split = splitStatusLine(line);
         if (split === null || split.status !== "A") continue;
-        const verified = await verifyContentDefines(`${rec.commit}:${split.path}`, split.path, missingId);
+        const verified = await verifyContentDefines(`${rec.commit}:${split.path}`, split.path, missingId, tally);
         if (!verified) continue;
 
-        const branchStdout = await runGit(["branch", "-a", "--contains", rec.commit], versionsDir);
+        const branchStdout = await runGit(["branch", "-a", "--contains", rec.commit], versionsDir, tally);
         const ref = branchStdout !== null ? firstBranchLine(branchStdout) : null;
         if (ref === null) continue; // found the content but couldn't resolve a display ref — skip
 
@@ -296,10 +313,11 @@ export function createGhostBlameProvider(opts: {
     return null;
   }
 
-  async function searchNeverExisted(missingId: string, childFilePath: string): Promise<GhostBlame | null> {
+  async function searchNeverExisted(missingId: string, childFilePath: string, tally: FailureTally): Promise<GhostBlame | null> {
     const stdout = await runGit(
       ["log", "-1", "--diff-filter=A", "--format=%H%x00%an%x00%aI%x00%s%x00%B", "--", childFilePath],
       versionsDir,
+      tally,
     );
     if (stdout === null || stdout.trim().length === 0) return null;
 
@@ -311,7 +329,7 @@ export function createGhostBlameProvider(opts: {
     const cherryMatch = CHERRY_PICK_RE.exec(body);
     const cherryPickedFrom = cherryMatch ? cherryMatch[1] : null;
 
-    const foundOn = await searchAcrossRefs(missingId);
+    const foundOn = await searchAcrossRefs(missingId, tally);
 
     return {
       kind: "never-existed",
@@ -325,21 +343,26 @@ export function createGhostBlameProvider(opts: {
     };
   }
 
-  async function findBlame(missingId: string, childFilePath: string): Promise<GhostBlame | null> {
+  async function findBlame(
+    missingId: string,
+    childFilePath: string,
+  ): Promise<{ blame: GhostBlame | null; hadFailure: boolean }> {
+    const tally: FailureTally = { failed: false };
     try {
-      const pickaxeHit = await searchDeletionPickaxe(missingId);
-      if (pickaxeHit) return pickaxeHit;
+      const pickaxeHit = await searchDeletionPickaxe(missingId, tally);
+      if (pickaxeHit) return { blame: pickaxeHit, hadFailure: tally.failed };
 
-      const globHit = await searchDeletionGlob(missingId);
-      if (globHit) return globHit;
+      const globHit = await searchDeletionGlob(missingId, tally);
+      if (globHit) return { blame: globHit, hadFailure: tally.failed };
 
-      return await searchNeverExisted(missingId, childFilePath);
+      return { blame: await searchNeverExisted(missingId, childFilePath, tally), hadFailure: tally.failed };
     } catch (err) {
       // Defensive only: every step above already swallows its own git failures via runGit(); this
       // catches anything genuinely unexpected (e.g. a pathological parser input) so ONE ghost's
-      // search can never take down the whole batch.
+      // search can never take down the whole batch. Counts as a failure: a null owed to an
+      // unexpected throw is no more definitive than one owed to a failed git call.
       onError(`unexpected error searching blame for ${missingId}: ${err instanceof Error ? err.message : String(err)}`);
-      return null;
+      return { blame: null, hadFailure: true };
     }
   }
 
@@ -353,8 +376,10 @@ export function createGhostBlameProvider(opts: {
         result[missingId] = cache.get(missingId) ?? null;
         continue;
       }
-      const blame = await findBlame(missingId, childFilePath);
-      cache.set(missingId, blame);
+      const { blame, hadFailure } = await findBlame(missingId, childFilePath);
+      // Cache a hit unconditionally, and a miss only when the whole search chain ran without a
+      // single git failure — a null owed to a transient failure must stay re-lookupable.
+      if (blame !== null || !hadFailure) cache.set(missingId, blame);
       result[missingId] = blame;
     }
     return result;

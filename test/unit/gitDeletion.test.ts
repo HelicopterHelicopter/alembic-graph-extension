@@ -285,6 +285,99 @@ describe("createGhostBlameProvider (injected fake exec)", () => {
     expect(exec.mock.calls.length).toBeGreaterThan(callsAfterFirst); // re-searched after clearCache
   });
 
+  it("1g2. a null produced by git failures is NOT cached: the next lookup re-runs the search and can recover", async () => {
+    const commit = "999888777666999888777666999888777666abcd";
+    const preimage = "revision = 'deadbeef0000'\ndown_revision = None\n";
+    let failing = true;
+    const exec = vi.fn<ExecFn>(async (_argv0, args) => {
+      if (failing) return fail("transient: index.lock");
+      if (args[0] === "rev-parse") return ok("/proj\n");
+      if (args[0] === "log" && args.some((a) => a.startsWith("-Sdeadbeef0000")) && args.includes("--diff-filter=D")) {
+        return ok(nameStatusStdout([{ commit, author: "A", date: "2026-01-01T00:00:00Z", subject: "s", lines: [`D\t${VERSIONS_DIR}/deadbeef0000_old.py`] }]));
+      }
+      if (args[0] === "show") return ok(preimage);
+      return ok("");
+    });
+
+    const provider = createGhostBlameProvider({ versionsDir: VERSIONS_DIR, log: () => {}, exec });
+    const req = [{ missingId: "deadbeef0000", childFilePath: `${VERSIONS_DIR}/child.py` }];
+
+    const first = await provider.lookup(req);
+    expect(first["deadbeef0000"]).toBeNull(); // every git call failed -> no blame known
+
+    failing = false; // the transient condition clears (lock released, repo fetched, ...)
+    const second = await provider.lookup(req);
+    expect(second["deadbeef0000"]).toMatchObject({ kind: "deleted-here", commit }); // recovered, not wedged
+  });
+
+  it("1g3. a CLEAN searched-and-not-found null IS still cached (zero new exec calls on repeat)", async () => {
+    const exec = vi.fn<ExecFn>(async (_argv0, args) => {
+      if (args[0] === "rev-parse") return ok("/proj\n");
+      return ok(""); // every search succeeds and finds nothing
+    });
+    const provider = createGhostBlameProvider({ versionsDir: VERSIONS_DIR, log: () => {}, exec });
+    const req = [{ missingId: "deadbeef0000", childFilePath: `${VERSIONS_DIR}/child.py` }];
+
+    const first = await provider.lookup(req);
+    expect(first["deadbeef0000"]).toBeNull();
+    const callsAfterFirst = exec.mock.calls.length;
+
+    const second = await provider.lookup(req);
+    expect(exec.mock.calls.length).toBe(callsAfterFirst); // pure cache hit
+    expect(second["deadbeef0000"]).toBeNull();
+  });
+
+  it("1g4. a git failure in one lookup() call does not taint a concurrent clean lookup's cacheability", async () => {
+    // migrationService fires fetchGhostBlame un-awaited per refresh, so two watcher-triggered
+    // scans can overlap two lookup() calls on the one shared provider. A failure inside call A's
+    // search must not make call B's genuinely clean miss look tainted (and therefore uncached).
+    const pending: { args: string[]; resolve: (r: ExecResult) => void }[] = [];
+    const exec = vi.fn<ExecFn>((_argv0, args) => new Promise((resolve) => pending.push({ args, resolve })));
+    const provider = createGhostBlameProvider({ versionsDir: VERSIONS_DIR, log: () => {}, exec });
+
+    const waitUntil = async (cond: () => boolean): Promise<void> => {
+      for (let i = 0; i < 1000 && !cond(); i++) await new Promise((r) => setTimeout(r, 1));
+      if (!cond()) throw new Error("condition never became true");
+    };
+    /** Answers every queued call: A's (ghostaaa0001/a.py) fail, everything else succeeds empty. */
+    const drainInterval = (): ReturnType<typeof setInterval> =>
+      setInterval(() => {
+        while (pending.length > 0) {
+          const call = pending.shift()!;
+          const text = call.args.join(" ");
+          if (text.includes("ghostaaa0001") || text.includes("a.py")) call.resolve(fail("transient: index.lock"));
+          else call.resolve(ok(""));
+        }
+      }, 1);
+
+    const reqA = [{ missingId: "ghostaaa0001", childFilePath: `${VERSIONS_DIR}/a.py` }];
+    const reqB = [{ missingId: "ghostbbb0002", childFilePath: `${VERSIONS_DIR}/b.py` }];
+
+    const lookupA = provider.lookup(reqA);
+    await waitUntil(() => pending.length === 1); // A's rev-parse
+    pending.shift()!.resolve(ok("/proj\n"));
+    await waitUntil(() => pending.length === 1); // A's deletion pickaxe — hold it open
+    const aPickaxe = pending.shift()!;
+    expect(aPickaxe.args.join(" ")).toContain("ghostaaa0001");
+
+    const lookupB = provider.lookup(reqB); // repoRoot cached: B goes straight to its own search
+    await waitUntil(() => pending.length === 1); // B's deletion pickaxe is in flight
+    aPickaxe.resolve(fail("transient: index.lock")); // A fails INSIDE B's search window
+
+    const drain = drainInterval();
+    const [resA, resB] = await Promise.all([lookupA, lookupB]);
+    clearInterval(drain);
+    expect(resA["ghostaaa0001"]).toBeNull(); // tainted miss — retryable (1g2)
+    expect(resB["ghostbbb0002"]).toBeNull(); // CLEAN miss
+
+    const callsBefore = exec.mock.calls.length;
+    const drain2 = drainInterval(); // answers any (wrongly) re-run searches so a bug fails fast, not by timeout
+    const repeat = await provider.lookup(reqB);
+    clearInterval(drain2);
+    expect(repeat["ghostbbb0002"]).toBeNull();
+    expect(exec.mock.calls.length).toBe(callsBefore); // pure cache hit: B's clean miss was cached
+  });
+
   it("1h. two ghosts in one lookup are processed sequentially (no overlapping exec calls in flight)", async () => {
     let inFlight = 0;
     let maxInFlight = 0;
