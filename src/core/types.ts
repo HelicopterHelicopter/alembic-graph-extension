@@ -46,7 +46,7 @@ export interface MigrationGraph {
 
 export type LayoutNodeKind = "revision" | "ghost" | "collapse";
 export interface LayoutNode {
-  id: string;                 // revision id; ghost: missing id; collapse: "collapse"
+  id: string;                 // revision id; ghost: missing id; collapse: unique placeholder id (identify by kind, not id)
   kind: LayoutNodeKind;
   lane: number;
   row: number;                // 0 = newest; renderer flips for orientation

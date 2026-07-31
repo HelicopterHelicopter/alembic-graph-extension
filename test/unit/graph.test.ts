@@ -267,6 +267,70 @@ describe("computeAppliedSet", () => {
   });
 });
 
+describe("Object-prototype-colliding revision ids (custom --rev-id values)", () => {
+  it("11. `__proto__`/`constructor`/`toString` work as real revision ids", () => {
+    const proto = mkRevision({ revision: "__proto__", createDate: "2026-01-01 00:00:00.000000" });
+    const ctor = mkRevision({
+      revision: "constructor",
+      downRevisions: ["__proto__"],
+      createDate: "2026-01-02 00:00:00.000000",
+    });
+    const tostr = mkRevision({
+      revision: "toString",
+      downRevisions: ["constructor"],
+      createDate: "2026-01-03 00:00:00.000000",
+    });
+    const graph = buildGraph([proto, ctor, tostr]);
+
+    expect(Object.keys(graph.nodes).sort()).toEqual(["__proto__", "constructor", "toString"]);
+    expect(graph.heads).toEqual(["toString"]);
+    expect(graph.roots).toEqual(["__proto__"]);
+    expect(graph.ghosts).toEqual([]);
+    expect(graph.problems).toEqual([]);
+    expect(graph.children["__proto__"]).toEqual(["constructor"]);
+    expect(graph.nodes["__proto__"].isRoot).toBe(true);
+  });
+
+  it("12. a missing parent named `constructor` becomes a ghost instead of a phantom hit", () => {
+    const child = mkRevision({
+      revision: "a",
+      downRevisions: ["constructor"],
+      createDate: "2026-01-01 00:00:00.000000",
+    });
+    const graph = buildGraph([child]);
+
+    expect(graph.nodes.a.isBroken).toBe(true);
+    expect(graph.ghosts).toEqual([{ id: "constructor", childIds: ["a"] }]);
+    expect(graph.problems).toHaveLength(1);
+    expect(graph.problems[0].kind).toBe("broken-down-revision");
+  });
+
+  it("13. a missing parent named `__proto__` becomes a ghost instead of crashing", () => {
+    const child = mkRevision({
+      revision: "a",
+      downRevisions: ["__proto__"],
+      createDate: "2026-01-01 00:00:00.000000",
+    });
+    const graph = buildGraph([child]);
+
+    expect(graph.nodes.a.isBroken).toBe(true);
+    expect(graph.ghosts).toEqual([{ id: "__proto__", childIds: ["a"] }]);
+  });
+
+  it("14. computeAppliedSet traverses prototype-named ids and ignores unknown ones", () => {
+    const proto = mkRevision({ revision: "__proto__", createDate: "2026-01-01 00:00:00.000000" });
+    const tostr = mkRevision({
+      revision: "toString",
+      downRevisions: ["__proto__"],
+      createDate: "2026-01-02 00:00:00.000000",
+    });
+    const graph = buildGraph([proto, tostr]);
+
+    expect(computeAppliedSet(graph, ["toString"])).toEqual(new Set(["toString", "__proto__"]));
+    expect(computeAppliedSet(graph, ["valueOf"])).toEqual(new Set());
+  });
+});
+
 describe("fixture integration: fixtures/broken-project/alembic/versions", () => {
   const files = readdirSync(BROKEN_VERSIONS_DIR).filter((f) => f.endsWith(".py"));
   const revisions = files

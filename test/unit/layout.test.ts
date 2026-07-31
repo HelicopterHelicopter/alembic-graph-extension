@@ -226,6 +226,30 @@ describe("layoutGraph — collapse", () => {
     }
   });
 
+  it("7e. a revision literally named `collapse` never collides with the placeholder node", () => {
+    // Same shape as linear6 but the anchor position (n4) is a revision id'd "collapse" — a valid
+    // custom --rev-id. Without collision handling the placeholder is spliced in with that same id.
+    const revs = [
+      mkRevision({ revision: "n0", createDate: d(1) }),
+      mkRevision({ revision: "n1", downRevisions: ["n0"], createDate: d(2) }),
+      mkRevision({ revision: "n2", downRevisions: ["n1"], createDate: d(3) }),
+      mkRevision({ revision: "n3", downRevisions: ["n2"], createDate: d(4) }),
+      mkRevision({ revision: "collapse", downRevisions: ["n3"], createDate: d(5) }),
+      mkRevision({ revision: "n5", downRevisions: ["collapse"], createDate: d(6) }),
+    ];
+    const layout = layoutGraph(buildGraph(revs), mkOpts({ collapseThreshold: 3 }));
+
+    const ids = layout.nodes.map((n) => n.id);
+    expect(new Set(ids).size).toBe(ids.length); // every layout node id is unique
+
+    const placeholder = layout.nodes.find((n) => n.kind === "collapse")!;
+    expect(placeholder).toBeTruthy();
+    expect(placeholder.id).not.toBe("collapse");
+    expect(placeholder.collapsedIds).toEqual(["n0", "n1", "n2", "n3"]);
+    // The placeholder edge points at the real anchor revision, under the placeholder's own id.
+    expect(layout.edges).toContainEqual({ from: placeholder.id, to: "collapse", kind: "collapse", colorLane: 0 });
+  });
+
   it("8a. a current node mid-chain blocks collapse (root-end run falls below threshold)", () => {
     const layout = layoutGraph(buildGraph(linear6()), mkOpts({ collapseThreshold: 3, currentIds: ["n2"] }));
     // root-end run = {n0, n1} (n2 is current) -> length 2 < 3

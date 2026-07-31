@@ -24,6 +24,17 @@ const MONTHS = [
 
 const COLLAPSE_ID = "collapse";
 
+/** The collapse placeholder's id: `COLLAPSE_ID` when free, else suffixed until it collides with no
+ * entity id — "collapse" itself is a perfectly valid custom `--rev-id`, and sharing an id would
+ * conflate the placeholder with that revision in every id-keyed map (rows, edges, selection). Only
+ * the node's `kind` marks it as the placeholder; consumers never rely on the literal id. */
+function uniqueCollapseId(entityIds: string[]): string {
+  const taken = new Set(entityIds);
+  let id = COLLAPSE_ID;
+  while (taken.has(id)) id += "*";
+  return id;
+}
+
 /** `createDate` sort key: null (missing) sorts oldest, i.e. before every real date string. */
 function dateKey(createDate: string | null): string {
   return createDate ?? "";
@@ -95,7 +106,7 @@ export function layoutGraph(graph: MigrationGraph, opts: LayoutOptions): GraphLa
     // closes the same hole at the config-read boundary — this is the belt-and-suspenders floor
     // for any other caller of `layoutGraph` (tests included) that passes a raw `LayoutOptions`.
     if (run.length > 1 && run.length >= opts.collapseThreshold) {
-      const result = applyCollapse(nodes, edges, run, laneById);
+      const result = applyCollapse(nodes, edges, run, laneById, uniqueCollapseId(entityIds));
       nodes = result.nodes;
       edges = result.edges;
       collapsed = { count: result.count };
@@ -416,6 +427,7 @@ function applyCollapse(
   edges: LayoutEdge[],
   run: string[],
   laneById: Map<string, number>,
+  collapseId: string,
 ): { nodes: LayoutNode[]; edges: LayoutEdge[]; count: number } {
   const anchorId = run[run.length - 1]; // newest member
   const anchorLane = laneById.get(anchorId) ?? 0;
@@ -423,11 +435,11 @@ function applyCollapse(
   const replaced = new Set(collapsedIds);
 
   const collapseNode: LayoutNode = {
-    id: COLLAPSE_ID,
+    id: collapseId,
     kind: "collapse",
     lane: anchorLane,
     row: 0, // reassigned during densification below
-    hash: COLLAPSE_ID,
+    hash: collapseId,
     message: "",
     author: null,
     dateLabel: null,
@@ -451,7 +463,7 @@ function applyCollapse(
   });
 
   const keptEdges = edges.filter((e) => !replaced.has(e.from) && !replaced.has(e.to));
-  keptEdges.push({ from: COLLAPSE_ID, to: anchorId, kind: "collapse", colorLane: anchorLane });
+  keptEdges.push({ from: collapseId, to: anchorId, kind: "collapse", colorLane: anchorLane });
 
   return { nodes: keptNodes, edges: keptEdges, count: collapsedIds.length };
 }

@@ -66,7 +66,11 @@ function dedupeRevisions(revisions: ParsedRevision[]): { kept: ParsedRevision[];
 export function buildGraph(revisions: ParsedRevision[]): MigrationGraph {
   const { kept, problems: duplicateProblems } = dedupeRevisions(revisions);
 
-  const nodes: Record<string, RevisionNode> = {};
+  // Null-prototype on purpose (here and for `children` below): revision ids are user-controlled
+  // (`--rev-id`), so ids like `__proto__`/`constructor` must behave as plain keys — on a `{}`,
+  // assigning `__proto__` mutates the prototype and `in`-checking `constructor` false-positives
+  // against inherited properties.
+  const nodes: Record<string, RevisionNode> = Object.create(null);
   for (const rev of kept) {
     nodes[rev.revision] = {
       ...rev,
@@ -79,14 +83,14 @@ export function buildGraph(revisions: ParsedRevision[]): MigrationGraph {
 
   // children: every node id gets a key up front (empty array for heads); ghost ids get a key
   // implicitly as soon as a child is pushed under them.
-  const children: Record<string, string[]> = {};
+  const children: Record<string, string[]> = Object.create(null);
   for (const id of Object.keys(nodes)) children[id] = [];
 
   const brokenProblems: Problem[] = [];
 
   for (const rev of kept) {
     for (const parentId of rev.downRevisions) {
-      if (!(parentId in nodes)) {
+      if (!Object.hasOwn(nodes, parentId)) {
         nodes[rev.revision].isBroken = true;
         children[parentId] = children[parentId] ?? []; // ghost parent id, first time seen
 
@@ -111,7 +115,7 @@ export function buildGraph(revisions: ParsedRevision[]): MigrationGraph {
   // A ghost is any children-index key that isn't a real node — i.e. a missing parent id that
   // was referenced by at least one child's downRevisions.
   const ghosts = Object.keys(children)
-    .filter((id) => !(id in nodes))
+    .filter((id) => !Object.hasOwn(nodes, id))
     .map((id) => ({ id, childIds: children[id] })) // already sorted above
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
@@ -150,7 +154,7 @@ export function buildGraph(revisions: ParsedRevision[]): MigrationGraph {
  */
 export function computeAppliedSet(graph: MigrationGraph, currentIds: string[]): Set<string> {
   const visited = new Set<string>();
-  const stack: string[] = currentIds.filter((id) => id in graph.nodes);
+  const stack: string[] = currentIds.filter((id) => Object.hasOwn(graph.nodes, id));
 
   while (stack.length > 0) {
     const id = stack.pop()!;
@@ -158,7 +162,7 @@ export function computeAppliedSet(graph: MigrationGraph, currentIds: string[]): 
     visited.add(id);
     const node = graph.nodes[id];
     for (const parentId of node.downRevisions) {
-      if (parentId in graph.nodes && !visited.has(parentId)) {
+      if (Object.hasOwn(graph.nodes, parentId) && !visited.has(parentId)) {
         stack.push(parentId);
       }
     }
