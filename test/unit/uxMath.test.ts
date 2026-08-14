@@ -13,6 +13,8 @@ import {
   findLaneNeighbor,
   findRowNeighbor,
   ghostBlameLineText,
+  isValidFreeformEdgeTarget,
+  isValidFreeformNodeTarget,
   matchesQuery,
   nextMatchIndex,
   prevMatchIndex,
@@ -530,5 +532,73 @@ describe("uxMath — dragHintText (freeform drag hint pill)", () => {
     expect(dragHintText("single", 1, false)).toBe("Move 1 revision (splice)");
     expect(dragHintText("single", 9, false)).toBe("Move 1 revision (splice)");
     expect(dragHintText("single", 9, true)).toBe("Move 1 revision (splice)");
+  });
+});
+
+describe("uxMath — isValidFreeformNodeTarget (freeform node drop)", () => {
+  // `me` -> `kid` -> `grandkid`, plus an unrelated `other`.
+  const descendants = new Set(["kid", "grandkid"]);
+
+  it("the origin itself is never a valid target, in either mode", () => {
+    expect(isValidFreeformNodeTarget("me", "me", "chain", descendants)).toBe(false);
+    expect(isValidFreeformNodeTarget("me", "me", "single", descendants)).toBe(false);
+  });
+
+  it("chain mode forbids the origin's own descendants (they ride along — attaching to one cycles)", () => {
+    expect(isValidFreeformNodeTarget("kid", "me", "chain", descendants)).toBe(false);
+    expect(isValidFreeformNodeTarget("grandkid", "me", "chain", descendants)).toBe(false);
+  });
+
+  it("single (splice) mode allows a descendant target — the splice empties the origin's children first", () => {
+    expect(isValidFreeformNodeTarget("kid", "me", "single", descendants)).toBe(true);
+    expect(isValidFreeformNodeTarget("grandkid", "me", "single", descendants)).toBe(true);
+  });
+
+  it("an unrelated node is a valid target in both modes", () => {
+    expect(isValidFreeformNodeTarget("other", "me", "chain", descendants)).toBe(true);
+    expect(isValidFreeformNodeTarget("other", "me", "single", descendants)).toBe(true);
+  });
+
+  it("an empty descendant set leaves every non-origin node valid, even in chain mode", () => {
+    expect(isValidFreeformNodeTarget("kid", "me", "chain", new Set())).toBe(true);
+    expect(isValidFreeformNodeTarget("me", "me", "chain", new Set())).toBe(false);
+  });
+});
+
+describe("uxMath — isValidFreeformEdgeTarget (freeform edge drop)", () => {
+  // `me` -> `kid` -> `grandkid`; `parent` -> `me`; `a` -> `b` unrelated.
+  const descendants = new Set(["kid", "grandkid"]);
+
+  it("an edge incident to the origin is never a valid target, in either mode", () => {
+    // from-side (the origin's own child link) and to-side (its parent link).
+    expect(isValidFreeformEdgeTarget("me", "kid", "me", "chain", descendants)).toBe(false);
+    expect(isValidFreeformEdgeTarget("parent", "me", "me", "chain", descendants)).toBe(false);
+    expect(isValidFreeformEdgeTarget("me", "kid", "me", "single", descendants)).toBe(false);
+    expect(isValidFreeformEdgeTarget("parent", "me", "me", "single", descendants)).toBe(false);
+  });
+
+  it("chain mode forbids an edge touching a descendant on either side", () => {
+    // from-side: the chain would revise something that moves with it (cycle).
+    expect(isValidFreeformEdgeTarget("kid", "grandkid", "me", "chain", descendants)).toBe(false);
+    // to-side: inserting the chain into its own subtree.
+    expect(isValidFreeformEdgeTarget("other", "kid", "me", "chain", descendants)).toBe(false);
+  });
+
+  it("single (splice) mode allows an edge touching a descendant", () => {
+    expect(isValidFreeformEdgeTarget("kid", "grandkid", "me", "single", descendants)).toBe(true);
+    expect(isValidFreeformEdgeTarget("other", "kid", "me", "single", descendants)).toBe(true);
+  });
+
+  it("an edge between two unrelated revisions is valid in both modes", () => {
+    expect(isValidFreeformEdgeTarget("a", "b", "me", "chain", descendants)).toBe(true);
+    expect(isValidFreeformEdgeTarget("a", "b", "me", "single", descendants)).toBe(true);
+  });
+
+  it("origin-incidence outranks mode: an origin edge stays invalid even in single mode", () => {
+    expect(isValidFreeformEdgeTarget("me", "kid", "me", "single", descendants)).toBe(false);
+  });
+
+  it("an empty descendant set leaves every non-origin edge valid, even in chain mode", () => {
+    expect(isValidFreeformEdgeTarget("kid", "grandkid", "me", "chain", new Set())).toBe(true);
   });
 });

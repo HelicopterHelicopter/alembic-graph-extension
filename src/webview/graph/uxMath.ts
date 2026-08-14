@@ -266,6 +266,58 @@ export function dragHintText(mode: "chain" | "single", chainCount: number, isMer
   return `Move ${chainCount} ${plural}${isMergeNode ? " · dissolves merge" : ""}`;
 }
 
+/**
+ * Whether the card for `targetId` may receive a freeform drag that started on `originId` — the
+ * predicate behind the drag's per-card rings (`alx-card--freeform-target` vs
+ * `alx-card--invalid-target`) and its drop hit-testing.
+ *
+ * A node can never be dropped on itself. Beyond that the two modes differ exactly as their host-side
+ * plans do (MigrationService's planMoveChain/planMoveSingle): `chain` carries `descendantIds` along
+ * with the dragged node, so attaching to one of them would make the target both an ancestor and a
+ * descendant of the origin (a cycle) — `single` splices the origin's children onto its own parents
+ * BEFORE re-parenting it, so by the time it attaches, none of the links that would close the loop
+ * still exist, and a descendant target is legal.
+ *
+ * The host stays authoritative — this is a UX predicate (which cards to ring, what the pointer may
+ * land on), deliberately not a re-implementation of the planner's full guard set (unknown ids,
+ * no-op edits, cross-project staleness are all still the plan's to reject).
+ */
+export function isValidFreeformNodeTarget(
+  targetId: string,
+  originId: string,
+  mode: "chain" | "single",
+  descendantIds: ReadonlySet<string>,
+): boolean {
+  if (targetId === originId) return false;
+  if (mode === "chain" && descendantIds.has(targetId)) return false;
+  return true;
+}
+
+/**
+ * Whether the parent link `from -> to` may receive a freeform drag that started on `originId` (an
+ * `insert-between` drop) — the predicate behind the hovered edge's `alx-edge--drop-target`
+ * highlight and the drag's edge hit-testing. Same host-authoritative caveat as
+ * {@link isValidFreeformNodeTarget}.
+ *
+ * An edge INCIDENT to the origin is never a target in either mode: inserting a node into its own
+ * parent link or its own child link is a no-op at best (it already sits at exactly that spot).
+ * `chain` additionally rules out any edge touching a descendant, matching planInsertBetween's two
+ * cycle guards — a descendant on the `from` side would have the moved chain revise something that
+ * moves with it, and one on the `to` side would insert the chain into its own subtree. `single`
+ * splices first (see the node predicate), so neither applies.
+ */
+export function isValidFreeformEdgeTarget(
+  from: string,
+  to: string,
+  originId: string,
+  mode: "chain" | "single",
+  descendantIds: ReadonlySet<string>,
+): boolean {
+  if (from === originId || to === originId) return false;
+  if (mode === "chain" && (descendantIds.has(from) || descendantIds.has(to))) return false;
+  return true;
+}
+
 // ---------- keyboard navigation ----------
 
 export interface NavNode {
