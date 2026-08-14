@@ -75,6 +75,31 @@ export function repointSuccessText(targetId: string): string {
   return `Re-pointed down_revision → ${targetId.slice(0, 8)} · broken link fixed`;
 }
 
+/**
+ * Modal body for the applied-history confirmation a freeform topology edit shows when (and only
+ * when) the plan touches revisions the database has already run — `getTopologyPlan`'s
+ * `appliedTouched`, which is deliberately empty when the DB is unreachable, so an unreachable DB
+ * shows no modal at all rather than a modal it cannot substantiate. Leads with the plan's own
+ * one-line `summary` (what the user is about to do), then spells out the consequence. At most the
+ * first three ids are named — a long list would push the actual warning off the modal — with the
+ * count carrying the full magnitude and `, …` marking the elision.
+ */
+export function topologyConfirmText(appliedTouched: string[], summary: string): string {
+  const n = appliedTouched.length;
+  const listed = appliedTouched.slice(0, 3).map((id) => id.slice(0, 8)).join(", ");
+  return (
+    `${summary}\n\nThis rewrites history at or below ${n} applied revision${n === 1 ? "" : "s"} ` +
+    `(${listed}${n > 3 ? ", …" : ""}). Upgrade/downgrade behavior will change for the current database.`
+  );
+}
+
+/** Success-toast text for an applied freeform topology edit. The plan's `summary` already names
+ * the operation in graph terms ("move 4bfc0299 under 8f2a1c9d"), so this only states WHAT changed
+ * on disk — the same shape as `repointSuccessText`'s "<what> · <detail>" wording. */
+export function topologySuccessText(summary: string): string {
+  return `Rewrote down_revision · ${summary}`;
+}
+
 /** Task B2 ghost-card restore/import: pure decision logic for git-restore's source commit and
  * path, factored out of restoreDeletedAction (src/ui/actions.ts) for unit testing. Given a
  * GhostBlame, returns either { source, path } ready for `git restore --source=<source> -- <path>`,

@@ -4,7 +4,15 @@ import { describe, it, expect } from "vitest";
 // resolvable outside a real extension host — even importing an unrelated named export from
 // actions.ts here would fail the whole test file at load time. mergeHeadsAction itself is
 // vscode-coupled and, per the brief, intentionally NOT unit-tested; only the pure helpers are.
-import { allAreCurrentHeads, mergeSuccessText, cliErrorText, repointSuccessText, restoreSource } from "../../src/ui/actionHelpers";
+import {
+  allAreCurrentHeads,
+  mergeSuccessText,
+  cliErrorText,
+  repointSuccessText,
+  restoreSource,
+  topologyConfirmText,
+  topologySuccessText,
+} from "../../src/ui/actionHelpers";
 
 describe("allAreCurrentHeads", () => {
   const heads = [{ id: "aaa" }, { id: "bbb" }, { id: "ccc" }];
@@ -189,5 +197,56 @@ describe("restoreSource", () => {
     expect(result).toEqual({
       error: "The missing revision isn't found on any ref — fetch the source branch or drag to re-point.",
     });
+  });
+});
+
+describe("topologyConfirmText", () => {
+  it("6a. one applied revision -> singular wording, no ellipsis", () => {
+    expect(topologyConfirmText(["8f2a1c9d4e07"], "move 4bfc0299 under 8f2a1c9d")).toBe(
+      "move 4bfc0299 under 8f2a1c9d\n\nThis rewrites history at or below 1 applied revision (8f2a1c9d). " +
+        "Upgrade/downgrade behavior will change for the current database.",
+    );
+  });
+
+  it("6b. three applied revisions -> plural, all three listed, still no ellipsis", () => {
+    expect(
+      topologyConfirmText(
+        ["8f2a1c9d4e07", "4bfc02996c8e", "deadbeef0000"],
+        "stop deadbeef revising 4bfc0299 (becomes a new base)",
+      ),
+    ).toBe(
+      "stop deadbeef revising 4bfc0299 (becomes a new base)\n\n" +
+        "This rewrites history at or below 3 applied revisions (8f2a1c9d, 4bfc0299, deadbeef). " +
+        "Upgrade/downgrade behavior will change for the current database.",
+    );
+  });
+
+  it("6c. more than three -> only the first three are listed, followed by an ellipsis", () => {
+    expect(
+      topologyConfirmText(["aaaaaaaa1111", "bbbbbbbb2222", "cccccccc3333", "dddddddd4444"], "insert aaaaaaaa between x and y"),
+    ).toBe(
+      "insert aaaaaaaa between x and y\n\n" +
+        "This rewrites history at or below 4 applied revisions (aaaaaaaa, bbbbbbbb, cccccccc, …). " +
+        "Upgrade/downgrade behavior will change for the current database.",
+    );
+  });
+
+  it("6d. ids shorter than 8 chars are listed verbatim (no padding)", () => {
+    expect(topologyConfirmText(["abc"], "move abc alone under def")).toBe(
+      "move abc alone under def\n\nThis rewrites history at or below 1 applied revision (abc). " +
+        "Upgrade/downgrade behavior will change for the current database.",
+    );
+  });
+});
+
+describe("topologySuccessText", () => {
+  it("7a. prefixes the plan's own summary", () => {
+    expect(topologySuccessText("move 4bfc0299 (+2 descendants) under 8f2a1c9d")).toBe(
+      "Rewrote down_revision · move 4bfc0299 (+2 descendants) under 8f2a1c9d",
+    );
+  });
+
+  it("7b. an empty summary still produces the prefix (defensive — plans always carry one)", () => {
+    expect(topologySuccessText("")).toBe("Rewrote down_revision · ");
   });
 });

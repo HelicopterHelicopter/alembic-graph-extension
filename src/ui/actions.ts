@@ -12,12 +12,20 @@ import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { allAreCurrentHeads, mergeSuccessText, cliErrorText, repointSuccessText, restoreSource } from "./actionHelpers";
-import { applyRepoint } from "../services/repoint";
+import {
+  allAreCurrentHeads,
+  mergeSuccessText,
+  cliErrorText,
+  repointSuccessText,
+  restoreSource,
+  topologyConfirmText,
+  topologySuccessText,
+} from "./actionHelpers";
+import { applyRepoint, applyDownRevisionEdits } from "../services/repoint";
 import type { AlembicCli, RunResult } from "../services/alembicCli";
 import type { MigrationService } from "../services/migrationService";
 import type { GhostBlameProvider } from "../services/gitDeletion";
-import type { HostToWebviewMessage } from "../protocol/messages";
+import type { HostToWebviewMessage, TopologyOp, TopologyPlan } from "../protocol/messages";
 
 export interface ActionContext {
   cli: AlembicCli;
@@ -36,7 +44,8 @@ export interface ActionContext {
  * repointAction's dependencies — deliberately NOT `ActionContext`: unlike merge, a repoint never
  * touches `alembic` (there's no CLI for this — see core/repoint.ts's doc comment), so requiring a
  * live `AlembicCli` here would wrongly gate repoint's availability on Python/alembic being
- * configured at all.
+ * configured at all. Shared with `topologyEditAction` for exactly the same reason — freeform
+ * topology edits are the same kind of pure text surgery, with no `alembic` subcommand behind them.
  */
 export type RepointActionContext = Pick<ActionContext, "service" | "log" | "broadcast">;
 
@@ -166,6 +175,95 @@ export async function repointAction(
     // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
     // is documented never-throw.
     ctx.log(`repointAction: unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * Freeform topology drop flow (drag a node/chain onto another node, onto an edge, or cut a link —
+ * see `TopologyOp` in protocol/messages.ts): plans the op from the cached graph (cycle-, no-op- and
+ * unknown-id-guarded — see MigrationService.getTopologyPlan), applies every `down_revision` rewrite
+ * it implies (services/repoint.ts's `applyDownRevisionEdits`: validate-all-then-one-WorkspaceEdit
+ * text surgery), and toasts the result. Like repointAction there's no `alembic` subcommand behind
+ * this and no explicit `service.scheduleRefresh()` on success — the file(s) written trip the same
+ * workspace file watcher a manual edit would, which schedules its own rescan.
+ *
+ * The one interactive step repointAction doesn't have: a modal confirmation, shown ONLY when the
+ * plan touches revisions the database has already applied (`plan.appliedTouched`). Repairing a
+ * broken link is always safe; re-parenting a revision the DB has already run changes what
+ * upgrade/downgrade will do to it, which deserves an explicit yes. `appliedTouched` is empty
+ * whenever the DB is unreachable (getTopologyPlan's contract), so an unreachable DB deliberately
+ * applies without a prompt rather than nagging about applied-ness it cannot actually determine.
+ *
+ * Never throws — every failure path (a rejected plan, a declined confirmation, a graph that moved
+ * under the modal, or a write failure) degrades to a toast/log line and returns.
+ */
+export async function topologyEditAction(
+  ctx: RepointActionContext,
+  op: TopologyOp,
+  clientBusyToken?: string,
+): Promise<void> {
+  try {
+    // Same client-token echo as mergeHeadsAction — see the comment there.
+    const busyToken = clientBusyToken ?? newBusyToken("topology");
+    const plan = ctx.service.getTopologyPlan(op);
+    if (!plan.ok) {
+      ctx.broadcast({ type: "toast", level: "error", text: plan.reason });
+      // Same drop-guard release as mergeHeadsAction's abort path (see the comment there): the
+      // webview armed its guard on drop, and only a terminal busy:false disarms it. Every exit
+      // below broadcasts one for that reason. (The graph webview's disarm check currently matches
+      // `merge`/`repoint` by name — src/webview/graph/main.ts — so it must learn `"topology"` when
+      // the drag gesture that posts this message lands, or these releases go unheard.)
+      ctx.broadcast({ type: "busy", operation: "topology", token: busyToken, active: false });
+      ctx.log(`topologyEditAction: ${op.kind}: ${plan.reason}`);
+      return;
+    }
+
+    let activePlan: Extract<TopologyPlan, { ok: true }> = plan;
+    if (plan.appliedTouched.length > 0) {
+      const choice = await vscode.window.showWarningMessage(
+        topologyConfirmText(plan.appliedTouched, plan.summary),
+        { modal: true },
+        "Rewrite history",
+      );
+      if (choice !== "Rewrite history") {
+        // Cancelled/dismissed — silent (no toast/log noise), but still release the drop guard, same
+        // as mergeHeadsAction's cancelled input box.
+        ctx.broadcast({ type: "busy", operation: "topology", token: busyToken, active: false });
+        return;
+      }
+
+      // RE-PLAN before writing, but only on this path: a modal can sit open indefinitely, and the
+      // graph may have rescanned (a watcher event, a branch switch) while it did — the plan above
+      // was computed against a graph that may no longer exist. Re-planning and comparing the file
+      // edits is what keeps the applied text matched to the CURRENT graph; when no modal was shown
+      // there was no await between planning and applying, so `plan` is still fresh by construction.
+      const replanned = ctx.service.getTopologyPlan(op);
+      if (!replanned.ok || JSON.stringify(replanned.fileEdits) !== JSON.stringify(plan.fileEdits)) {
+        ctx.broadcast({ type: "toast", level: "error", text: "graph changed while confirming — try again" });
+        ctx.broadcast({ type: "busy", operation: "topology", token: busyToken, active: false });
+        ctx.log(`topologyEditAction: ${op.kind}: plan changed while the confirmation was open — aborting`);
+        return;
+      }
+      activePlan = replanned;
+    }
+
+    ctx.broadcast({ type: "busy", operation: "topology", token: busyToken, active: true });
+    try {
+      const result = await applyDownRevisionEdits(activePlan.fileEdits);
+      if (result.ok) {
+        ctx.broadcast({ type: "toast", level: "success", text: topologySuccessText(activePlan.summary) });
+      } else {
+        ctx.broadcast({ type: "toast", level: "error", text: result.reason });
+        void vscode.window.showErrorMessage("alembic graph: topology edit failed — see Alembic Graph output");
+        ctx.log(`topologyEditAction: applyDownRevisionEdits failed: ${result.reason}`);
+      }
+    } finally {
+      ctx.broadcast({ type: "busy", operation: "topology", token: busyToken, active: false });
+    }
+  } catch (err) {
+    // Defensive only, same golden rule as mergeHeadsAction's own catch — every awaited call above
+    // is documented never-throw.
+    ctx.log(`topologyEditAction: unexpected error: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

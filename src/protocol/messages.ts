@@ -140,6 +140,13 @@ export type WebviewToHostMessage =
   // actions directly without one and get a host-generated token instead.
   | { type: "merge"; ids: string[]; busyToken?: string }
   | { type: "repoint"; ghostId: string; targetId: string; busyToken?: string }
+  // Freeform topology editing: any of the four `TopologyOp` gestures (see that type above) the
+  // graph webview can express — drag a node/chain onto another, drop one onto an edge, cut a link.
+  // The host (topologyEditAction, src/ui/actions.ts) plans it with `getTopologyPlan`, confirms only
+  // when the plan touches already-applied revisions, and rewrites the `down_revision` of every file
+  // the plan names. `busyToken` carries the exact same drop-guard echo semantics documented on
+  // `merge` above (the busy op name is `"topology"`), and is optional for the same reason.
+  | { type: "topologyEdit"; op: TopologyOp; busyToken?: string }
   | { type: "upgrade" }
   | { type: "upgradeTo"; id: string }
   | { type: "downgradeTo"; id: string }
@@ -171,7 +178,10 @@ export type HostToWebviewMessage =
       // Task B2: "restore" covers BOTH the Restore (deleted-here) and Import (never-existed +
       // foundOn) ghost-card button flows — they're the same host action (restoreDeletedAction),
       // distinguished only by the `GhostBlame` kind it reads, so one busy op name covers both.
-      operation: "merge" | "repoint" | "upgrade" | "downgrade" | "scan" | "revision" | "sql" | "restore";
+      // "topology" covers all four freeform `TopologyOp` kinds (move/insert/remove-edge): they're
+      // one host action (topologyEditAction) over one apply layer, so one busy op name covers them
+      // the same way "restore" covers both ghost-card flows.
+      operation: "merge" | "repoint" | "upgrade" | "downgrade" | "scan" | "revision" | "sql" | "restore" | "topology";
       // Unique per action INVOCATION (src/ui/actions.ts's newBusyToken) — webviews key their
       // busyOps sets on this, not on `operation`, so the stale terminal busy:false that
       // shouldDeliverStale (core/broadcastGate.ts) deliberately lets through from a superseded
