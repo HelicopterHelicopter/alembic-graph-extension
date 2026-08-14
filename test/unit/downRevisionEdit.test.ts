@@ -258,6 +258,14 @@ down_revision = "bbb22222222"
     if (result.ok) expect(result.newSrc).toBe(expected);
   });
 
+  it("13b. BOM directly on the assignment line: BOM survives ahead of the preserved left-hand side", () => {
+    const src = "\ufeff" + `down_revision = "aaa11111111"\nrevision = "child1"\n`;
+    const expected = "\ufeff" + `down_revision = "bbb22222222"\nrevision = "child1"\n`;
+    const result = computeDownRevisionsRewrite(src, ["bbb22222222"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.newSrc).toBe(expected);
+  });
+
   it("14. no down_revision assignment -> error", () => {
     const src = `"""m"""
 revision = "child1"
