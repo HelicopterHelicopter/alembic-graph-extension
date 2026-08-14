@@ -1,6 +1,56 @@
 import type { GraphLayout, Problem } from "../core/types";
 
 // ---------- shared payloads ----------
+
+/**
+ * One freeform topology edit the user asked for, in graph terms (never file terms) — planned by
+ * `MigrationService.getTopologyPlan` into the concrete `down_revision` rewrites below.
+ *
+ * - `move-chain`: `nodeId` is re-parented to exactly `[targetId]`, and its descendants ride along
+ *   for free — a subtree moves as a unit because only the subtree ROOT's file names a parent
+ *   outside it. Replaces ALL of `nodeId`'s current parents, so moving a merge node deliberately
+ *   dissolves its other links.
+ * - `move-single`: `nodeId` alone is re-parented to `[targetId]`; its children are first spliced
+ *   onto `nodeId`'s own parents so the chain it leaves behind stays connected (a child of a root
+ *   correctly becomes a new base). The splice is what makes moving a node onto its own descendant
+ *   a legal reorder rather than a cycle.
+ * - `insert-between`: `nodeId` is spliced INTO the existing `edgeFrom -> edgeTo` link — `nodeId`
+ *   revises `edgeFrom`, and `edgeTo` swaps `edgeFrom` for the inserted piece. `mode: "chain"`
+ *   inserts `nodeId`'s whole subtree (so `edgeTo` ends up revising the subtree's single head, and
+ *   a forked subtree is rejected as ambiguous); `mode: "single"` inserts `nodeId` by itself, with
+ *   the same child-splice as `move-single`.
+ * - `remove-edge`: `childId` stops revising `parentId`, keeping its other parents. `parentId` may
+ *   be a missing (ghost) id — that is how a broken link is deleted rather than repaired.
+ */
+export type TopologyOp =
+  | { kind: "move-chain"; nodeId: string; targetId: string }
+  | { kind: "move-single"; nodeId: string; targetId: string }
+  | { kind: "insert-between"; nodeId: string; edgeFrom: string; edgeTo: string; mode: "chain" | "single" }
+  | { kind: "remove-edge"; parentId: string; childId: string };
+
+/**
+ * One file's complete new parent list — `newDownRevisions` is the WHOLE `down_revision` value the
+ * file should end up with (`[]` = `None`, one id = scalar, more = tuple), already deduplicated and
+ * ordered, ready to hand to `computeDownRevisionsRewrite` (core/downRevisionEdit.ts).
+ */
+export interface TopologyFileEdit {
+  revisionId: string;
+  filePath: string;
+  newDownRevisions: string[];
+}
+
+/**
+ * Result of planning a `TopologyOp`. `ok: false` carries a user-facing `reason` (guard rejections:
+ * unknown ids, cycles, no-ops); `ok: true` carries every file rewrite the op implies — at most one
+ * per revision, composed when a revision is touched by two steps of the same op — plus `summary`
+ * (one line describing the op, for a confirm prompt) and `appliedTouched` (already-applied
+ * revisions on either side of an edit, so the prompt can warn about rewriting migration history
+ * the DB has already run).
+ */
+export type TopologyPlan =
+  | { ok: true; fileEdits: TopologyFileEdit[]; appliedTouched: string[]; summary: string }
+  | { ok: false; reason: string };
+
 export interface UiPrefs {
   order: "newest-top" | "newest-bottom";
   density: "comfortable" | "compact";
