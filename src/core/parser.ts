@@ -47,9 +47,11 @@ function stripTrailingComment(s: string): string {
 /**
  * Matches a module-level (column-0) `name = ...` or `name: <ann> = ...` assignment on one
  * line. Returns the raw right-hand side (everything after the first `=`), or null if this
- * line isn't such an assignment for `name`.
+ * line isn't such an assignment for `name`. Exported so `core/downRevisionEdit.ts` can recover
+ * the left-hand side byte-for-byte (`line.slice(0, line.length - rhs.length)`) when it replaces
+ * a whole `down_revision` value, without duplicating the annotated-form detection.
  */
-function matchModuleAssignment(line: string, name: string): string | null {
+export function matchModuleAssignment(line: string, name: string): string | null {
   if (!line.startsWith(name)) return null;
   const after = line.slice(name.length);
   // Reject longer identifiers that merely start with `name` (e.g. "revision_id").

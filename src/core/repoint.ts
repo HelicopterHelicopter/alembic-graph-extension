@@ -23,8 +23,11 @@ export type RepointResult = { ok: true; newSrc: string } | { ok: false; reason: 
  * quotes, so a naive non-greedy quote match is sufficient. Scanned over the RAW block text
  * (comments included), so callers MUST filter out matches that fall inside a comment — see
  * `computeCommentRanges`/`isInRange` below — or a comment mentioning a revision id in passing can
- * shadow/masquerade as a real quoted member. */
-const QUOTED_RE = /(['"])([^'"]*)\1/g;
+ * shadow/masquerade as a real quoted member. Shared with `core/downRevisionEdit.ts`, which reuses
+ * it to pick the quote style for freshly rendered members; both consumers must scan it with
+ * `String.prototype.matchAll` only (which iterates a copy), never `exec`, so this module-level
+ * regex's `lastIndex` never leaks state between callers. */
+export const QUOTED_RE = /(['"])([^'"]*)\1/g;
 
 /** 8-char id prefix used in error messages, matching the truncation convention used elsewhere in
  * the codebase (e.g. src/ui/actions.ts's merge input-box default value). */
@@ -42,9 +45,10 @@ function escapeRegExp(s: string): string {
  * stays in sync with the exact same quote-aware state machine `locateDownRevisionAssignment` uses
  * to find the block in the first place. Each line's own line-ending characters are harmlessly
  * included in its range when that line has a comment (a `QUOTED_RE` match can never begin inside
- * an EOL sequence).
+ * an EOL sequence). Exported for `core/downRevisionEdit.ts`, the second consumer of this
+ * comment-aware quote scanning.
  */
-function computeCommentRanges(blockLines: string[]): Array<[number, number]> {
+export function computeCommentRanges(blockLines: string[]): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
   let offset = 0;
   for (const line of blockLines) {
@@ -57,8 +61,9 @@ function computeCommentRanges(blockLines: string[]): Array<[number, number]> {
   return ranges;
 }
 
-/** True if `pos` falls inside one of `ranges`. */
-function isInRange(pos: number, ranges: Array<[number, number]>): boolean {
+/** True if `pos` falls inside one of `ranges`. Exported alongside `computeCommentRanges` for
+ * `core/downRevisionEdit.ts`. */
+export function isInRange(pos: number, ranges: Array<[number, number]>): boolean {
   return ranges.some(([start, end]) => pos >= start && pos < end);
 }
 
@@ -68,9 +73,10 @@ function isInRange(pos: number, ranges: Array<[number, number]>): boolean {
  * `splitLines` (plain, delimiter-discarding split) — a BOM, if present, only changes line 0's
  * leading character, never the number of lines — so a `startLine`/`endLine` pair from
  * `locateDownRevisionAssignment` indexes correctly into this array too. `lines.join("")`
- * reproduces `src` exactly.
+ * reproduces `src` exactly. Exported for `core/downRevisionEdit.ts`, which performs the same
+ * byte-preserving surgery for whole-value rewrites.
  */
-function splitRawLines(src: string): string[] {
+export function splitRawLines(src: string): string[] {
   const parts = src.split(/(\r\n|\r|\n)/);
   const lines: string[] = [];
   for (let i = 0; i < parts.length; i += 2) {
@@ -80,8 +86,9 @@ function splitRawLines(src: string): string[] {
   return lines;
 }
 
-/** Strips a line's own trailing line-ending characters, returning `[content, eol]`. */
-function splitEol(line: string): [string, string] {
+/** Strips a line's own trailing line-ending characters, returning `[content, eol]`. Exported for
+ * `core/downRevisionEdit.ts`, which reuses it to preserve each rewritten line's own EOL. */
+export function splitEol(line: string): [string, string] {
   const m = /(\r\n|\r|\n)$/.exec(line);
   return m ? [line.slice(0, line.length - m[0].length), m[0]] : [line, ""];
 }
