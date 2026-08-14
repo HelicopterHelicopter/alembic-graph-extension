@@ -351,6 +351,18 @@ body {
   stroke: #555555;
   stroke-dasharray: 3 5;
 }
+/* Freeform topology drag: the invisible fat-stroked twin render.ts appends after every real parent
+   link's visible path — a 2px curve is unhittable with a pointer, so this is what actually receives
+   edge hover/drop hit-testing. `pointer-events: stroke` (not `all`) keeps the hit area to the fat
+   stroke band instead of the curve's enclosed area, and — like .alx-ghost-restore-btn and
+   .alx-merge-all-btn do against their own `pointer-events: none` ancestors — it opts this child back
+   in against `.alx-edges { pointer-events: none }` above. */
+.alx-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14px;
+  pointer-events: stroke;
+}
 
 /* ---------- node cards ---------- */
 .alx-node {
@@ -435,11 +447,55 @@ body {
 }
 
 /* ---------- ghost-drag repoint (Task 15) ---------- */
-.alx-card--repoint-target {
+/* `.alx-card--freeform-target` (freeform topology drag) shares this declaration rather than
+   duplicating it: dropping a dragged revision onto a card re-points it exactly like a ghost repoint
+   does, so it's the same affordance and must read identically. */
+.alx-card--repoint-target,
+.alx-card--freeform-target {
   border-color: #4aa3ff;
   box-shadow:
     0 0 0 2px #4aa3ff,
     0 0 20px #4aa3ff55;
+}
+
+/* ---------- freeform topology drag ---------- */
+/* Applied to the VISIBLE `.alx-edge` path, never to its `.alx-edge-hit` twin (which is the thing
+   under the pointer, but has no stroke to highlight). Same blue as the drop-target card ring above,
+   so an edge drop target and a card drop target read as one family. `!important` on the stroke
+   because render.ts sets a normal edge's lane color as an INLINE style, which otherwise beats any
+   class selector — same escape-hatch reasoning as the reduced-motion block's `transition: none`. */
+.alx-edge--hover,
+.alx-edge--drop-target {
+  stroke: #4aa3ff !important;
+  stroke-width: 4px;
+  opacity: 1;
+}
+
+/* A card the dragged revision may NOT be dropped on (its own descendant, itself, a ghost, ...) —
+   same dim-plus-no-affordance convention as .alx-toggle--disabled, except this one still wants the
+   pointer over it (to keep showing "no"), so it swaps the cursor instead of dropping events. */
+.alx-card--invalid-target {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Cursor-following pill naming what the drop will do (uxMath.ts's `dragHintText`). Positioned
+   `fixed` in viewport coordinates by the drag machine — it deliberately lives outside the zoomed
+   canvas so it never scales with it. z-index above the context menu (100) and toast (80): while a
+   drag is live this is the topmost thing on screen. */
+.alx-drag-hint {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  padding: 3px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  background: var(--alx-toast-bg);
+  border: 1px solid var(--alx-toast-border);
+  color: var(--alx-toast-fg);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
 }
 
 .alx-stripe {

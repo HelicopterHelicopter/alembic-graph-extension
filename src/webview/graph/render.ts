@@ -420,8 +420,9 @@ function buildEdgesSvg(
     // Anchor = upper card's bottom-center -> lower card's top-center in vertical, lefter card's
     // right-center -> righter card's left-center in horizontal (metrics.ts's edgePathD, shared
     // with svgExport.ts so the standalone export draws identical curves).
+    const d = edgePathD(a, b, axis);
     const path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", edgePathD(a, b, axis));
+    path.setAttribute("d", d);
     // Task 19: hover.ts reads these to decide whether an edge sits on the hovered ancestor path —
     // `edge.from`/`.to` are already the parent/child node ids (see LayoutEdge in core/types.ts).
     path.dataset.from = edge.from;
@@ -440,6 +441,26 @@ function buildEdgesSvg(
     }
 
     svg.append(path);
+
+    // Freeform topology drag: an invisible, fat-stroked twin of every REAL parent link, appended
+    // right after its visible path, purely so a pointer can hit-test a 2px curve (`.alx-edge-hit`
+    // in graph.css opts back into pointer events against `.alx-edges { pointer-events: none }`).
+    // `collapse` edges get no twin — a collapse edge stands for a folded run of links, not one
+    // parent link, so it is never a drop target. `data-edge-kind` lets the drop handler tell a
+    // broken (dangling) link from a normal one without re-deriving it from the layout.
+    // The twin carries the SAME `data-from`/`data-to` as its visible path, so main.ts's
+    // `updateDraggedEdges` (which selects by those attributes) re-paths both on every drag frame
+    // and the hit area follows a live drag for free — deliberate, not an accident of the query.
+    // hover.ts is unaffected: it selects `.alx-edge`, a class the twin does not carry.
+    if (edge.kind !== "collapse") {
+      const hit = document.createElementNS(SVG_NS, "path");
+      hit.setAttribute("d", d);
+      hit.setAttribute("class", "alx-edge-hit");
+      hit.dataset.from = edge.from;
+      hit.dataset.to = edge.to;
+      hit.dataset.edgeKind = edge.kind;
+      svg.append(hit);
+    }
   }
 
   return svg;

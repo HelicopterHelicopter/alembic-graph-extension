@@ -3,8 +3,11 @@ import {
   ZOOM_MAX,
   ZOOM_MIN,
   arrowKeyTarget,
+  chainMoveCount,
   clampZoom,
   computeAncestorSet,
+  computeDescendantSet,
+  dragHintText,
   fitScroll,
   fitZoom,
   findLaneNeighbor,
@@ -17,6 +20,7 @@ import {
   verticalRowDelta,
   zoomAnchorScroll,
 } from "../../src/webview/graph/uxMath";
+import type { TopologyEdgeLike } from "../../src/webview/graph/uxMath";
 import type { GhostBlame } from "../../src/protocol/messages";
 
 describe("uxMath — zoom clamp/step", () => {
@@ -381,5 +385,150 @@ describe("ghostBlameLineText (Task B2)", () => {
       button: null,
       tooltip: "add child",
     });
+  });
+});
+
+describe("uxMath — computeDescendantSet (freeform chain drag)", () => {
+  // Layout edges point parent -> child (`from` = parent, `to` = child; see LayoutEdge in
+  // core/types.ts), the opposite direction from computeAncestorSet's `downRevisions` walk.
+  const linear: TopologyEdgeLike[] = [
+    { from: "a", to: "b", kind: "normal" },
+    { from: "b", to: "c", kind: "normal" },
+    { from: "c", to: "d", kind: "normal" },
+  ];
+
+  it("linear chain: every id below the start, excluding the start itself", () => {
+    expect(computeDescendantSet("a", linear)).toEqual(new Set(["b", "c", "d"]));
+    expect(computeDescendantSet("b", linear)).toEqual(new Set(["c", "d"]));
+  });
+
+  it("the tip of a chain has no descendants", () => {
+    expect(computeDescendantSet("d", linear)).toEqual(new Set<string>());
+  });
+
+  it("an id with no outgoing edge at all (unknown/isolated) yields an empty set", () => {
+    expect(computeDescendantSet("nobody", linear)).toEqual(new Set<string>());
+  });
+
+  it("branching subtree: both branches and everything under them (a merge child counted once)", () => {
+    //      a
+    //     / \
+    //    b   c
+    //     \ /
+    //      d      (merge: two parents)
+    //      |
+    //      e
+    const branching: TopologyEdgeLike[] = [
+      { from: "a", to: "b", kind: "normal" },
+      { from: "a", to: "c", kind: "normal" },
+      { from: "b", to: "d", kind: "normal" },
+      { from: "c", to: "d", kind: "normal" },
+      { from: "d", to: "e", kind: "normal" },
+      { from: "unrelated-parent", to: "unrelated-child", kind: "normal" },
+    ];
+    expect(computeDescendantSet("a", branching)).toEqual(new Set(["b", "c", "d", "e"]));
+    // Only one branch's subtree from `b` — `c` is a sibling, not a descendant.
+    expect(computeDescendantSet("b", branching)).toEqual(new Set(["d", "e"]));
+  });
+
+  it("follows every edge kind — a collapsed run and a broken link still ride along with the chain", () => {
+    const mixed: TopologyEdgeLike[] = [
+      { from: "a", to: "collapse-1", kind: "collapse" },
+      { from: "collapse-1", to: "b", kind: "collapse" },
+      { from: "b", to: "c", kind: "broken" },
+    ];
+    expect(computeDescendantSet("a", mixed)).toEqual(new Set(["collapse-1", "b", "c"]));
+  });
+
+  it("is cycle-safe: a corrupt cyclic edge list terminates and never contains the start id", () => {
+    const cyclic: TopologyEdgeLike[] = [
+      { from: "x", to: "y", kind: "normal" },
+      { from: "y", to: "z", kind: "normal" },
+      { from: "z", to: "x", kind: "normal" }, // back to the start
+    ];
+    expect(computeDescendantSet("x", cyclic)).toEqual(new Set(["y", "z"]));
+    // A two-node cycle that does NOT involve the start id also terminates.
+    const sideCycle: TopologyEdgeLike[] = [
+      { from: "start", to: "p", kind: "normal" },
+      { from: "p", to: "q", kind: "normal" },
+      { from: "q", to: "p", kind: "normal" },
+    ];
+    expect(computeDescendantSet("start", sideCycle)).toEqual(new Set(["p", "q"]));
+  });
+});
+
+describe("uxMath — chainMoveCount (freeform chain drag)", () => {
+  const edges: TopologyEdgeLike[] = [
+    { from: "a", to: "b", kind: "normal" },
+    { from: "b", to: "c", kind: "normal" },
+  ];
+  const revisions = [
+    { id: "a", kind: "revision" },
+    { id: "b", kind: "revision" },
+    { id: "c", kind: "revision" },
+  ];
+
+  it("counts the dragged node itself plus every descendant", () => {
+    expect(chainMoveCount("a", revisions, edges)).toBe(3);
+    expect(chainMoveCount("b", revisions, edges)).toBe(2);
+    expect(chainMoveCount("c", revisions, edges)).toBe(1);
+  });
+
+  it("a lone node with no descendants counts 1", () => {
+    expect(chainMoveCount("solo", [{ id: "solo", kind: "revision" }], [])).toBe(1);
+  });
+
+  it("a collapse placeholder in the chain contributes its collapsedCount, not 1", () => {
+    const withCollapse = [
+      { id: "a", kind: "revision" },
+      { id: "run", kind: "collapse", collapsedCount: 7 },
+      { id: "c", kind: "revision" },
+    ];
+    const collapseEdges: TopologyEdgeLike[] = [
+      { from: "a", to: "run", kind: "collapse" },
+      { from: "run", to: "c", kind: "collapse" },
+    ];
+    // 1 (a) + 7 (the collapsed run) + 1 (c).
+    expect(chainMoveCount("a", withCollapse, collapseEdges)).toBe(9);
+  });
+
+  it("a dragged collapse placeholder counts its own collapsedCount for itself", () => {
+    const nodes = [
+      { id: "run", kind: "collapse", collapsedCount: 4 },
+      { id: "c", kind: "revision" },
+    ];
+    expect(chainMoveCount("run", nodes, [{ from: "run", to: "c", kind: "normal" }])).toBe(5);
+  });
+
+  it("a collapse node missing collapsedCount falls back to 1 rather than NaN", () => {
+    expect(chainMoveCount("run", [{ id: "run", kind: "collapse" }], [])).toBe(1);
+  });
+
+  it("an id in the edges with no matching node (e.g. a ghost) still counts 1", () => {
+    const nodes = [{ id: "child", kind: "revision" }];
+    expect(chainMoveCount("child", nodes, [{ from: "child", to: "ghost", kind: "broken" }])).toBe(2);
+  });
+});
+
+describe("uxMath — dragHintText (freeform drag hint pill)", () => {
+  it("chain mode, one revision -> singular", () => {
+    expect(dragHintText("chain", 1, false)).toBe("Move 1 revision");
+  });
+
+  it("chain mode, several revisions -> plural", () => {
+    expect(dragHintText("chain", 5, false)).toBe("Move 5 revisions");
+  });
+
+  it("chain mode on a merge node appends the dissolve warning", () => {
+    expect(dragHintText("chain", 3, true)).toBe("Move 3 revisions · dissolves merge");
+    expect(dragHintText("chain", 1, true)).toBe("Move 1 revision · dissolves merge");
+  });
+
+  it("single (splice) mode is always exactly one revision, merge-ness irrelevant", () => {
+    // A splice re-points the dragged node's children onto its parents, so nothing is dissolved and
+    // nothing else moves — the chain count is deliberately ignored here.
+    expect(dragHintText("single", 1, false)).toBe("Move 1 revision (splice)");
+    expect(dragHintText("single", 9, false)).toBe("Move 1 revision (splice)");
+    expect(dragHintText("single", 9, true)).toBe("Move 1 revision (splice)");
   });
 });
