@@ -7,11 +7,13 @@
 import "./graph.css";
 import { onMessage, post, getPersisted, setPersisted } from "../shared/vscodeApi";
 import { applyBusyMessage } from "../../core/broadcastGate";
-import type { AppState, RevisionDetail, UiPrefs } from "../../protocol/messages";
+import type { AppState, RevisionDetail, TopologyOp, UiPrefs } from "../../protocol/messages";
+import type { LayoutNode } from "../../core/types";
 import { render, showToast, type Handlers, type ViewState } from "./render";
 import { canvasSize, edgePathD, nodeAnchor, nodeSize, nodeXY } from "./metrics";
 import { buildGraphSvg } from "./svgExport";
 import { attachDnd, type DndCallbacks } from "./dnd";
+import { openDropChoice } from "./dropChoice";
 import { attachContextMenu, closeContextMenu, isContextMenuOpen, type MenuHandlers } from "./contextMenu";
 import { attachSearch, type SearchableCard, type SearchCallbacks } from "./search";
 import { attachHover, clearActiveHover, type HoverCallbacks } from "./hover";
@@ -19,7 +21,9 @@ import { attachKeyboardNav, type KeyboardNavHandlers } from "./keyboardNav";
 import { captureFlipSnapshot, playEdgesFade, playFlip } from "./flip";
 import {
   ZOOM_DEFAULT,
+  chainMoveCount,
   clampZoom,
+  computeDescendantSet,
   fitScroll,
   fitZoom,
   matchesQuery,
@@ -119,15 +123,17 @@ let pendingScrollId: string | null = null;
  * `showInputBox` BEFORE ever posting `busy:true`, so there's a real, human-timescale window after
  * a drop where `store.busyOps` is still empty and a second drag could start. Armed the instant a
  * drop fires, carrying a webview-generated `busyToken` the host echoes back in every busy message
- * for that invocation (see the merge/repoint messages' comment in protocol/messages.ts); disarmed
- * ONLY by a merge/repoint `busy:false` whose token MATCHES the arming drop's — the drop's own
- * transaction ending. Matching by token (not just operation name) matters because a stale
- * merge/repoint busy:false from a switched-away-from project is deliberately still delivered
- * (core/broadcastGate.ts) and must not disarm a freshly-armed guard in the new project — the
- * double-drop race this guard exists for would reopen exactly during mergeHeadsAction's
- * showInputBox window. The host guarantees that terminal busy:false on EVERY merge/repoint
- * outcome, including a cancelled input box and pre-busy validation aborts (see
- * mergeHeadsAction/repointAction) — the generous fixed timeout below stays as a
+ * for that invocation (see the merge/repoint/topologyEdit messages' comment in
+ * protocol/messages.ts); disarmed ONLY by a merge/repoint/topology `busy:false` whose token MATCHES
+ * the arming drop's — the drop's own transaction ending. Matching by token (not just operation name)
+ * matters because a stale busy:false from a switched-away-from project is deliberately still
+ * delivered (core/broadcastGate.ts) and must not disarm a freshly-armed guard in the new project —
+ * the double-drop race this guard exists for would reopen exactly during mergeHeadsAction's
+ * showInputBox window. The freeform topology gestures need the same protection for the same reason:
+ * topologyEditAction can sit on a modal "rewrite already-applied history?" confirmation before any
+ * busy:true. The host guarantees that terminal busy:false on EVERY merge/repoint/topology outcome,
+ * including a cancelled input box, a dismissed modal, and pre-busy validation aborts (see
+ * mergeHeadsAction/repointAction/topologyEditAction) — the generous fixed timeout below stays as a
  * belt-and-suspenders floor so a dropped message can never wedge dragging off forever.
  */
 let dropGuardActive = false;
@@ -460,6 +466,11 @@ const menuHandlers: MenuHandlers = {
  * conversion for no benefit over just reusing the same pixel math the SVG was built from. A no-op
  * if there's no current state/viewport (defensive — shouldn't happen while a drag is live) or no
  * edge touches this node (a lone/root/leaf-only drag).
+ *
+ * The attribute-keyed query below deliberately carries NO class filter, so it matches BOTH paths
+ * render.ts emits per parent link: the visible `.alx-edge` and its invisible `.alx-edge-hit` twin
+ * (same `data-from`/`data-to`). That is what keeps an edge's pointer hit area glued to the curve
+ * while a card is being dragged around — verified, not incidental.
  */
 function updateDraggedEdges(nodeId: string, dxCanvas: number, dyCanvas: number): void {
   if (!store.state) return;
@@ -500,6 +511,67 @@ function updateDraggedEdges(nodeId: string, dxCanvas: number, dyCanvas: number):
   }
 }
 
+/** The VISIBLE `.alx-edge` path drawn for the same parent link as the `.alx-edge-hit` twin `hit`
+ * (identical `data-from`/`data-to`, see render.ts's buildEdgesSvg) — the twin itself is transparent,
+ * so every edge highlight class goes on the drawn sibling. */
+function visibleEdgeTwin(viewport: HTMLElement, hit: SVGElement): SVGPathElement | null {
+  const from = hit.dataset.from;
+  const to = hit.dataset.to;
+  if (!from || !to) return null;
+  return viewport.querySelector<SVGPathElement>(
+    `path[data-from="${CSS.escape(from)}"][data-to="${CSS.escape(to)}"]:not(.alx-edge-hit)`,
+  );
+}
+
+/**
+ * Freeform-topology task: hovering a parent link highlights it (`alx-edge--hover`), so an edge
+ * reads as something you can act on — right-click it for "Remove link", or drop a revision on it to
+ * splice that revision in. Delegated on the viewport and re-attached every render, same as every
+ * other listener here (the canvas is rebuilt wholesale each time), and driven by pointerover/
+ * pointerout on the fat invisible `.alx-edge-hit` twins, which are the only thing in the edge layer
+ * that receives pointer events at all (graph.css).
+ *
+ * Suppressed while a drag is active: the drag machine owns edge highlighting then, with its own
+ * `alx-edge--drop-target` on whichever edge is a legal drop. `pointerout` is deliberately NOT gated
+ * the same way — it must stay able to clean up a highlight applied before the drag started.
+ */
+function attachEdgeHover(viewport: HTMLElement): void {
+  viewport.addEventListener("pointerover", (e: PointerEvent) => {
+    if (dragActive) return;
+    const hit = (e.target as Element).closest<SVGElement>(".alx-edge-hit");
+    if (!hit) return;
+    visibleEdgeTwin(viewport, hit)?.classList.add("alx-edge--hover");
+  });
+  viewport.addEventListener("pointerout", (e: PointerEvent) => {
+    const hit = (e.target as Element).closest<SVGElement>(".alx-edge-hit");
+    if (!hit) return;
+    visibleEdgeTwin(viewport, hit)?.classList.remove("alx-edge--hover");
+  });
+}
+
+/** Drops any edge hover highlight currently applied, wherever it is — used when a drag starts (see
+ * `dndCallbacks.onDragActiveChange`), which is the one moment `pointerout` can't be relied on. */
+function clearEdgeHover(): void {
+  for (const path of document.querySelectorAll<SVGPathElement>(".alx-edge--hover")) {
+    path.classList.remove("alx-edge--hover");
+  }
+}
+
+/** The layout node with `id`, or null when the current state has none — the shared lookup behind
+ * the freeform drag's info callback and its head-on-head drop decision. */
+function layoutNodeById(id: string): LayoutNode | null {
+  return store.state?.layout.nodes.find((n) => n.id === id) ?? null;
+}
+
+/** Posts one freeform topology edit (freeform-topology task). Every freeform gesture funnels
+ * through here, so the "exactly one `armDropGuard()` per posted message, at post time only"
+ * invariant (see dropGuardActive's doc comment) is stated in exactly one place — in particular the
+ * drop-choice popover arms nothing until a choice is actually picked, and dismissing it posts
+ * nothing at all. */
+function postTopologyEdit(op: TopologyOp): void {
+  post({ type: "topologyEdit", op, busyToken: armDropGuard() });
+}
+
 /** dnd.ts's hooks into this store — see the module doc comments on `dragActive`/`dropGuardActive`
  * above for why each exists. */
 const dndCallbacks: DndCallbacks = {
@@ -508,8 +580,63 @@ const dndCallbacks: DndCallbacks = {
   },
   onMergeDrop(a, b) {
     // N-way task: the protocol's "merge" message now always carries `ids` (length 2 for a plain
-    // drag-drop) — see protocol/messages.ts's doc comment.
+    // drag-drop) — see protocol/messages.ts's doc comment. Freeform-topology task: dnd.ts no longer
+    // calls this itself (there is no merge drag kind anymore) — the one caller is the head-on-head
+    // drop popover in `onFreeformDrop` below, which reuses this rather than repeating the post.
     post({ type: "merge", ids: [a, b], busyToken: armDropGuard() });
+  },
+  getFreeformInfo(nodeId) {
+    const layout = store.state?.layout;
+    const node = layoutNodeById(nodeId);
+    // Ghost and collapse placeholders have no migration file to rewrite, so they are not freeform
+    // drag sources. render.ts already withholds the drag affordance from them (only `.alx-card`
+    // revision cards get it) — this is the defensive second gate dnd.ts asks for, which also covers
+    // an id the current layout no longer contains.
+    if (!layout || !node || node.kind !== "revision") return null;
+    return {
+      chainCount: chainMoveCount(nodeId, layout.nodes, layout.edges),
+      descendantIds: [...computeDescendantSet(nodeId, layout.edges)],
+      isMerge: node.isMerge,
+      isHead: node.isHead,
+    };
+  },
+  onFreeformDrop(nodeId, drop, mode, at) {
+    if (drop.kind === "node" && mode === "chain" && drop.targetIsHead && layoutNodeById(nodeId)?.isHead === true) {
+      // Head onto head, whole chain: the one genuinely ambiguous drop — it reads equally as "merge
+      // these two heads" (the original Task 14 gesture, which creates a merge revision and keeps
+      // both histories) and as "move this chain under that one" (which rewrites this head's
+      // down_revision). Ask instead of guessing. `targetId` is destructured out because TypeScript
+      // drops the `drop.kind === "node"` narrowing inside the closures below (a parameter is a
+      // mutable binding), and a `const` keeps it.
+      const { targetId } = drop;
+      openDropChoice(at, [
+        {
+          label: "Merge heads",
+          onPick() {
+            // Re-gated at pick time, not just at drop time: a popover can sit open indefinitely,
+            // and an unrelated operation (or another drop) may have started meanwhile.
+            if (!dndCallbacks.isEnabled()) return;
+            dndCallbacks.onMergeDrop(nodeId, targetId);
+          },
+        },
+        {
+          label: "Move here",
+          onPick() {
+            if (!dndCallbacks.isEnabled()) return;
+            postTopologyEdit({ kind: "move-chain", nodeId, targetId });
+          },
+        },
+      ]);
+      return;
+    }
+
+    postTopologyEdit(
+      drop.kind === "node"
+        ? { kind: mode === "chain" ? "move-chain" : "move-single", nodeId, targetId: drop.targetId }
+        : // An edge drop splices the dragged revision into that parent link; `mode` rides along so
+          // the host knows whether the node's descendants come with it (see planInsertBetween).
+          { kind: "insert-between", nodeId, edgeFrom: drop.from, edgeTo: drop.to, mode },
+    );
   },
   onRepointDrop(ghostId, targetId) {
     // Task 15: repointAction (host) has no interactive prompt like mergeHeadsAction's
@@ -526,8 +653,15 @@ const dndCallbacks: DndCallbacks = {
     dragActive = active;
     // Task 19: dragging doesn't re-render the canvas (see dnd.ts's header comment), so an
     // already-applied ancestry highlight needs this explicit hook to tear down — otherwise it'd
-    // sit there, stale, until the drag ends and something else happens to re-render.
-    if (active) clearActiveHover();
+    // sit there, stale, until the drag ends and something else happens to re-render. The edge
+    // hover highlight (attachEdgeHover) needs the same treatment for a sharper reason: once the
+    // drag takes pointer capture, `pointerout` for the edge under the cursor is retargeted to the
+    // capturing card and never fires, so a highlight applied just before the drag began would have
+    // nothing left to clear it.
+    if (active) {
+      clearActiveHover();
+      clearEdgeHover();
+    }
     if (!active) {
       // A full "state" push (if one arrived mid-drag) wins over a bare pending re-render request —
       // applyState's own renderStore() call at the end already covers whatever the pending render
@@ -613,11 +747,19 @@ onMessage((msg) => {
     case "busy": {
       // Drop-guard clearing is scoped (Task 16) to the arming drop's OWN terminal busy:false,
       // matched by the echoed token — the definitive "that drop's host-side transaction is over"
-      // signal. While a merge/repoint is actually running, busy:true keeps drags gated via
-      // store.busyOps anyway, so not clearing on it loses nothing; an unrelated op's busy traffic
-      // (upgrade/sql/..., another invocation's merge, a stale project's merge) must leave the
-      // guard alone entirely — see dropGuardActive's doc comment.
-      if (!msg.active && msg.token === armedDropToken && (msg.operation === "merge" || msg.operation === "repoint")) {
+      // signal. While a merge/repoint/topology edit is actually running, busy:true keeps drags gated
+      // via store.busyOps anyway, so not clearing on it loses nothing; an unrelated op's busy
+      // traffic (upgrade/sql/..., another invocation's merge, a stale project's merge) must leave
+      // the guard alone entirely — see dropGuardActive's doc comment. `"topology"` (the
+      // freeform-topology task) is here for exactly the same reason merge is: topologyEditAction
+      // broadcasts a terminal busy:false on every abort path (rejected plan, dismissed modal) with
+      // no busy:true before it, and without this the guard would sit armed for its full 30s timeout
+      // after any rejected freeform drop.
+      if (
+        !msg.active &&
+        msg.token === armedDropToken &&
+        (msg.operation === "merge" || msg.operation === "repoint" || msg.operation === "topology")
+      ) {
         clearDropGuard();
       }
       // Tracked by per-invocation token, not operation name — see applyBusyMessage's doc comment.
@@ -756,9 +898,11 @@ function renderStore(scrollOverride?: ScrollPoint): void {
     // effect re-renders the canvas, which would orphan the card currently holding pointer
     // capture (the very thing the "state"-message deferral protects against).
     attachContextMenu(nextViewport, () => dndCallbacks.isEnabled() && !dragActive, menuHandlers);
-    // Task 19: same re-attach-every-render pattern for zoom/hover/keyboard nav.
+    // Task 19: same re-attach-every-render pattern for zoom/hover/keyboard nav — and, since the
+    // freeform-topology task, for the edge hover highlight.
     attachZoomWheel(nextViewport);
     attachHover(nextViewport, store.state.layout, hoverCallbacks);
+    attachEdgeHover(nextViewport);
     attachKeyboardNav(nextViewport, navNodes(store.state), store.state.ui.order, store.state.ui.axis, keyboardHandlers);
     if (toolbarEl) {
       attachSearch(toolbarEl, nextViewport, searchableCards(store.state), store.search.query, store.search.index, searchCallbacks);

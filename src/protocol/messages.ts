@@ -187,7 +187,8 @@ export type HostToWebviewMessage =
       // shouldDeliverStale (core/broadcastGate.ts) deliberately lets through from a superseded
       // pipeline can only ever clear its own invocation's entry, never a same-named operation the
       // CURRENT pipeline still has in flight. `operation` remains for operation-scoped consumers
-      // (the graph webview's drop guard disarms on merge/repoint terminal messages by name).
+      // (the graph webview's drop guard disarms on merge/repoint/topology terminal messages by
+      // name — every operation a drag drop can post, each of which can abort before any busy:true).
       token: string;
       active: boolean;
     }

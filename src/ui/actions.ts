@@ -210,9 +210,7 @@ export async function topologyEditAction(
       ctx.broadcast({ type: "toast", level: "error", text: plan.reason });
       // Same drop-guard release as mergeHeadsAction's abort path (see the comment there): the
       // webview armed its guard on drop, and only a terminal busy:false disarms it. Every exit
-      // below broadcasts one for that reason. (The graph webview's disarm check currently matches
-      // `merge`/`repoint` by name — src/webview/graph/main.ts — so it must learn `"topology"` when
-      // the drag gesture that posts this message lands, or these releases go unheard.)
+      // below broadcasts one for that reason.
       ctx.broadcast({ type: "busy", operation: "topology", token: busyToken, active: false });
       ctx.log(`topologyEditAction: ${op.kind}: ${plan.reason}`);
       return;
