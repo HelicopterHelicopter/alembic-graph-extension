@@ -439,12 +439,6 @@ body {
   cursor: grabbing;
   box-shadow: 0 14px 30px rgba(0, 0, 0, 0.6);
 }
-.alx-card--merge-target {
-  border-color: #89d185;
-  box-shadow:
-    0 0 0 2px #89d185,
-    0 0 20px #89d18555;
-}
 
 /* ---------- ghost-drag repoint (Task 15) ---------- */
 /* `.alx-card--freeform-target` (freeform topology drag) shares this declaration rather than
@@ -459,6 +453,17 @@ body {
 }
 
 /* ---------- freeform topology drag ---------- */
+/* The ONE valid card currently under the pointer (dnd.ts's `setNodeTarget`), on top of the blue
+   pre-ring every valid card already wears: green says "release here and it lands on THIS one", the
+   same green as the `.alx-merge-hint` banner and the old drag-to-merge ring this declaration was.
+   Must stay AFTER `.alx-card--freeform-target` above — equal specificity, so source order is what
+   makes the hovered card read green instead of blue. */
+.alx-card--drop-hover {
+  border-color: #89d185;
+  box-shadow:
+    0 0 0 2px #89d185,
+    0 0 20px #89d18555;
+}
 /* Applied to the VISIBLE `.alx-edge` path, never to its `.alx-edge-hit` twin (which is the thing
    under the pointer, but has no stroke to highlight). Same blue as the drop-target card ring above,
    so an edge drop target and a card drop target read as one family. `!important` on the stroke

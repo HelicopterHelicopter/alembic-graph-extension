@@ -525,7 +525,13 @@ function buildNodeElement(
   if (node.isBroken) {
     const hint = document.createElement("div");
     hint.className = "alx-broken-hint";
-    hint.textContent = "⚠ down_revision missing — drag onto a parent to re-point";
+    // Names the two PRECISE repairs, because dragging this card is no longer one of them: since the
+    // freeform-topology task a card drag is a plain topology move that replaces ALL of this
+    // revision's parents (which on a broken merge child would drop its healthy link too). The
+    // repair is the ghost card's own repoint drag (or the dashed edge's remove-link menu); dragging
+    // this card just moves it. Same two-line budget as the merge banner — the hint is 226px wide
+    // (the card) and a third line would eat the ~36px of inter-lane clearance at compact density.
+    hint.textContent = "⚠ down_revision missing — drag the ghost to repair, or this card to move it";
     wrapper.append(hint);
   }
 
@@ -779,9 +785,11 @@ function buildMergeHint(
     // Freeform-topology task: dropping a head on a head is no longer merge-or-nothing — it opens
     // the merge/move choice popover (main.ts's `onFreeformDrop`), and ⌥/Alt switches any drag to a
     // single-revision splice. The wording names both so the gestures are discoverable from the one
-    // banner that was already teaching drag-and-drop. Wraps to two lines in the 250px box, which
-    // still clears the head cards below it (see the placement math after this).
-    hint.textContent = "drag one head onto the other to merge or move it — hold Alt/⌥ to move a single revision";
+    // banner that was already teaching drag-and-drop, but it is kept SHORT on purpose: the box is a
+    // fixed 250px (border-box, so 234px of text), and a third line would overhang the 34px of
+    // clearance the placement math below leaves and clip behind the head cards. Two lines is the
+    // budget — re-measure at 234px before lengthening this string.
+    hint.textContent = "drag a head onto the other to merge or move — ⌥/Alt moves 1 revision";
 
     if (axis === "horizontal") {
       // Heads cluster toward the newest end of the chain — the min-x edge under "newest-top", the

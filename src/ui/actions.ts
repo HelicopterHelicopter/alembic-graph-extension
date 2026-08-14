@@ -232,11 +232,19 @@ export async function topologyEditAction(
 
       // RE-PLAN before writing, but only on this path: a modal can sit open indefinitely, and the
       // graph may have rescanned (a watcher event, a branch switch) while it did — the plan above
-      // was computed against a graph that may no longer exist. Re-planning and comparing the file
-      // edits is what keeps the applied text matched to the CURRENT graph; when no modal was shown
-      // there was no await between planning and applying, so `plan` is still fresh by construction.
+      // was computed against a graph that may no longer exist. Re-planning and comparing is what
+      // keeps the applied text matched to the CURRENT graph; when no modal was shown there was no
+      // await between planning and applying, so `plan` is still fresh by construction. The
+      // comparison covers `appliedTouched` as well as `fileEdits`, because the applied set is
+      // exactly what the user just consented to: a DB that advanced under the open modal can leave
+      // the identical edit touching MORE applied revisions than the warning named, and that
+      // deserves a fresh confirmation rather than a silent apply.
       const replanned = ctx.service.getTopologyPlan(op);
-      if (!replanned.ok || JSON.stringify(replanned.fileEdits) !== JSON.stringify(plan.fileEdits)) {
+      const consented = JSON.stringify({ fileEdits: plan.fileEdits, appliedTouched: plan.appliedTouched });
+      if (
+        !replanned.ok ||
+        JSON.stringify({ fileEdits: replanned.fileEdits, appliedTouched: replanned.appliedTouched }) !== consented
+      ) {
         ctx.broadcast({ type: "toast", level: "error", text: "graph changed while confirming — try again" });
         ctx.broadcast({ type: "busy", operation: "topology", token: busyToken, active: false });
         ctx.log(`topologyEditAction: ${op.kind}: plan changed while the confirmation was open — aborting`);

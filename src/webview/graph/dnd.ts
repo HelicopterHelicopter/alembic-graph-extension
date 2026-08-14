@@ -28,7 +28,10 @@
  * valid target (`alx-card--freeform-target`) or an explicitly invalid one
  * (`alx-card--invalid-target`), per uxMath.ts's `isValidFreeformNodeTarget`. Edges get no
  * pre-ring — with one twin per parent link that would be visual noise — so only the edge currently
- * under the pointer lights up (`alx-edge--drop-target` on its VISIBLE twin).
+ * under the pointer lights up (`alx-edge--drop-target` on its VISIBLE twin). On top of that
+ * pre-ring, a freeform drag ALSO keeps the design's single hover ring: whichever valid card is
+ * under the pointer right now wears `alx-card--drop-hover` (green over the blue), applied and
+ * cleared through `setNodeTarget` exactly as the edge highlight is through `setEdgeTarget`.
  *
  * Task 19 (zoom): the dragged `.alx-node` wrapper lives INSIDE `.alx-canvas`, which now carries a
  * `transform: scale(zoom)` (render.ts). A `translate(dx, dy)` set on a descendant of a scaled
@@ -141,6 +144,10 @@ interface DragState {
   startX: number;
   startY: number;
   dragging: boolean;
+  /** The card the pointer is over right now (null when it is over an edge, or nothing) — the drop
+   * target `onPointerUp` reads. A freeform drag only ever assigns it through `setNodeTarget`, which
+   * keeps `alx-card--drop-hover` on exactly this element; the repoint branch assigns it directly
+   * and paints no hover ring. */
   targetCard: HTMLElement | null;
   /** repoint only: every card ringed as a valid drop target at drag-start (see the module doc
    * comment's third design difference), so they can all be un-ringed on end. Always empty for a
@@ -239,6 +246,20 @@ export function attachDnd(viewport: HTMLElement, state: AppState, zoom: number, 
     }
   }
 
+  /** Moves the single hovered-card highlight to `card` (or clears it), keeping `targetCard` and its
+   * `alx-card--drop-hover` class in lockstep — the freeform counterpart of `setEdgeTarget` below,
+   * with the same no-op-when-unchanged guard. This is the "release here and it lands on THIS one"
+   * ring painted ON TOP of the blue pre-ring every valid card already wears (graph.css); the
+   * pre-ring itself is `applyFreeformRings`' business and is untouched here. Freeform only — a
+   * repoint drag assigns `targetCard` directly (its rings are all-or-nothing, per the module doc
+   * comment's third design difference) and never wears this class. */
+  function setNodeTarget(d: DragState, card: HTMLElement | null): void {
+    if (card === d.targetCard) return;
+    d.targetCard?.classList.remove("alx-card--drop-hover");
+    d.targetCard = card;
+    card?.classList.add("alx-card--drop-hover");
+  }
+
   /** Moves the single edge highlight to `hit` (or clears it) — a no-op when nothing changed, so
    * the common "pointer still over the same edge" frame does no DOM work at all. */
   function setEdgeTarget(d: DragState, hit: SVGElement | null): void {
@@ -288,6 +309,12 @@ export function attachDnd(viewport: HTMLElement, state: AppState, zoom: number, 
         continue;
       }
       if (el instanceof SVGElement && el.classList.contains("alx-edge-hit") && viewport.contains(el)) {
+        // A broken link's parent is a revision that doesn't exist, so there is nothing for the
+        // dragged node to revise below it — mirrors the host's own `cannot insert below a missing
+        // revision` guard (MigrationService.planInsertBetween), which stays authoritative; this
+        // just stops the dashed red edge from ringing as a target the drop can only ever be
+        // rejected on. The repair for such an edge is the ghost repoint or its remove-link menu.
+        if (el.dataset.edgeKind === "broken") continue;
         const from = el.dataset.from;
         const to = el.dataset.to;
         if (from && to && isValidFreeformEdgeTarget(from, to, d.originId, d.mode, d.descendantIds)) {
@@ -323,6 +350,9 @@ export function attachDnd(viewport: HTMLElement, state: AppState, zoom: number, 
       for (const c of drag.freeformCards) {
         c.classList.remove("alx-card--freeform-target", "alx-card--invalid-target");
       }
+      // Symmetric with the two setters in `onPointerMove` — every exit path (drop, Escape, cancel,
+      // an abandoned pre-threshold drag) unwinds the hover ring the same way it was applied.
+      setNodeTarget(drag, null);
       setEdgeTarget(drag, null);
       drag.hintEl?.remove();
       drag.hintEl = null;
@@ -491,8 +521,11 @@ export function attachDnd(viewport: HTMLElement, state: AppState, zoom: number, 
       drag.mode = mode;
       applyFreeformRings(drag);
     }
+    // Node and edge targets are mutually exclusive (freeformHitTest returns at most one), so these
+    // two calls are also how the hover ring hands off between them: switching to an edge clears the
+    // card's `alx-card--drop-hover`, and vice versa.
     const { card, edge } = freeformHitTest(drag, e.clientX, e.clientY);
-    drag.targetCard = card;
+    setNodeTarget(drag, card);
     setEdgeTarget(drag, edge);
     updateHint(drag, e.clientX, e.clientY);
   }

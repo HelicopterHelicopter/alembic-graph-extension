@@ -104,7 +104,8 @@ watch, real host round-trip for the toolbar toggles).
    toggles; dot-grid canvas background; rounded revision cards with a 4px lane-colored left stripe,
    mono hash, bold message, dim `author · date` meta row; dashed red ghost card
    (`⚠ missing revision`); dashed red bezier edge into it plus a pulsing
-   `⚠ down_revision missing — drag onto a parent to re-point` hint under the broken card; a pulsing
+   `⚠ down_revision missing — drag the ghost to repair, or this card to move it` hint under the
+   broken card (two lines, never a third — a third would reach the lane below); a pulsing
    green `drag one head onto the other to merge ⇄` box (3 heads on this fixture); badges HEAD
    (green, ×3), MERGE (purple, ×1), BROKEN (red, ×1) in the card header.
 3. Click a revision card: it gets the blue selected ring/background (`#1c8fd6` / `#093251`); click
@@ -441,7 +442,8 @@ stray `fixtures/*/fixture.db`) once you're done, before committing or handing of
    `5c0d13aa7d9f`; 1 problem), set the override, then **Alembic Graph: Open Migration Graph**.
 2. Find the dashed red **⚠ missing revision** ghost card (hash `deadbeef0000`) and the
    `5c0d13aa7d9f` **add audit log** card just below it — it shows both `HEAD` and `BROKEN` badges
-   and the pulsing hint "⚠ down_revision missing — drag onto a parent to re-point".
+   and the pulsing hint "⚠ down_revision missing — drag the ghost to repair, or this card to move
+   it".
 3. Drag the ghost card (grab anywhere on it) toward the `4bfc02996c8e` **search index
    (experimental)** card. Confirm, while dragging: EVERY real revision card on the canvas (not just
    the one under the cursor) shows a blue ring/glow (`#4aa3ff`), the ghost card itself gets a drop
@@ -978,9 +980,10 @@ against the real built webview (`harness/graph.html`).
    off the edge of the canvas) — to their left under the default `Newest →`, flipping to their right
    under `Newest ←`.
 9. Toggle **Compact** density in horizontal mode: cards shrink, lanes move closer together
-   vertically, and — for the broken revision's **⚠ down_revision missing — drag onto a parent to
-   re-point** hint below its card — confirm the hint text never overlaps the card in the lane below
-   it (there's still ~40px of clearance between lanes at compact density).
+   vertically, and — for the broken revision's **⚠ down_revision missing — drag the ghost to repair,
+   or this card to move it** hint below its card — confirm the hint text still wraps to exactly two
+   lines and never overlaps the card in the lane below it (there's still ~40px of clearance between
+   lanes at compact density).
 10. Confirm zoom/fit (Task 19), search-and-cycle centering, ancestry hover, FLIP transitions, and
     the right-click context menu all still work normally in horizontal mode — none of them are
     axis-specific, but verify rather than assume: zoom in/out and Fit behave the same; typing a
@@ -1174,18 +1177,22 @@ steps say so individually), and at the end also `git clean -f fixtures/` and del
    `4bfc02996c8e`, merge node `29dae0774a6c`), then **Alembic Graph: Open Migration Graph**.
    Confirm the new affordances before dragging anything: EVERY revision card takes the grab cursor
    and starts a drag (before this task only the two heads and the ghost did); the green 2-head
-   banner reads `drag one head onto the other to merge or move it — hold Alt/⌥ to move a single
-   revision` (it wraps to two lines in its fixed 250px box — confirm it neither overlaps a head
-   card nor clips off the canvas); and hovering any edge thickens it to blue, clearing when the
-   pointer leaves.
+   banner reads `drag a head onto the other to merge or move — ⌥/Alt moves 1 revision` (it wraps to
+   exactly two lines in its fixed 250px box — confirm there is no third line, and that the box
+   neither overlaps a head card nor clips off the canvas); and hovering any edge thickens it to
+   blue, clearing when the pointer leaves.
 2. **Chain move.** Drag the `f6a9b7241d3c` **billing: create plans** card (a mid-graph, non-head
    card — un-draggable before this task) toward the `e5b8a600cc11` **add oauth provider fields**
    card. While dragging confirm: a cursor-following hint pill reads `Move 5 revisions` (the card
    plus its four descendants `07b8c8552e4a`, `29dae0774a6c`, `3aebf1885b7d`, `4bfc02996c8e`); those
    four cards dim to ~45% with a `not-allowed` cursor (invalid targets in chain mode — dropping on
    one would make it its own ancestor); every other revision card carries the blue drop-target
-   ring. Press **Escape** mid-drag: the card snaps back to its origin, rings and hint pill vanish,
-   and nothing is posted (no toast, no busy spinner, `git status` clean). Repeat the drag and
+   ring, and whichever valid card the pointer is actually over swaps that blue ring for a GREEN one
+   (the "release here and it lands on this one" hover ring) which follows the pointer from card to
+   card, clears when the pointer moves onto an edge or empty canvas, and is never painted on a
+   dimmed/invalid card. Press **Escape** mid-drag: the card snaps back to its origin, rings (the
+   green one included) and hint pill vanish, and nothing is posted (no toast, no busy spinner, `git
+   status` clean). Repeat the drag and
    release over `e5b8a600cc11`. Expect a green success toast `Rewrote down_revision · move f6a9b724
    (+4 descendants) under e5b8a600`, NO modal (nothing is applied — no fixture DB exists yet), and
    a file-watcher-driven re-render (no manual refresh) with the whole billing branch now hanging
@@ -1338,12 +1345,20 @@ steps say so individually), and at the end also `git clean -f fixtures/` and del
     file's `down_revision = 'deadbeef0000'` was rewritten wholesale to `'d4c7f5309b2e'` (the whole
     parent list is replaced — no ghost-specific repair path was involved), the ghost card / BROKEN
     badge / re-point hint / Problems entry are all gone, the problems count reads 0, and the heads
-    count stays 3 (`5c0d13aa7d9f` still has no children of its own). `git checkout -- fixtures/`
-    afterwards.
-16. **Remove-edge deletes the ghost reference.** Right-click the dashed red edge running from the
-    ghost into `5c0d13aa7d9f`. The one menu item carries the missing marker: `Remove link (missing)
-    deadbeef → 5c0d13aa`. Click it. Expect toast `Rewrote down_revision · stop 5c0d13aa revising
-    deadbeef (becomes a new base)`; `5c0d13aa7d9f_add_audit_log.py` now reads `down_revision =
+    count stays 3 (`5c0d13aa7d9f` still has no children of its own). Note the contrast with an ⌥
+    splice of a broken node that DOES have children: a splice re-attaches those children to the
+    node's own parent list verbatim, ghost ids included, so the dangling reference simply moves
+    down-chain (the ghost card stays, the problems count stays 1) — expected, since a splice
+    preserves the chain rather than repairing it. `git checkout -- fixtures/` afterwards.
+16. **Remove-edge deletes the ghost reference.** First confirm the drag-side guard on the same edge:
+    drag any revision card over the dashed red edge running from the ghost into `5c0d13aa7d9f` and
+    confirm that, unlike every healthy edge, it never turns blue/thick and the hint pill never grows
+    an `insert between …` suffix — a broken link is never an insert target (the webview mirrors the
+    host's own `cannot insert below a missing revision` guard), so releasing there is a no-op drop:
+    no toast, no file change. Now right-click that edge. The one menu item carries the missing
+    marker: `Remove link (missing) deadbeef → 5c0d13aa`. Click it. Expect toast `Rewrote
+    down_revision · stop 5c0d13aa revising deadbeef (becomes a new base)`;
+    `5c0d13aa7d9f_add_audit_log.py` now reads `down_revision =
     None` with a bare `Revises:` line; and the ghost card, its dashed red edge, the BROKEN badge,
     the re-point hint, and the Problems diagnostic are all gone, with `5c0d13aa7d9f` rendering as a
     second base alongside `8f2a1c9d4e07` (still a head; heads stay 3, problems 1 → 0). This is the
