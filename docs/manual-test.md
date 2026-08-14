@@ -1141,3 +1141,229 @@ a disposable development database.
    follows it, and no environment keys or values are printed.
 8. Remove both settings. Refresh and confirm the main-checkout virtualenv fallback still works but
    no environment file is loaded automatically.
+
+## Freeform topology editing
+
+Every revision card is a drag source now, not just heads and the ghost: a plain drag moves a node
+**and its descendants** (chain), ⌥/Alt+drag splices the node **alone** out of its chain, dropping
+on a card re-parents, dropping on an edge inserts between, and right-clicking an edge cuts that one
+parent link. `src/webview/graph/dnd.ts`'s module doc comment is the gesture reference.
+
+The pure halves are vitest-covered: the ring/hit-test predicates and the hint-pill wording
+(`isValidFreeformNodeTarget`/`isValidFreeformEdgeTarget`/`dragHintText`,
+`test/unit/uxMath.test.ts`), all four ops' plans and their cycle/no-op/ambiguity guards
+(`MigrationService.getTopologyPlan`, `test/unit/migrationService.test.ts`), the
+`down_revision`/`Revises:` text surgery (`test/unit/downRevisionEdit.test.ts`), and the modal/toast
+wording (`topologyConfirmText`/`topologySuccessText`, `test/unit/actions.test.ts`). What has NO
+automated coverage at all is everything DOM- or `vscode`-shaped: the drag machine (`dnd.ts`), the
+head-onto-head drop popover (`dropChoice.ts`), the edge context menu (`contextMenu.ts`), and the
+validate-all-then-one-`WorkspaceEdit` apply layer (`services/repoint.ts`). The steps below are
+those parts' primary verification, not an F5 top-up on top of an already-tested unit.
+
+Setup: most of this section needs no `alembic` at all — a topology edit is pure text surgery on
+`versions/*.py`, with no subcommand behind it — but steps 10 and 11 do. For those, set the same
+override as Tasks 13–17: in the Extension Development Host, **Preferences: Open Workspace Settings
+(JSON)** → `"alembicGraph.alembicCommand": "<absolute repo path>/.venv/bin/python -m alembic"`.
+**Every step here mutates fixture files** — run `git checkout -- fixtures/` after each one (the
+steps say so individually), and at the end also `git clean -f fixtures/` and delete any
+`fixtures/*/fixture.db`, before committing or handing off.
+
+### Chain move and ⌥ splice (healthy fixture)
+
+1. Press F5, select **Run Extension (healthy fixture)** (11 revisions, 2 heads `3aebf1885b7d`/
+   `4bfc02996c8e`, merge node `29dae0774a6c`), then **Alembic Graph: Open Migration Graph**.
+   Confirm the new affordances before dragging anything: EVERY revision card takes the grab cursor
+   and starts a drag (before this task only the two heads and the ghost did); the green 2-head
+   banner reads `drag one head onto the other to merge or move it — hold Alt/⌥ to move a single
+   revision` (it wraps to two lines in its fixed 250px box — confirm it neither overlaps a head
+   card nor clips off the canvas); and hovering any edge thickens it to blue, clearing when the
+   pointer leaves.
+2. **Chain move.** Drag the `f6a9b7241d3c` **billing: create plans** card (a mid-graph, non-head
+   card — un-draggable before this task) toward the `e5b8a600cc11` **add oauth provider fields**
+   card. While dragging confirm: a cursor-following hint pill reads `Move 5 revisions` (the card
+   plus its four descendants `07b8c8552e4a`, `29dae0774a6c`, `3aebf1885b7d`, `4bfc02996c8e`); those
+   four cards dim to ~45% with a `not-allowed` cursor (invalid targets in chain mode — dropping on
+   one would make it its own ancestor); every other revision card carries the blue drop-target
+   ring. Press **Escape** mid-drag: the card snaps back to its origin, rings and hint pill vanish,
+   and nothing is posted (no toast, no busy spinner, `git status` clean). Repeat the drag and
+   release over `e5b8a600cc11`. Expect a green success toast `Rewrote down_revision · move f6a9b724
+   (+4 descendants) under e5b8a600`, NO modal (nothing is applied — no fixture DB exists yet), and
+   a file-watcher-driven re-render (no manual refresh) with the whole billing branch now hanging
+   off `e5b8a600cc11` instead of `d4c7f5309b2e`. Finally, start (don't finish) one more drag, on
+   the merge card `29dae0774a6c`: its hint pill reads `Move 3 revisions · dissolves merge` — a
+   chain move replaces ALL of a node's parents with the drop target, so moving a merge node
+   necessarily drops one of its two parent links. Escape out of that one.
+3. **Exactly one file, exactly two lines.** `git status fixtures/healthy-project` lists ONE
+   modified file, `alembic/versions/f6a9b7241d3c_billing_create_plans.py`, and `git diff` on it
+   shows exactly two changed lines: `down_revision = "e5b8a600cc11"` and the docstring's `Revises:
+   e5b8a600cc11` (original quote style and every other byte preserved). The four descendants' files
+   are untouched — they already revise ids inside the subtree that moved with them. `git checkout
+   -- fixtures/` afterwards.
+4. **⌥ splice.** Hold ⌥/Alt and drag `c3d6e4b721a8` **add sessions and tokens** (a mid-chain node:
+   parent `b2e5d3a10f66`, single child `d4c7f5309b2e`) onto `4bfc02996c8e` **search index
+   (experimental)**. Confirm the hint pill reads `Move 1 revision (splice)`, and that releasing and
+   re-pressing ⌥ mid-drag without dropping flips the rings live: in chain mode `d4c7f5309b2e` and
+   everything above it dims as invalid, in single mode every card rings blue (a splice may legally
+   re-parent a node under its own descendant, because the children are detached first). Drop with ⌥
+   still held. Expect toast `Rewrote down_revision · move c3d6e4b7 alone under 4bfc0299,
+   re-attaching 1 child` and, on the re-render, `d4c7f5309b2e` (with its whole subtree) re-attached
+   directly to `b2e5d3a10f66` — c3d6's former parent — while `c3d6e4b721a8` now sits alone above
+   `4bfc02996c8e` as a head of its own. TWO files changed (`c3d6…` and `d4c7…`), nothing else. `git
+   checkout -- fixtures/` afterwards.
+
+### Insert between (edge drops)
+
+5. **Chain-mode insert.** Drag the `4bfc02996c8e` head card onto the middle of the edge between
+   `b2e5d3a10f66` and `c3d6e4b721a8` (anywhere along the visible line — each link has a fat
+   invisible hit twin, so pixel precision isn't needed). While hovering the edge, confirm the edge
+   itself turns blue and thick, and the hint pill grows a suffix: `Move 1 revision · insert between
+   b2e5d3a1 and c3d6e4b7`. Release. Expect toast `Rewrote down_revision · insert 4bfc0299 between
+   b2e5d3a1 and c3d6e4b7`, and on the re-render `4bfc02996c8e` sits in the trunk between the two
+   (`4bfc…` revises `b2e5…`; `c3d6…` revises `4bfc…`). Exactly two files changed. `git checkout --
+   fixtures/` afterwards.
+6. **Single-mode (⌥) insert.** Hold ⌥ and drag `e5b8a600cc11` **add oauth provider fields** (one
+   child, `18c9d9663f5b`) onto the edge between `8f2a1c9d4e07` and `b2e5d3a10f66`. The hint pill
+   reads `Move 1 revision (splice) · insert between 8f2a1c9d and b2e5d3a1`. Release with ⌥ still
+   held. Expect toast `Rewrote down_revision · insert e5b8a600 between 8f2a1c9d and b2e5d3a1` and
+   THREE files changed: `e5b8…` now revises `8f2a…`, `b2e5…` now revises `e5b8…`, and the spliced
+   child `18c9d9663f5b` re-attaches to e5b8's former parent `d4c7f5309b2e` (the difference from
+   step 5: only the node itself moved, so its child had to be re-homed). Leave this edit in place
+   if you want to run step 12's undo check against it; otherwise `git checkout -- fixtures/`.
+
+### Cutting a parent link (right-click an edge)
+
+7. **Merge parent edge → tuple collapses to a scalar.** Right-click the edge running from
+   `07b8c8552e4a` **billing: add invoices** into the merge card `29dae0774a6c`. A one-item context
+   menu opens at the pointer — same dark VS Code-styled menu as Task 17's card menu, dismissed by
+   Escape / click-away / canvas scroll, and it never arms a drag — reading `Remove link 07b8c855 →
+   29dae077`. (Right-click a CARD as well and confirm Task 17's five-item menu still opens there
+   unchanged; the edge check runs first, but only for edges.) Click the item. Expect toast `Rewrote
+   down_revision · stop 29dae077 revising 07b8c855`; ONE file changed
+   (`29dae0774a6c_merge_oauth_and_billing.py`), whose tuple `down_revision: Union[str,
+   Sequence[str], None] = ("18c9d9663f5b", "07b8c8552e4a")` collapses to the scalar
+   `"18c9d9663f5b"` with `Revises: 18c9d9663f5b` in the docstring; the MERGE badge disappears from
+   `29dae0774a6c`; and `07b8c8552e4a` becomes a head (toolbar heads chip and sidebar HEADS pill
+   both 2 → 3). `git checkout -- fixtures/` afterwards.
+8. **Only-parent link → `down_revision = None`, a second base.** Right-click the edge from
+   `d4c7f5309b2e` into `f6a9b7241d3c` **billing: create plans** (f6a9's only parent) → `Remove link
+   d4c7f530 → f6a9b724`. Expect toast `Rewrote down_revision · stop f6a9b724 revising d4c7f530
+   (becomes a new base)`; `f6a9b7241d3c_billing_create_plans.py` now reads `down_revision = None`
+   with a bare `Revises:` line; and the graph re-renders with `f6a9b7241d3c` as a SECOND base — its
+   own lane starting at the root end with no incoming edge, alongside `8f2a1c9d4e07`. Confirm this
+   is NOT treated as damage: no BROKEN badge, no ghost card, no Problems-panel entry (a base is
+   legal alembic; a dangling reference is not). Keep this state for step 17's parse check, or `git
+   checkout -- fixtures/`.
+
+### Head onto head (the ambiguous drop)
+
+9. **Popover + Move here.** Drag `3aebf1885b7d` **add rate limiting** onto `4bfc02996c8e` **search
+   index (experimental)** — two heads, no ⌥, so the drop reads equally as "merge" and as "move".
+   Confirm that on release NOTHING is posted yet: a two-item popover opens at the drop point with
+   **Merge heads** and **Move here**. Press Escape (or click elsewhere) first: the popover closes
+   and nothing at all happens — no toast, no busy spinner, no file change — and the very next drag
+   starts immediately (a dismissed popover never armed the drop guard). Repeat the drag and click
+   **Move here**: toast `Rewrote down_revision · move 3aebf188 under 4bfc0299`, ONE file changed
+   (`3aebf1885b7d_add_rate_limiting.py`, `down_revision` → `4bfc02996c8e`), and the graph drops to
+   a single head. `git checkout -- fixtures/` afterwards.
+10. **Merge heads.** Set the `alembicCommand` override (see this section's Setup), repeat step 9's
+    drag, and click **Merge heads** instead: Task 14's flow takes over unchanged — an input box
+    pre-filled `merge heads 3aebf188 and 4bfc0299`, then the `⟳ working…` toolbar indicator, then a
+    green `Merge revision created — Generating … done` toast, a new file under
+    `fixtures/healthy-project/alembic/versions/`, and a one-head graph (HEAD + MERGE badges). This
+    is the same `alembic merge` subprocess as before; only the way it is reached changed. `git
+    checkout -- fixtures/` and `git clean -f fixtures/` afterwards (the merge file is untracked).
+
+### Applied history, undo, and rejected drops
+
+11. **Applied-set modal.** In a terminal at `fixtures/healthy-project`, run `../../.venv/bin/python
+    -m alembic upgrade heads` (this creates `fixture.db`), then run **Alembic Graph: Refresh** in
+    the Extension Development Host with the override still set, and confirm the state enriched
+    (`"dbReachable":true` in the Output dump, filled applied dots on every card). Now make any edit
+    at or below a current revision — e.g. right-click the `d4c7f5309b2e` → `f6a9b7241d3c` edge →
+    **Remove link d4c7f530 → f6a9b724** (step 8's edit). Before anything is written, a MODAL
+    warning appears, led by the plan's own summary: `stop f6a9b724 revising d4c7f530 (becomes a new
+    base)`, a blank line, then `This rewrites history at or below 2 applied revisions (d4c7f530,
+    f6a9b724). Upgrade/downgrade behavior will change for the current database.` — with a single
+    **Rewrite history** button (plus Cancel). Press Escape/Cancel: nothing happens at all — no
+    toast, no busy indicator left showing, and `git status fixtures/` is clean, because the plan is
+    computed and confirmed BEFORE any file is opened for writing. Repeat and click **Rewrite
+    history**: the edit applies exactly as in step 8. Note the contrast with steps 2–10, which
+    never prompted: `appliedTouched` is empty whenever the DB is unreachable, so an unreachable DB
+    deliberately applies without a modal rather than warning about applied-ness it cannot
+    determine. `git checkout -- fixtures/` and delete `fixtures/healthy-project/fixture.db`
+    afterwards.
+12. **One undo restores every touched file.** Redo step 6's ⌥ insert-between (three files touched:
+    `e5b8a600cc11_…`, `b2e5d3a10f66_…`, `18c9d9663f5b_…`). Open any ONE of the three in an editor
+    tab and press Cmd+Z (Ctrl+Z) ONCE: the whole edit is one `WorkspaceEdit`, so VS Code undoes it
+    as a single element across all three files (it may first ask whether to undo across every file
+    the edit touched — answer yes). The edit was saved to disk by the action, so undo leaves the
+    three buffers dirty-but-original: run **File: Save All** and confirm `git status fixtures/`
+    goes completely clean and the graph re-renders back to the original topology on its own.
+13. **Rejected drops.** Three checks, none of which may write a file:
+    - *Invalid ring.* Start dragging `d4c7f5309b2e` **add password reset flow** with no modifier:
+      all seven of its descendants (`e5b8…`, `f6a9…`, `18c9…`, `07b8…`, `29dae…`, `3aeb…`, `4bfc…`)
+      dim with the `not-allowed` cursor and cannot take the drop — releasing over one reverts the
+      card to its origin with no toast and no file change.
+    - *Host guard, forced.* The mode is sampled from the modifier at the instant of the drop, so
+      the guard is still reachable: ⌥-drag `d4c7f5309b2e` over the edge between `29dae0774a6c` and
+      `4bfc02996c8e` (valid and blue in single mode), then RELEASE ⌥ without moving the pointer and
+      drop. The webview posts a chain insert the rings had marked invalid, and the host — which
+      stays authoritative — rejects it: red toast `inserting would create a cycle`, no file
+      changed, busy indicator clearing straight away. (The node-drop equivalent, ⌥ over a
+      descendant card then release ⌥ and drop, yields `moving would create a cycle`.)
+    - *Ambiguous multi-head chain insert.* Drag `f6a9b7241d3c` (a 5-revision chain containing BOTH
+      heads) onto the edge between `8f2a1c9d4e07` and `b2e5d3a10f66` with no modifier. The edge
+      rings blue and the hint reads `Move 5 revisions · insert between 8f2a1c9d and b2e5d3a1` — the
+      webview cannot know — but on release the host rejects with red toast `dragged chain has 2
+      heads — ambiguous` and no file changes. Repeat the identical drop holding ⌥: it now SUCCEEDS
+      as a single-node splice insert (`Rewrote down_revision · insert f6a9b724 between 8f2a1c9d and
+      b2e5d3a1`, three files). `git checkout -- fixtures/` afterwards.
+
+### Broken fixture (regression + the two new repairs)
+
+14. **Ghost drag still repairs every broken child.** Press F5, select **Run Extension (broken
+    fixture)** (12 revisions, 3 heads, 1 problem), then **Alembic Graph: Open Migration Graph**.
+    Drag the dashed red **⚠ missing revision** ghost card (`deadbeef0000`) onto `4bfc02996c8e`:
+    Task 15's behavior is unchanged — EVERY real revision card rings blue (the ghost drag has no
+    valid/invalid split and no chain semantics), there is no hint pill and no popover, and on drop
+    a green toast `Re-pointed down_revision → 4bfc0299 · broken link fixed` appears. Every broken
+    child of the ghost (here its one child, `5c0d13aa7d9f`) is rewritten in the same edit: the
+    ghost card, the BROKEN badge, the pulsing re-point hint, and the Problems-panel diagnostic all
+    disappear, and the heads count drops 3 → 2. `git checkout -- fixtures/` afterwards.
+15. **The broken child now chain-moves.** Drag the `5c0d13aa7d9f` **add audit log** card (BROKEN +
+    HEAD) onto `d4c7f5309b2e` **add password reset flow**. Before this task that same drag was a
+    merge gesture (heads won) and only the ghost could repair the link; now it is a plain freeform
+    chain move, and because the target is not a head there is no popover — hint pill `Move 1
+    revision`, then toast `Rewrote down_revision · move 5c0d13aa under d4c7f530`. Confirm the
+    file's `down_revision = 'deadbeef0000'` was rewritten wholesale to `'d4c7f5309b2e'` (the whole
+    parent list is replaced — no ghost-specific repair path was involved), the ghost card / BROKEN
+    badge / re-point hint / Problems entry are all gone, the problems count reads 0, and the heads
+    count stays 3 (`5c0d13aa7d9f` still has no children of its own). `git checkout -- fixtures/`
+    afterwards.
+16. **Remove-edge deletes the ghost reference.** Right-click the dashed red edge running from the
+    ghost into `5c0d13aa7d9f`. The one menu item carries the missing marker: `Remove link (missing)
+    deadbeef → 5c0d13aa`. Click it. Expect toast `Rewrote down_revision · stop 5c0d13aa revising
+    deadbeef (becomes a new base)`; `5c0d13aa7d9f_add_audit_log.py` now reads `down_revision =
+    None` with a bare `Revises:` line; and the ghost card, its dashed red edge, the BROKEN badge,
+    the re-point hint, and the Problems diagnostic are all gone, with `5c0d13aa7d9f` rendering as a
+    second base alongside `8f2a1c9d4e07` (still a head; heads stay 3, problems 1 → 0). This is the
+    cut-the-dangling-reference repair — the one case where removing a link is usually the right
+    answer. `git checkout -- fixtures/` afterwards.
+
+### Closing checks
+
+17. **The rewritten files must still parse as alembic metadata.** After each of the edits above —
+    and especially the two that produce a new base (steps 8, 16) and the tuple → scalar collapse
+    (step 7) — leave the edit in place and, in a terminal at that fixture's directory, run
+    `../../.venv/bin/python -m alembic heads` and `../../.venv/bin/python -m alembic history`. Both
+    must SUCCEED (no traceback) and agree with the canvas: `heads` lists exactly the ids the graph
+    badges HEAD, and `history` prints the new parent chain (e.g. `<base> -> f6a9b7241d3c` after
+    step 8's cut). Same check as Task 15 step 5, and the real proof that the text surgery left
+    valid Python and valid alembic metadata behind.
+18. Open webview DevTools (**Developer: Open Webview Developer Tools**) and confirm the Console has
+    no errors and no CSP violations while repeating a drag, the head-onto-head popover, and the
+    edge context menu (all three build their DOM with `createElement`/`textContent` — a CSP or
+    `innerHTML` regression would show here first).
+19. Final cleanup: `git checkout -- fixtures/`, `git clean -f fixtures/` (removes any merge
+    revision generated in step 10), delete any `fixtures/*/fixture.db`, confirm `git status` shows
+    nothing under `fixtures/`, and remove the `alembicCommand` override setting.
