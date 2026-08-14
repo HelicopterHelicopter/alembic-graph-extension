@@ -1,11 +1,13 @@
 /**
  * Right-click context menu for revision cards (Task 17): `upgrade to`/`downgrade to`/
  * `preview SQL`/`copy id`/`open file`, targeting one specific revision (unlike the toolbar's
- * upgrade-to-heads and the detail panel's own file row). Delegated on the canvas viewport, same
- * shape as dnd.ts's `attachDnd`/main.ts's `attachScrollListener` — `attachContextMenu` is called
- * again after every render (the viewport is a fresh DOM node each time), so all per-render state
- * lives in module-level variables instead of being lost across calls; the one-time (non-viewport-
- * scoped) `document` listeners are guarded to attach exactly once.
+ * upgrade-to-heads and the detail panel's own file row) — and, since the freeform-topology task,
+ * for parent LINKS too: right-clicking an edge offers the one thing an edge can do, "Remove link".
+ * Delegated on the canvas viewport, same shape as dnd.ts's `attachDnd`/main.ts's
+ * `attachScrollListener` — `attachContextMenu` is called again after every render (the viewport is
+ * a fresh DOM node each time), so all per-render state lives in module-level variables instead of
+ * being lost across calls; the one-time (non-viewport-scoped) `document` listeners are guarded to
+ * attach exactly once.
  *
  * The menu element itself is appended to `document.body`, NOT into the rendered tree — render.ts
  * replaces the whole canvas subtree on every re-render (see its header comment), and a menu that
@@ -18,7 +20,9 @@
  * every card in the canvas (revision, ghost, collapse) carries `data-node-id`, but only a real
  * revision card carries the `alx-card` class (see render.ts's `buildRevisionCard` vs.
  * `buildGhostCard`/`buildCollapseCard`) — that's the one check this module needs to tell a REVISION
- * card apart from a ghost/collapse card.
+ * card apart from a ghost/collapse card. Edges are recognized the same way, off render.ts's own
+ * attributes: the invisible `.alx-edge-hit` twin (the only pointer-hittable thing in the edge layer)
+ * carries `data-from`/`data-to`/`data-edge-kind`.
  */
 export interface MenuHandlers {
   onUpgradeTo(id: string): void;
@@ -26,24 +30,45 @@ export interface MenuHandlers {
   onPreviewSql(id: string): void;
   onCopyId(id: string): void;
   onOpenFile(id: string): void;
+  /** Freeform-topology task: cut the parent link `from -> to` (`from` is the parent/older side, per
+   * render.ts's edge attributes) — main.ts posts it as a `remove-edge` topology edit. */
+  onRemoveEdge(from: string, to: string): void;
 }
 
 interface MenuItemSpec {
   label: string;
-  onClick: (id: string) => void;
+  onClick: () => void;
 }
 
-/** In display order. A `null` entry renders as the separator between "Preview SQL" and "Copy
- * revision id" (per the brief — "Reveal in sidebar" from the original plan is deliberately
- * dropped, see the Task 17 report). */
-function buildItems(handlers: MenuHandlers): (MenuItemSpec | null)[] {
+/** A revision card's items, in display order. A `null` entry renders as the separator between
+ * "Preview SQL" and "Copy revision id" (per the brief — "Reveal in sidebar" from the original plan
+ * is deliberately dropped, see the Task 17 report). */
+function buildCardItems(id: string, handlers: MenuHandlers): (MenuItemSpec | null)[] {
   return [
-    { label: "Upgrade to this revision", onClick: handlers.onUpgradeTo },
-    { label: "Downgrade to this revision", onClick: handlers.onDowngradeTo },
-    { label: "Preview SQL", onClick: handlers.onPreviewSql },
+    { label: "Upgrade to this revision", onClick: () => handlers.onUpgradeTo(id) },
+    { label: "Downgrade to this revision", onClick: () => handlers.onDowngradeTo(id) },
+    { label: "Preview SQL", onClick: () => handlers.onPreviewSql(id) },
     null,
-    { label: "Copy revision id", onClick: handlers.onCopyId },
-    { label: "Open file", onClick: handlers.onOpenFile },
+    { label: "Copy revision id", onClick: () => handlers.onCopyId(id) },
+    { label: "Open file", onClick: () => handlers.onOpenFile(id) },
+  ];
+}
+
+/**
+ * An edge's single item. `missingParent` is true for a BROKEN link — one whose parent side is a
+ * ghost rather than a real revision (layout.ts marks exactly those `kind: "broken"`, which
+ * render.ts copies onto the hit twin as `data-edge-kind`) — and labels it as such, since "remove
+ * this link" reads very differently when the thing on the other end doesn't exist: that's the
+ * cut-the-dangling-reference repair, and it's the ONE case where removing a link is usually the
+ * right answer rather than a destructive edit.
+ */
+function buildEdgeItems(from: string, to: string, missingParent: boolean, handlers: MenuHandlers): MenuItemSpec[] {
+  const missing = missingParent ? "(missing) " : "";
+  return [
+    {
+      label: `Remove link ${missing}${from.slice(0, 8)} → ${to.slice(0, 8)}`,
+      onClick: () => handlers.onRemoveEdge(from, to),
+    },
   ];
 }
 
@@ -85,10 +110,11 @@ function isRevisionCard(card: HTMLElement): boolean {
   return card.classList.contains("alx-card");
 }
 
-/** Builds and shows the menu for revision `id`, positioned at `(clientX, clientY)` and clamped so
- * it never overflows the window. Closes (and replaces) any menu already open — callers must have
- * already called `closeMenu()`/relied on it being closed; kept idempotent regardless. */
-function openMenu(id: string, clientX: number, clientY: number, handlers: MenuHandlers): void {
+/** Builds and shows a menu of `items` (a `null` entry is a separator), positioned at
+ * `(clientX, clientY)` and clamped so it never overflows the window. Closes (and replaces) any menu
+ * already open — callers must have already called `closeMenu()`/relied on it being closed; kept
+ * idempotent regardless. */
+function openMenu(items: (MenuItemSpec | null)[], clientX: number, clientY: number): void {
   closeMenu();
 
   const menu = document.createElement("div");
@@ -99,7 +125,7 @@ function openMenu(id: string, clientX: number, clientY: number, handlers: MenuHa
   menu.style.top = "0px";
   menu.style.visibility = "hidden";
 
-  for (const item of buildItems(handlers)) {
+  for (const item of items) {
     if (item === null) {
       const sep = document.createElement("div");
       sep.className = "alx-menu-separator";
@@ -110,7 +136,7 @@ function openMenu(id: string, clientX: number, clientY: number, handlers: MenuHa
     el.className = "alx-menu-item";
     el.textContent = item.label;
     el.addEventListener("click", () => {
-      item.onClick(id);
+      item.onClick();
       closeMenu();
     });
     menu.append(el);
@@ -146,6 +172,24 @@ export function attachContextMenu(viewport: HTMLElement, isEnabled: () => boolea
     // close the menu the instant it opened.
     e.stopPropagation();
     const target = e.target as HTMLElement;
+
+    // Edges first: an `.alx-edge-hit` twin is never inside a card (it lives in the `.alx-edges`
+    // SVG layer), so the two branches are disjoint — but checking it first keeps that independent
+    // of any future nesting, and an edge right-click must not fall into the card branch's
+    // select-then-open flow (there is no card, and nothing to select).
+    const edgeHit = target.closest<SVGElement>(".alx-edge-hit");
+    if (edgeHit && viewport.contains(edgeHit)) {
+      e.preventDefault();
+      closeMenu();
+      const from = edgeHit.dataset.from;
+      const to = edgeHit.dataset.to;
+      // Same busy/drop-guard gate as a card's menu — while an operation is in flight a right-click
+      // on an edge only suppresses the browser's default menu.
+      if (!isEnabled() || !from || !to) return;
+      openMenu(buildEdgeItems(from, to, edgeHit.dataset.edgeKind === "broken", handlers), e.clientX, e.clientY);
+      return;
+    }
+
     const card = target.closest<HTMLElement>("[data-node-id]");
     if (!card || !viewport.contains(card)) {
       // Right-click on empty canvas background: not a card at all — dismiss any open menu (the
@@ -173,7 +217,7 @@ export function attachContextMenu(viewport: HTMLElement, isEnabled: () => boolea
     // module's re-entrant attachContextMenu call) by the time this handler returns.
     card.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
 
-    openMenu(id, e.clientX, e.clientY, handlers);
+    openMenu(buildCardItems(id, handlers), e.clientX, e.clientY);
   });
 
   // Dismiss on scroll — but only a scroll that actually MOVES the viewport relative to where it

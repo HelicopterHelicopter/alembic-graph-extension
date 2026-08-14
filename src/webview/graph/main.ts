@@ -451,6 +451,13 @@ const menuHandlers: MenuHandlers = {
   onOpenFile(id) {
     handlers.onOpenFile(id);
   },
+  onRemoveEdge(from, to) {
+    // Freeform-topology task: the edge menu's one item. `from` is the parent/older side of the
+    // link, `to` the child that revises it — i.e. `to`'s file is the one whose `down_revision` the
+    // host rewrites. Guard-armed like every other drop-initiated post (see postTopologyEdit): the
+    // host may sit on a "rewrite already-applied history?" modal before any busy:true.
+    postTopologyEdit({ kind: "remove-edge", parentId: from, childId: to });
+  },
 };
 
 /**
