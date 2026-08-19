@@ -4,6 +4,9 @@ import { describe, it, expect } from "vitest";
 // resolvable outside a real extension host — even importing an unrelated named export from
 // actions.ts here would fail the whole test file at load time. mergeHeadsAction itself is
 // vscode-coupled and, per the brief, intentionally NOT unit-tested; only the pure helpers are.
+// "Would fail at load time" means absent a mock, not impossible: test/unit/servicesRepoint.test.ts
+// does mock `vscode` to reach one decision that no pure helper can express. Its header states the
+// narrow grounds for that; orchestration like mergeHeadsAction is still deliberately out of scope.
 import {
   allAreCurrentHeads,
   mergeSuccessText,

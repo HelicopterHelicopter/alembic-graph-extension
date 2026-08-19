@@ -931,6 +931,12 @@ function currentParents(graph: MigrationGraph, edits: EditMap, id: string): stri
  * rejecting unrelated edits — or, worse, the remove-edge that REPAIRS such a cycle — because of it
  * would be a regression. An edited node that sits on a pre-existing cycle the edit does not resolve
  * is still reported, which is correct: applying it would write that cycle back out.
+ *
+ * One deliberate over-report follows from running BEFORE `finalizePlan`'s no-op filter: an entry
+ * whose new parent list already equals what the file says — a file that would never be written —
+ * can still trigger the rejection, turning a would-be `nothing to change` into
+ * `edit would create a cycle`. Accepted, because it errs toward refusing to act on a component
+ * that is already cyclic and the message is not wrong about the graph's state.
  */
 function editedNodeOnCycle(graph: MigrationGraph, edits: EditMap): string | null {
   for (const id of edits.keys()) {

@@ -1182,8 +1182,11 @@ The pure halves are vitest-covered: the ring/hit-test predicates and the hint-pi
 wording (`topologyConfirmText`/`topologySuccessText`, `test/unit/actions.test.ts`). What has NO
 automated coverage at all is everything DOM- or `vscode`-shaped: the drag machine (`dnd.ts`), the
 head-onto-head drop popover (`dropChoice.ts`), the edge context menu (`contextMenu.ts`), and the
-validate-all-then-one-`WorkspaceEdit` apply layer (`services/repoint.ts`). The steps below are
-those parts' primary verification, not an F5 top-up on top of an already-tested unit.
+validate-all-then-one-`WorkspaceEdit` apply layer (`services/repoint.ts`) — with one exception
+there: its phase-1 staleness guard IS covered, by the repo's only `vscode`-mocked suite
+(`test/unit/servicesRepoint.test.ts`), which pins the rejection strings and the zero-write abort but
+deliberately not the real `WorkspaceEdit`/save behavior. The steps below are those parts' primary
+verification, not an F5 top-up on top of an already-tested unit.
 
 Setup: most of this section needs no `alembic` at all — a topology edit is pure text surgery on
 `versions/*.py`, with no subcommand behind it — but steps 10 and 11 do. For those, set the same
@@ -1369,7 +1372,7 @@ Nothing here mutates a fixture, so no `git checkout` is needed until the next su
     the edit touched — answer yes). The edit was saved to disk by the action, so undo leaves the
     three buffers dirty-but-original: run **File: Save All** and confirm `git status fixtures/`
     goes completely clean and the graph re-renders back to the original topology on its own.
-13. **Rejected drops.** Three checks, none of which may write a file:
+13. **Rejected drops.** Four checks, none of which may write a file:
     - *Invalid ring.* Start dragging `d4c7f5309b2e` **add password reset flow** with no modifier:
       all seven of its descendants (`e5b8…`, `f6a9…`, `18c9…`, `07b8…`, `29dae…`, `3aeb…`, `4bfc…`)
       dim with the `not-allowed` cursor and cannot take the drop — releasing over one reverts the
@@ -1388,6 +1391,14 @@ Nothing here mutates a fixture, so no `git checkout` is needed until the next su
       heads — ambiguous` and no file changes. Repeat the identical drop holding ⌥: it now SUCCEEDS
       as a single-node splice insert (`Rewrote down_revision · insert f6a9b724 between 8f2a1c9d and
       b2e5d3a1`, three files). `git checkout -- fixtures/` afterwards.
+    - *Stale plan (unsaved buffer).* Open `versions/3aebf1885b7d_add_rate_limiting.py` in an editor
+      and change its `down_revision` value by hand, leaving the buffer **unsaved** — the graph still
+      shows the old topology, because the scan only ever reads saved files. Now repeat step 9's drag of `3aebf1885b7d` onto
+      `4bfc02996c8e` and click **Move here**. The host plans from the stale scan but re-reads the
+      live buffer before writing, and aborts the whole batch: red toast `3aebf188: file changed
+      since the last scan — try again`, no file written, busy indicator clearing straight away.
+      Undo the hand edit (still without saving); nothing reached disk, so `git status fixtures/` is
+      already clean.
 
 ### Broken fixture (regression + the two new repairs)
 

@@ -47,6 +47,12 @@ export interface TopologyFileEdit {
    * against parents the file may no longer have, so applying it anyway would write a list derived
    * from a topology that no longer exists.
    *
+   * Scope, precisely: one expectation per file the plan WRITES, so that is exactly what the guard
+   * covers. A post-scan change to a file the plan only READ — an untouched revision whose own links
+   * shaped the plan but which earns no edit, e.g. the merge node `M` in `editedNodeOnCycle`'s
+   * repro — still slips through. Closing that would mean re-planning against a fresh scan at apply
+   * time, which is a different (and much larger) design than a per-file expectation.
+   *
    * For a composed edit (insert-between single mode, where `edgeTo` carries both a splice and a
    * swap) this is still the node's ORIGINAL parents — the file's own current text — never the
    * intermediate value the composition passed through.

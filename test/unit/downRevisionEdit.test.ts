@@ -173,14 +173,25 @@ branch_labels: Union[str, Sequence[str], None] = None
   });
 
   it("8. Black-style multi-line tuple collapses to one line, continuation comments dropped", () => {
-    const src = `"""m"""
+    // The docstring `Revises:` line is load-bearing here, not decoration: this is the only case
+    // where the assignment spans MORE than one line, so it is what pins the index-validity
+    // invariant the bound relies on — `patchRevisesLineFull` is handed `startLine` but runs against
+    // the ALREADY-COLLAPSED source, and must still address the docstring correctly even though the
+    // collapse shortened the file by two lines below it.
+    const src = `"""m
+
+Revises: 18c9d9663f5b, 07b8c8552e4a
+"""
 revision = "child3"
 down_revision = (
     "18c9d9663f5b",  # first parent
     "07b8c8552e4a",  # second parent
 )
 `;
-    const expected = `"""m"""
+    const expected = `"""m
+
+Revises: 18c9d9663f5b
+"""
 revision = "child3"
 down_revision = "18c9d9663f5b"
 `;

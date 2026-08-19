@@ -26,6 +26,9 @@
  *      the buffer's current header against the plan's `expectedDownRevisions` — a whole-value
  *      rewrite would otherwise happily replace whatever it found, silently discarding an unsaved
  *      hand-edit and applying a composition computed against parents the file no longer has.
+ *      Both guards are per-WRITTEN-file, so neither covers a post-scan change to a file the plan
+ *      only READ (an untouched revision whose links shaped the plan but which earns no edit) — see
+ *      `TopologyFileEdit.expectedDownRevisions` for why closing that is a different design.
  *   2. APPLY one combined `WorkspaceEdit` covering every file. VS Code applies it as a single
  *      operation (`applyEdit` returning false rejects the lot).
  *   3. SAVE each document, checking the result. A save failure here CAN still leave earlier files
