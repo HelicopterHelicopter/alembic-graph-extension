@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added: freeform topology editing in the graph — drag any revision card onto another to re-parent
+  it (the whole descendant chain moves; hold ⌥/Alt to splice out just that one revision), drop a
+  card onto an edge to insert it between two revisions, or right-click an edge to remove a link
+  (breaking a merge parent, or detaching the only parent so the revision becomes a new base). Edits
+  that touch revisions the database has already applied ask for confirmation first, and every edit
+  lands as one undo step.
+- Added: edit-mode lock — the graph now **opens Locked**, with a `Locked | Edit` toolbar toggle
+  gating every drag gesture (including the existing merge and ghost-repair drags) and the edge
+  "Remove link" menu, so a stray drag can never rewrite a migration file. Clicks, selection,
+  zoom/pan, context menus, and labeled buttons stay live; the choice persists per workspace.
+
 - Added: linked-worktree runtime support can reuse a main-checkout virtualenv, load an explicitly
   configured environment file, expand portable worktree path tokens, and resolve settings and the
   ms-python interpreter against the selected project in multi-root workspaces.

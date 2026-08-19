@@ -8,6 +8,10 @@
  * pure-math module rather than a new file, per the plan's "uxMath.ts-style module" option — it's a
  * type-only import (`GhostBlame` from protocol/messages.ts, itself DOM/vscode-free), so this file
  * stays exactly as dependency-free as every other function here.
+ *
+ * The freeform-topology task adds the drag's own pure math for the same reason — descendant walk
+ * (what rides along on a chain move), its revision count, and the hint pill's wording — so the
+ * drag machine in dnd.ts/main.ts stays DOM wiring over vitest-covered math.
  */
 import type { GhostBlame } from "../../protocol/messages";
 
@@ -168,6 +172,150 @@ export function computeAncestorSet(startId: string, nodes: AncestorNode[]): Set<
   }
 
   return result;
+}
+
+// ---------- freeform topology drag ----------
+
+/** The slice of `LayoutEdge` (core/types.ts) this module's topology walks need — redeclared
+ * structurally rather than imported so this file stays dependency-free (same rationale as `NavAxis`
+ * below); being structural, a real `LayoutEdge[]` can be passed straight in. */
+export interface TopologyEdgeLike {
+  from: string;
+  to: string;
+  kind: "normal" | "broken" | "collapse";
+}
+
+/**
+ * Strict descendants of `startId` over the layout edges (edge.from = parent, edge.to = child):
+ * every id reachable by following child edges, excluding `startId` itself. This is the mirror image
+ * of {@link computeAncestorSet}, which walks a node's own `downRevisions` (child -> parent) and
+ * INCLUDES its start node; here the start is excluded because the set answers "what rides along
+ * behind the dragged node", which the dragged node is not a member of.
+ *
+ * All edge kinds are followed — a `collapse` edge is only a view artifact standing in for a run of
+ * real parent links, so a collapsed run still moves with its chain, and a `broken` edge is a real
+ * (if dangling) parent link. Cycle-safe via a `visited` set seeded with `startId`, so a corrupt
+ * graph whose cycle leads back to the start terminates without ever putting the start in the
+ * result.
+ */
+export function computeDescendantSet(startId: string, edges: TopologyEdgeLike[]): Set<string> {
+  const childrenByParent = new Map<string, string[]>();
+  for (const edge of edges) {
+    const existing = childrenByParent.get(edge.from);
+    if (existing) existing.push(edge.to);
+    else childrenByParent.set(edge.from, [edge.to]);
+  }
+
+  const result = new Set<string>();
+  const visited = new Set<string>([startId]);
+  const stack = [startId];
+
+  while (stack.length > 0) {
+    const id = stack.pop();
+    if (id === undefined) continue;
+    for (const childId of childrenByParent.get(id) ?? []) {
+      if (visited.has(childId)) continue;
+      visited.add(childId);
+      result.add(childId);
+      stack.push(childId);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Revisions that ride along on a chain move of `startId`: 1 for the node itself plus its
+ * descendants ({@link computeDescendantSet}), where a collapse placeholder node contributes its
+ * `collapsedCount` instead of 1 — the hint must count real revisions the edit will touch, not the
+ * cards currently on screen. Defensive fallbacks (both count as 1): a collapse node with no
+ * `collapsedCount`, and an id that has edges but no layout node of its own (e.g. a ghost), same
+ * "walk what the edges say, don't require a node" tolerance `computeAncestorSet` has.
+ */
+export function chainMoveCount(
+  startId: string,
+  nodes: { id: string; kind: string; collapsedCount?: number }[],
+  edges: TopologyEdgeLike[],
+): number {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const weightOf = (id: string): number => {
+    const node = byId.get(id);
+    if (node?.kind === "collapse") return node.collapsedCount ?? 1;
+    return 1;
+  };
+
+  let total = weightOf(startId);
+  for (const id of computeDescendantSet(startId, edges)) total += weightOf(id);
+  return total;
+}
+
+/**
+ * Text for the drag hint pill that follows the cursor during a freeform topology drag.
+ *
+ * `chain` (the default drag): `Move ${chainCount} revision(s)`, plus ` · dissolves merge` when
+ * `isMergeNode` — dragging a merge revision onto a new parent drops its other parents, which is
+ * destructive enough to name in the pill.
+ *
+ * `single` (⌥/splice): always exactly `Move 1 revision (splice)`. `chainCount` and `isMergeNode`
+ * are deliberately ignored — a splice re-points the dragged node's children onto its parents, so
+ * nothing rides along and no merge is dissolved.
+ */
+export function dragHintText(mode: "chain" | "single", chainCount: number, isMergeNode: boolean): string {
+  if (mode === "single") return "Move 1 revision (splice)";
+  const plural = chainCount === 1 ? "revision" : "revisions";
+  return `Move ${chainCount} ${plural}${isMergeNode ? " · dissolves merge" : ""}`;
+}
+
+/**
+ * Whether the card for `targetId` may receive a freeform drag that started on `originId` — the
+ * predicate behind the drag's per-card rings (`alx-card--freeform-target` vs
+ * `alx-card--invalid-target`) and its drop hit-testing.
+ *
+ * A node can never be dropped on itself. Beyond that the two modes differ exactly as their host-side
+ * plans do (MigrationService's planMoveChain/planMoveSingle): `chain` carries `descendantIds` along
+ * with the dragged node, so attaching to one of them would make the target both an ancestor and a
+ * descendant of the origin (a cycle) — `single` splices the origin's children onto its own parents
+ * BEFORE re-parenting it, so by the time it attaches, none of the links that would close the loop
+ * still exist, and a descendant target is legal.
+ *
+ * The host stays authoritative — this is a UX predicate (which cards to ring, what the pointer may
+ * land on), deliberately not a re-implementation of the planner's full guard set (unknown ids,
+ * no-op edits, cross-project staleness are all still the plan's to reject).
+ */
+export function isValidFreeformNodeTarget(
+  targetId: string,
+  originId: string,
+  mode: "chain" | "single",
+  descendantIds: ReadonlySet<string>,
+): boolean {
+  if (targetId === originId) return false;
+  if (mode === "chain" && descendantIds.has(targetId)) return false;
+  return true;
+}
+
+/**
+ * Whether the parent link `from -> to` may receive a freeform drag that started on `originId` (an
+ * `insert-between` drop) — the predicate behind the hovered edge's `alx-edge--drop-target`
+ * highlight and the drag's edge hit-testing. Same host-authoritative caveat as
+ * {@link isValidFreeformNodeTarget}.
+ *
+ * An edge INCIDENT to the origin is never a target in either mode: inserting a node into its own
+ * parent link or its own child link is a no-op at best (it already sits at exactly that spot).
+ * `chain` additionally rules out any edge touching a descendant, matching planInsertBetween's two
+ * cycle guards — a descendant on the `from` side would have the moved chain revise something that
+ * moves with it, and one on the `to` side would insert the chain into its own subtree. `single`
+ * splices first (see the node predicate), so neither applies.
+ */
+export function isValidFreeformEdgeTarget(
+  from: string,
+  to: string,
+  originId: string,
+  mode: "chain" | "single",
+  descendantIds: ReadonlySet<string>,
+): boolean {
+  if (from === originId || to === originId) return false;
+  if (mode === "chain" && (descendantIds.has(from) || descendantIds.has(to))) return false;
+  return true;
 }
 
 // ---------- keyboard navigation ----------

@@ -1,6 +1,81 @@
 import type { GraphLayout, Problem } from "../core/types";
 
 // ---------- shared payloads ----------
+
+/**
+ * One freeform topology edit the user asked for, in graph terms (never file terms) — planned by
+ * `MigrationService.getTopologyPlan` into the concrete `down_revision` rewrites below.
+ *
+ * - `move-chain`: `nodeId` is re-parented to exactly `[targetId]`, and its descendants ride along
+ *   for free — a subtree moves as a unit because only the subtree ROOT's file names a parent
+ *   outside it. Replaces ALL of `nodeId`'s current parents, so moving a merge node deliberately
+ *   dissolves its other links.
+ * - `move-single`: `nodeId` alone is re-parented to `[targetId]`; its children are first spliced
+ *   onto `nodeId`'s own parents so the chain it leaves behind stays connected (a child of a root
+ *   correctly becomes a new base). The splice is what makes moving a node onto its own descendant
+ *   a legal reorder rather than a cycle.
+ * - `insert-between`: `nodeId` is spliced INTO the existing `edgeFrom -> edgeTo` link — `nodeId`
+ *   revises `edgeFrom`, and `edgeTo` swaps `edgeFrom` for the inserted piece. `mode: "chain"`
+ *   inserts `nodeId`'s whole subtree (so `edgeTo` ends up revising the subtree's single head, and
+ *   a forked subtree is rejected as ambiguous); `mode: "single"` inserts `nodeId` by itself, with
+ *   the same child-splice as `move-single`.
+ * - `remove-edge`: `childId` stops revising `parentId`, keeping its other parents. `parentId` may
+ *   be a missing (ghost) id — that is how a broken link is deleted rather than repaired.
+ */
+export type TopologyOp =
+  | { kind: "move-chain"; nodeId: string; targetId: string }
+  | { kind: "move-single"; nodeId: string; targetId: string }
+  | { kind: "insert-between"; nodeId: string; edgeFrom: string; edgeTo: string; mode: "chain" | "single" }
+  | { kind: "remove-edge"; parentId: string; childId: string };
+
+/**
+ * One file's complete new parent list — `newDownRevisions` is the WHOLE `down_revision` value the
+ * file should end up with (`[]` = `None`, one id = scalar, more = tuple), already deduplicated and
+ * ordered, ready to hand to `computeDownRevisionsRewrite` (core/downRevisionEdit.ts).
+ */
+export interface TopologyFileEdit {
+  revisionId: string;
+  filePath: string;
+  newDownRevisions: string[];
+  /**
+   * The parent list this file had AT PLAN TIME, straight from the scanned graph node. The apply
+   * layer re-reads the live buffer and refuses to rewrite a file whose current `down_revision` no
+   * longer matches, which closes two windows the plan cannot see: an UNSAVED hand-edit (the plan
+   * is built from the last saved scan, but `applyDownRevisionEdits` writes the live buffer), and a
+   * SCAN that has gone stale (a git checkout or a formatter writing inside the watcher debounce).
+   * Both matter beyond losing one keystroke: a composed edit's `newDownRevisions` was computed
+   * against parents the file may no longer have, so applying it anyway would write a list derived
+   * from a topology that no longer exists.
+   *
+   * Scope, precisely: one expectation per file the plan WRITES, so that is exactly what the guard
+   * covers. A post-scan change to a file the plan only READ — an untouched revision whose own links
+   * shaped the plan but which earns no edit, e.g. the merge node `M` in `editedNodeOnCycle`'s
+   * repro — still slips through. Closing that would mean re-planning against a fresh scan at apply
+   * time, which is a different (and much larger) design than a per-file expectation.
+   *
+   * For a composed edit (insert-between single mode, where `edgeTo` carries both a splice and a
+   * swap) this is still the node's ORIGINAL parents — the file's own current text — never the
+   * intermediate value the composition passed through.
+   *
+   * Deliberately NOT a wire concern: `TopologyPlan` never crosses `postMessage` (planning stays
+   * host-side; the webview only ever sends a `TopologyOp`), so this field is compile-checked
+   * end to end rather than versioned.
+   */
+  expectedDownRevisions: string[];
+}
+
+/**
+ * Result of planning a `TopologyOp`. `ok: false` carries a user-facing `reason` (guard rejections:
+ * unknown ids, cycles, no-ops); `ok: true` carries every file rewrite the op implies — at most one
+ * per revision, composed when a revision is touched by two steps of the same op — plus `summary`
+ * (one line describing the op, for a confirm prompt) and `appliedTouched` (already-applied
+ * revisions on either side of an edit, so the prompt can warn about rewriting migration history
+ * the DB has already run).
+ */
+export type TopologyPlan =
+  | { ok: true; fileEdits: TopologyFileEdit[]; appliedTouched: string[]; summary: string }
+  | { ok: false; reason: string };
+
 export interface UiPrefs {
   order: "newest-top" | "newest-bottom";
   density: "comfortable" | "compact";
@@ -13,6 +88,17 @@ export interface UiPrefs {
    * `newest-top` puts it on the LEFT — see metrics.ts's `nodeXY` for the exact mapping.
    */
   axis: "vertical" | "horizontal";
+  /**
+   * Edit-mode lock for the graph webview. `true` (the default — the graph always OPENS locked)
+   * makes every mutating canvas GESTURE inert: card drags (chain move and ⌥/Alt splice alike),
+   * ghost repoint drags, edge drops, and the edge context menu's "Remove link". Clicks, selection,
+   * zoom, pan, keyboard nav, every labeled button ("Merge all N heads", ghost Restore/Import,
+   * "+ New revision"), the card context menu, and every palette command stay live — a labeled
+   * button cannot fire by accident, so this is an accident guard against a 4px drag rewriting
+   * migration files, not a permissions system. Persisted per-workspace exactly like the prefs
+   * above (workspaceState + the webview's own `setState` snapshot, converged by `applyUiPrefs`).
+   */
+  editLocked: boolean;
 }
 
 export interface AppState {
@@ -90,6 +176,13 @@ export type WebviewToHostMessage =
   // actions directly without one and get a host-generated token instead.
   | { type: "merge"; ids: string[]; busyToken?: string }
   | { type: "repoint"; ghostId: string; targetId: string; busyToken?: string }
+  // Freeform topology editing: any of the four `TopologyOp` gestures (see that type above) the
+  // graph webview can express — drag a node/chain onto another, drop one onto an edge, cut a link.
+  // The host (topologyEditAction, src/ui/actions.ts) plans it with `getTopologyPlan`, confirms only
+  // when the plan touches already-applied revisions, and rewrites the `down_revision` of every file
+  // the plan names. `busyToken` carries the exact same drop-guard echo semantics documented on
+  // `merge` above (the busy op name is `"topology"`), and is optional for the same reason.
+  | { type: "topologyEdit"; op: TopologyOp; busyToken?: string }
   | { type: "upgrade" }
   | { type: "upgradeTo"; id: string }
   | { type: "downgradeTo"; id: string }
@@ -101,6 +194,10 @@ export type WebviewToHostMessage =
   | { type: "setOrientation"; order: UiPrefs["order"] }
   | { type: "setDensity"; density: UiPrefs["density"] }
   | { type: "setAxis"; axis: UiPrefs["axis"] }
+  // Edit-mode lock task: the toolbar's Locked | Edit toggle. Posted with no optimistic webview-side
+  // update — the host flips the pref and re-emits state, exactly like setAxis/setDensity above, so
+  // there is only ever one authority for what the lock currently is.
+  | { type: "setEditLocked"; editLocked: boolean }
   | { type: "expandCollapse" }
   | { type: "openFile"; id: string }
   | { type: "openGraph" }   // sidebar only
@@ -121,13 +218,17 @@ export type HostToWebviewMessage =
       // Task B2: "restore" covers BOTH the Restore (deleted-here) and Import (never-existed +
       // foundOn) ghost-card button flows — they're the same host action (restoreDeletedAction),
       // distinguished only by the `GhostBlame` kind it reads, so one busy op name covers both.
-      operation: "merge" | "repoint" | "upgrade" | "downgrade" | "scan" | "revision" | "sql" | "restore";
+      // "topology" covers all four freeform `TopologyOp` kinds (move/insert/remove-edge): they're
+      // one host action (topologyEditAction) over one apply layer, so one busy op name covers them
+      // the same way "restore" covers both ghost-card flows.
+      operation: "merge" | "repoint" | "upgrade" | "downgrade" | "scan" | "revision" | "sql" | "restore" | "topology";
       // Unique per action INVOCATION (src/ui/actions.ts's newBusyToken) — webviews key their
       // busyOps sets on this, not on `operation`, so the stale terminal busy:false that
       // shouldDeliverStale (core/broadcastGate.ts) deliberately lets through from a superseded
       // pipeline can only ever clear its own invocation's entry, never a same-named operation the
       // CURRENT pipeline still has in flight. `operation` remains for operation-scoped consumers
-      // (the graph webview's drop guard disarms on merge/repoint terminal messages by name).
+      // (the graph webview's drop guard disarms on merge/repoint/topology terminal messages by
+      // name — every operation a drag drop can post, each of which can abort before any busy:true).
       token: string;
       active: boolean;
     }

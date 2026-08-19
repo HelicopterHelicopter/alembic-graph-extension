@@ -16,8 +16,16 @@ import { buildGraph, computeAppliedSet } from "../core/graph";
 import { DEFAULT_LANE_COLOR_A, DEFAULT_LANE_COLOR_B, isValidHex, rotateHue } from "../core/color";
 import { layoutGraph, type LayoutOptions } from "../core/layout";
 import { extractFunctionBody, parseRevisionSource } from "../core/parser";
-import type { GraphLayout, MigrationGraph } from "../core/types";
-import type { AppState, GhostBlame, RevisionDetail, UiPrefs } from "../protocol/messages";
+import type { GraphLayout, MigrationGraph, RevisionNode } from "../core/types";
+import type {
+  AppState,
+  GhostBlame,
+  RevisionDetail,
+  TopologyFileEdit,
+  TopologyOp,
+  TopologyPlan,
+  UiPrefs,
+} from "../protocol/messages";
 
 export type RepointPlan =
   | { ok: true; edits: { revisionId: string; filePath: string }[] }
@@ -412,6 +420,15 @@ export class MigrationService {
     this.updateUi({ axis });
   }
 
+  /** Updates prefs + re-emits state. Client-side flip only (edit-mode lock): the lock is enforced
+   * entirely in the webview's gesture layer (dnd.ts's pointerdown, contextMenu.ts's edge branch),
+   * so nothing host-side — layout, planning, or the `topologyEdit`/`merge`/`repoint` handlers —
+   * changes behavior with this. It exists here purely so the flag rides the same
+   * workspaceState-persisted UiPrefs rail as order/density/axis. */
+  setEditLocked(editLocked: boolean): void {
+    this.updateUi({ editLocked });
+  }
+
   private updateUi(patch: Partial<UiPrefs>): void {
     const base = this.state?.ui ?? this.deps.getUiPrefs();
     const ui: UiPrefs = { ...base, ...patch };
@@ -484,8 +501,17 @@ export class MigrationService {
     const ui: UiPrefs = { ...base, ...prefs };
 
     const expandChanged = ui.expandCollapsed !== base.expandCollapsed;
+    // Every persisted pref the webview can replay through `ready.restored` must be compared here,
+    // `editLocked` included: a field missing from this list reads as "nothing differs", so the
+    // method returns before `setUiPrefs`/`emit` and the restored value is silently dropped — for
+    // the lock that means the graph re-locks itself on every reopen no matter how often the user
+    // unlocks it. Covered by applyUiPrefs test "f".
     const changed =
-      expandChanged || ui.order !== base.order || ui.density !== base.density || ui.axis !== base.axis;
+      expandChanged ||
+      ui.order !== base.order ||
+      ui.density !== base.density ||
+      ui.axis !== base.axis ||
+      ui.editLocked !== base.editLocked;
     if (!changed) return; // true no-op: nothing differs, don't even touch persisted storage
 
     this.deps.setUiPrefs(ui);
@@ -607,6 +633,203 @@ export class MigrationService {
     return { ok: true, edits };
   }
 
+  /**
+   * Pure over `cachedGraph`: plans a freeform topology edit (see `TopologyOp`) as a set of complete
+   * `down_revision` rewrites — one per touched file, composed when a single revision is touched by
+   * two steps of the same op. Same contract as `getRepointPlan`: never mutates anything, never
+   * touches disk, and rejects with a user-facing `reason` rather than producing a graph that would
+   * be cyclic, self-referential, or a no-op. The apply layer is what feeds each edit's
+   * `newDownRevisions` to `computeDownRevisionsRewrite` (core/downRevisionEdit.ts).
+   */
+  getTopologyPlan(op: TopologyOp): TopologyPlan {
+    const graph = this.cachedGraph;
+    if (graph === null) return { ok: false, reason: "no migration graph loaded yet" };
+
+    switch (op.kind) {
+      case "move-chain":
+        return this.planMoveChain(graph, op);
+      case "move-single":
+        return this.planMoveSingle(graph, op);
+      case "insert-between":
+        return this.planInsertBetween(graph, op);
+      case "remove-edge":
+        return this.planRemoveEdge(graph, op);
+    }
+  }
+
+  /** `move-chain`: one edit, replacing ALL of the node's parents with the target. Its descendants
+   * need no edits at all — they already point at ids inside the subtree, which moves with them. */
+  private planMoveChain(graph: MigrationGraph, op: Extract<TopologyOp, { kind: "move-chain" }>): TopologyPlan {
+    const rejected = missingRevision(graph, op.nodeId) ?? missingRevision(graph, op.targetId);
+    if (rejected !== null) return rejected;
+    if (op.targetId === op.nodeId) return { ok: false, reason: "cannot attach a revision to itself" };
+
+    const node = graph.nodes[op.nodeId];
+    const descendants = descendantsOf(graph, op.nodeId);
+    // Unlike move-single, nothing splices the subtree's internal links first, so a target inside
+    // the subtree would end up as both an ancestor and a descendant of the node.
+    if (descendants.has(op.targetId)) return { ok: false, reason: "moving would create a cycle" };
+    if (sameList(node.downRevisions, [op.targetId])) {
+      return { ok: false, reason: `already revises ${short(op.targetId)}` };
+    }
+
+    const d = descendants.size;
+    const ride = d > 0 ? ` (+${pluralize(d, "descendant", "descendants")})` : "";
+    return this.finalizePlan(
+      graph,
+      new Map([[op.nodeId, [op.targetId]]]),
+      `move ${short(op.nodeId)}${ride} under ${short(op.targetId)}`,
+    );
+  }
+
+  /** `move-single`: splice the node's children onto the node's own parents, then re-parent the node
+   * itself. Splicing first is what makes a descendant target legal — by the time the node attaches
+   * to it, none of the node's old child links (the ones that would close the loop) remain. */
+  private planMoveSingle(graph: MigrationGraph, op: Extract<TopologyOp, { kind: "move-single" }>): TopologyPlan {
+    const rejected = missingRevision(graph, op.nodeId) ?? missingRevision(graph, op.targetId);
+    if (rejected !== null) return rejected;
+    if (op.targetId === op.nodeId) return { ok: false, reason: "cannot attach a revision to itself" };
+
+    const edits: EditMap = new Map();
+    spliceChildEdits(graph, graph.nodes[op.nodeId], edits);
+    const k = edits.size; // every entry so far is a real (non-identical) child splice
+    edits.set(op.nodeId, [op.targetId]);
+
+    const reattach = k > 0 ? `, re-attaching ${pluralize(k, "child", "children")}` : "";
+    return this.finalizePlan(graph, edits, `move ${short(op.nodeId)} alone under ${short(op.targetId)}${reattach}`);
+  }
+
+  /** `insert-between`: the node takes the edge's parent, and the edge's child swaps that parent for
+   * the inserted piece — the subtree's single head in chain mode, the node itself in single mode. */
+  private planInsertBetween(
+    graph: MigrationGraph,
+    op: Extract<TopologyOp, { kind: "insert-between" }>,
+  ): TopologyPlan {
+    const rejected = missingRevision(graph, op.edgeTo) ?? missingRevision(graph, op.nodeId);
+    if (rejected !== null) return rejected;
+
+    if (!graph.nodes[op.edgeTo].downRevisions.includes(op.edgeFrom)) {
+      return { ok: false, reason: `${short(op.edgeTo)} does not revise ${short(op.edgeFrom)}` };
+    }
+    // A ghost edgeFrom is a link to a revision that doesn't exist: there is nothing for the node to
+    // revise, so the fix is repoint/remove-edge, not insertion.
+    if (!Object.hasOwn(graph.nodes, op.edgeFrom)) {
+      return { ok: false, reason: "cannot insert below a missing revision" };
+    }
+    if (op.nodeId === op.edgeFrom || op.nodeId === op.edgeTo) {
+      return { ok: false, reason: "cannot insert a revision into its own link" };
+    }
+
+    const descendants = descendantsOf(graph, op.nodeId);
+    const edits: EditMap = new Map();
+    let inserted: string;
+
+    if (op.mode === "chain") {
+      if (descendants.has(op.edgeFrom)) return { ok: false, reason: "inserting would create a cycle" };
+      // edgeTo would gain the subtree's head as a parent while already being that head's ancestor.
+      if (descendants.has(op.edgeTo)) {
+        return { ok: false, reason: "cannot insert a chain into its own descendants" };
+      }
+      const heads = [op.nodeId, ...descendants].filter((id) => (graph.children[id] ?? []).length === 0);
+      if (heads.length !== 1) return { ok: false, reason: `dragged chain has ${heads.length} heads — ambiguous` };
+      inserted = heads[0];
+    } else {
+      spliceChildEdits(graph, graph.nodes[op.nodeId], edits);
+      inserted = op.nodeId;
+    }
+
+    edits.set(op.nodeId, [op.edgeFrom]);
+    // Composed on purpose: in single mode edgeTo may already carry a splice edit (it can be a child
+    // of the node AND of edgeFrom), and it must get ONE rewrite carrying both changes.
+    const carried = currentParents(graph, edits, op.edgeTo);
+    edits.set(op.edgeTo, dedupeFirst(carried.map((id) => (id === op.edgeFrom ? inserted : id))));
+
+    const d = descendants.size;
+    const ride = op.mode === "chain" && d > 0 ? ` (+${pluralize(d, "descendant", "descendants")})` : "";
+    return this.finalizePlan(
+      graph,
+      edits,
+      `insert ${short(op.nodeId)}${ride} between ${short(op.edgeFrom)} and ${short(op.edgeTo)}`,
+    );
+  }
+
+  /** `remove-edge`: drop one member of the child's `down_revision`, keeping the rest. The parent may
+   * be a ghost (deleting a broken link), and an emptied list is valid — the child becomes a base. */
+  private planRemoveEdge(graph: MigrationGraph, op: Extract<TopologyOp, { kind: "remove-edge" }>): TopologyPlan {
+    const rejected = missingRevision(graph, op.childId);
+    if (rejected !== null) return rejected;
+
+    const child = graph.nodes[op.childId];
+    if (!child.downRevisions.includes(op.parentId)) {
+      return { ok: false, reason: `${short(op.childId)} does not revise ${short(op.parentId)}` };
+    }
+
+    const remaining = child.downRevisions.filter((id) => id !== op.parentId);
+    const base = remaining.length === 0 ? " (becomes a new base)" : "";
+    return this.finalizePlan(
+      graph,
+      new Map([[op.childId, remaining]]),
+      `stop ${short(op.childId)} revising ${short(op.parentId)}${base}`,
+    );
+  }
+
+  /** Turns the accumulated per-revision parent lists into `fileEdits`, dropping any that would
+   * rewrite a file to what it already says. An op whose every edit is such a no-op has nothing to
+   * apply, and is rejected rather than returned as an empty success.
+   *
+   * Each edit also carries `expectedDownRevisions` — the node's parents as the last scan read
+   * them, i.e. the state this whole plan was computed against — so the apply layer can refuse a
+   * file that has since changed underneath it (see `TopologyFileEdit`). `graph.nodes[..]` is the
+   * right source even for a COMPOSED edit: planning only ever writes to `edits`, never to the
+   * graph, so a node touched by two steps still reports the parents its file actually holds.
+   *
+   * Runs the cycle backstop first, on the FULL edit map — the per-op guards above are kept as-is
+   * (they give sharper, op-specific reasons for the cases they do catch), but only a post-edit
+   * ancestry walk sees a cycle closed through a link no edited file mentions. See
+   * `editedNodeOnCycle`. */
+  private finalizePlan(graph: MigrationGraph, edits: EditMap, summary: string): TopologyPlan {
+    if (editedNodeOnCycle(graph, edits) !== null) {
+      return { ok: false, reason: "edit would create a cycle" };
+    }
+
+    const fileEdits: TopologyFileEdit[] = [];
+    for (const [revisionId, newDownRevisions] of edits) {
+      const node = graph.nodes[revisionId];
+      if (sameList(newDownRevisions, node.downRevisions)) continue;
+      fileEdits.push({
+        revisionId,
+        filePath: node.filePath,
+        newDownRevisions,
+        expectedDownRevisions: node.downRevisions,
+      });
+    }
+    if (fileEdits.length === 0) return { ok: false, reason: "nothing to change" };
+
+    return { ok: true, fileEdits, appliedTouched: this.appliedTouchedFor(graph, fileEdits), summary };
+  }
+
+  /**
+   * Already-applied revisions on either side of an edit — the edited revision itself plus every id
+   * it stops or starts revising. `[]` whenever DB state is unknown (`dbReachable` false): with no
+   * applied set there is nothing to warn about, and guessing would be worse than staying silent.
+   * Sorted ascending for a stable prompt (and stable tests).
+   */
+  private appliedTouchedFor(graph: MigrationGraph, fileEdits: TopologyFileEdit[]): string[] {
+    if (!this.enrichment.dbReachable) return [];
+
+    const applied = computeAppliedSet(graph, this.enrichment.currentIds);
+    const touched = new Set<string>();
+    for (const edit of fileEdits) {
+      touched.add(edit.revisionId);
+      for (const id of graph.nodes[edit.revisionId].downRevisions) touched.add(id);
+      for (const id of edit.newDownRevisions) touched.add(id);
+    }
+
+    // `applied` only ever contains real node ids (computeAppliedSet drops unknown/ghost ids), so
+    // intersecting with it is also what keeps ghost parents out of the result.
+    return [...touched].filter((id) => applied.has(id)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  }
+
   onDidChangeState(listener: (s: AppState) => void): { dispose(): void } {
     this.listeners.add(listener);
     return { dispose: () => this.listeners.delete(listener) };
@@ -624,6 +847,122 @@ export class MigrationService {
       this.debounceTimer = null;
     }
     this.listeners.clear();
+  }
+}
+
+// ---------- topology planning helpers (pure, graph-only) ----------
+
+/** Pending new parent list per revision id, in the order the plan first touched each revision —
+ * `fileEdits` inherits that order, and re-`set`ting a key composes onto the earlier value in place
+ * rather than emitting a second edit for the same file. */
+type EditMap = Map<string, string[]>;
+
+/** Display form of a revision id in reasons/summaries — the same 8-char truncation `getRepointPlan`
+ * and the webview use. */
+function short(id: string): string {
+  return id.slice(0, 8);
+}
+
+/** `1 child` / `2 children` — both forms are spelled out because English plurals aren't regular. */
+function pluralize(n: number, singular: string, plural: string): string {
+  return `${n} ${n === 1 ? singular : plural}`;
+}
+
+/** The rejection for an id that has to name a real revision but doesn't, or null if it does. */
+function missingRevision(graph: MigrationGraph, id: string): { ok: false; reason: string } | null {
+  return Object.hasOwn(graph.nodes, id) ? null : { ok: false, reason: `${short(id)} is not a real revision` };
+}
+
+/** True when two parent lists are identical (same ids, same order) — arity and order are both
+ * meaningful in a `down_revision` tuple, so this is a plain element-wise comparison. */
+function sameList(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
+/** Duplicates removed, FIRST occurrence kept — a rewritten parent list must never name the same
+ * revision twice (alembic would treat it as a two-parent merge onto one revision). */
+function dedupeFirst(ids: string[]): string[] {
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    kept.push(id);
+  }
+  return kept;
+}
+
+/** STRICT descendants of `id` — the walk starts at `id`'s children, so `id` itself is in the result
+ * only if a pre-existing cycle leads back to it. Forward walk of `children` with a visited set,
+ * cycle-safe the same way `getRepointPlan`'s walk and `computeAppliedSet` are. */
+function descendantsOf(graph: MigrationGraph, id: string): Set<string> {
+  const visited = new Set<string>();
+  const stack = [...(graph.children[id] ?? [])];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    for (const childId of graph.children[current] ?? []) stack.push(childId);
+  }
+  return visited;
+}
+
+/** `id`'s parent list as the plan has it so far: a pending edit if one exists, else what the file
+ * currently says. The planners themselves only ever pass real revision ids; the `?.`/`?? []` is for
+ * `editedNodeOnCycle`, whose ancestor walk can reach a GHOST parent — an id no file declares, which
+ * therefore has no parents of its own and simply ends that branch of the walk. */
+function currentParents(graph: MigrationGraph, edits: EditMap, id: string): string[] {
+  return edits.get(id) ?? graph.nodes[id]?.downRevisions ?? [];
+}
+
+/**
+ * Cycle BACKSTOP over a complete edit map: returns an edited revision that would end up as its own
+ * ancestor once every edit lands, or null if none would.
+ *
+ * The per-op guards each reason about one op's own shape (is the target a descendant? is the
+ * dragged chain's head inside edgeTo's subtree?), which misses cycles closed by a link NO edited
+ * file even mentions. The verified case: A <- B <- D <- M with M also revising X. Inserting X's
+ * chain into the A -> B link plans X -> [A] and B -> [M], and M's untouched D parent then closes
+ * M -> B -> D -> M. Nothing short of walking the POST-EDIT ancestry can see that, so this runs over
+ * the finished edit map in `finalizePlan` and every op — current and future — inherits it.
+ *
+ * Deliberately scoped to EDITED nodes only, never a whole-graph acyclicity check: a broken repo can
+ * already contain a cyclic island (buildGraph and layoutGraph both tolerate one by design), and
+ * rejecting unrelated edits — or, worse, the remove-edge that REPAIRS such a cycle — because of it
+ * would be a regression. An edited node that sits on a pre-existing cycle the edit does not resolve
+ * is still reported, which is correct: applying it would write that cycle back out.
+ *
+ * One deliberate over-report follows from running BEFORE `finalizePlan`'s no-op filter: an entry
+ * whose new parent list already equals what the file says — a file that would never be written —
+ * can still trigger the rejection, turning a would-be `nothing to change` into
+ * `edit would create a cycle`. Accepted, because it errs toward refusing to act on a component
+ * that is already cyclic and the message is not wrong about the graph's state.
+ */
+function editedNodeOnCycle(graph: MigrationGraph, edits: EditMap): string | null {
+  for (const id of edits.keys()) {
+    // Fresh per start node: a shared visited set would let one node's exhausted walk hide a later
+    // node's route back to itself.
+    const visited = new Set<string>();
+    const stack = [...currentParents(graph, edits, id)];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      if (current === id) return id;
+      if (visited.has(current)) continue; // a cycle NOT through `id` — bounded, keep walking elsewhere
+      visited.add(current);
+      for (const parentId of currentParents(graph, edits, current)) stack.push(parentId);
+    }
+  }
+  return null;
+}
+
+/** Records the edits that splice `node` out from under its children: each child swaps `node` for
+ * `node`'s own parents, so the chain stays connected (and a child of a root correctly ends up with
+ * an empty list, i.e. `down_revision = None`). Children whose list is unchanged get no edit. */
+function spliceChildEdits(graph: MigrationGraph, node: RevisionNode, edits: EditMap): void {
+  for (const childId of graph.children[node.revision] ?? []) {
+    const parents = currentParents(graph, edits, childId);
+    const spliced = dedupeFirst(parents.flatMap((id) => (id === node.revision ? node.downRevisions : [id])));
+    if (!sameList(spliced, parents)) edits.set(childId, spliced);
   }
 }
 

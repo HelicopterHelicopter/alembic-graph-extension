@@ -25,6 +25,11 @@ const DEFAULT_UI_PREFS: UiPrefs = {
   density: "comfortable",
   expandCollapsed: false,
   axis: "horizontal",
+  // Edit-mode lock: locked by default, and re-defaulted to locked for any workspace whose stored
+  // prefs predate this field (getUiPrefs spreads the stored object over these defaults). Freeform
+  // topology drags rewrite migration files from a 4px gesture — opening unlocked would make that
+  // the accident it was reported as.
+  editLocked: true,
 };
 
 const NO_PROJECT_MESSAGE = "Alembic Graph: no Alembic project is active. Run \"Select Alembic Project…\" first.";

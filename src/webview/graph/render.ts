@@ -41,6 +41,10 @@ export interface Handlers {
   onToggleDensity(density: UiPrefs["density"]): void;
   /** Task H: toolbar Axis toggle (Horizontal | Vertical), left of Order. */
   onToggleAxis(axis: UiPrefs["axis"]): void;
+  /** Edit-mode lock: toolbar Locked | Edit toggle, right of the density group. Posts
+   * `setEditLocked` and waits for the host's re-emitted state like every other toolbar pref — no
+   * optimistic flip, so the toggle can never disagree with the lock the gestures actually read. */
+  onToggleEditLocked(locked: boolean): void;
   onExpandCollapse(): void;
   onCloseDetail(): void;
   onOpenFile(id: string): void;
@@ -231,7 +235,21 @@ function buildToolbar(state: AppState, view: ViewState, handlers: Handlers): HTM
     makeToggle("Compact", state.ui.density === "compact", () => handlers.onToggleDensity("compact")),
   );
 
-  // Task 17: right of the density toggles, design's plain (never active-colored) toggleBtn style
+  // Edit-mode lock: an unlabeled toggle group (same shape as density's) right after it. Locked is
+  // the default and the safe state — while it is active every mutating canvas GESTURE is inert
+  // (card/ghost drags, edge drops, the edge "Remove link" menu); clicks, selection, zoom, pan and
+  // every labeled button/command stay live either way. Deliberately a two-state toggle rather than
+  // a single "unlock" button so the current mode is always readable at a glance, which is what
+  // makes a dead drag self-explanatory instead of looking broken.
+  const editLockGroup = document.createElement("div");
+  editLockGroup.className = "alx-toggle-group";
+  editLockGroup.append(
+    makeToggle("Locked", state.ui.editLocked, () => handlers.onToggleEditLocked(true)),
+    makeToggle("Edit", !state.ui.editLocked, () => handlers.onToggleEditLocked(false)),
+  );
+
+  // Task 17: right of the toggle groups (the density pair until the edit-mode lock's Locked | Edit
+  // pair landed between them), design's plain (never active-colored) toggleBtn style
   // — disabled (dim, pointer-events:none, same convention as the sidebar's footer button) while
   // any host-side operation is in flight.
   const newRevisionBtn = document.createElement("div");
@@ -259,6 +277,7 @@ function buildToolbar(state: AppState, view: ViewState, handlers: Handlers): HTM
     orderLabel,
     orderGroup,
     densityGroup,
+    editLockGroup,
     newRevisionBtn,
     zoomCluster,
     exportSvgBtn,
@@ -364,7 +383,12 @@ function buildCanvasViewport(
   const zoom = view.zoom;
 
   const viewport = document.createElement("div");
-  viewport.className = "alx-canvas-viewport";
+  // Edit-mode lock: the modifier carries the CSS cursor override for the whole canvas (graph.css)
+  // — cards read as clickable rather than draggable while locked. It lives on the viewport rather
+  // than on each card so exactly one place has to know about the lock, and so ghost cards (whose
+  // `grab` cursor is set on `.alx-ghost` itself, not via a `--draggable` class) are covered by the
+  // same switch.
+  viewport.className = ui.editLocked ? "alx-canvas-viewport alx-canvas-viewport--locked" : "alx-canvas-viewport";
 
   // Task 19 (zoom): `scaleWrapper` is what actually determines the viewport's scrollable extent
   // (its own box is sized to canvasSize * zoom) — `canvas` keeps its UNSCALED size and is visually
@@ -383,11 +407,10 @@ function buildCanvasViewport(
 
   canvas.append(buildEdgesSvg(layout, size, positions, state.laneColors, ui.axis));
 
-  const brokenParentByChild = brokenParentByChildMap(state);
   for (const node of layout.nodes) {
     const pos = positions.get(node.id);
     if (!pos) continue;
-    canvas.append(buildNodeElement(node, state, view, handlers, pos, density, brokenParentByChild));
+    canvas.append(buildNodeElement(node, state, view, handlers, pos, density));
   }
 
   const mergeHint = buildMergeHint(state, view, positions, ui.axis, handlers, size);
@@ -420,8 +443,9 @@ function buildEdgesSvg(
     // Anchor = upper card's bottom-center -> lower card's top-center in vertical, lefter card's
     // right-center -> righter card's left-center in horizontal (metrics.ts's edgePathD, shared
     // with svgExport.ts so the standalone export draws identical curves).
+    const d = edgePathD(a, b, axis);
     const path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", edgePathD(a, b, axis));
+    path.setAttribute("d", d);
     // Task 19: hover.ts reads these to decide whether an edge sits on the hovered ancestor path —
     // `edge.from`/`.to` are already the parent/child node ids (see LayoutEdge in core/types.ts).
     path.dataset.from = edge.from;
@@ -440,6 +464,26 @@ function buildEdgesSvg(
     }
 
     svg.append(path);
+
+    // Freeform topology drag: an invisible, fat-stroked twin of every REAL parent link, appended
+    // right after its visible path, purely so a pointer can hit-test a 2px curve (`.alx-edge-hit`
+    // in graph.css opts back into pointer events against `.alx-edges { pointer-events: none }`).
+    // `collapse` edges get no twin — a collapse edge stands for a folded run of links, not one
+    // parent link, so it is never a drop target. `data-edge-kind` lets the drop handler tell a
+    // broken (dangling) link from a normal one without re-deriving it from the layout.
+    // The twin carries the SAME `data-from`/`data-to` as its visible path, so main.ts's
+    // `updateDraggedEdges` (which selects by those attributes) re-paths both on every drag frame
+    // and the hit area follows a live drag for free — deliberate, not an accident of the query.
+    // hover.ts is unaffected: it selects `.alx-edge`, a class the twin does not carry.
+    if (edge.kind !== "collapse") {
+      const hit = document.createElementNS(SVG_NS, "path");
+      hit.setAttribute("d", d);
+      hit.setAttribute("class", "alx-edge-hit");
+      hit.dataset.from = edge.from;
+      hit.dataset.to = edge.to;
+      hit.dataset.edgeKind = edge.kind;
+      svg.append(hit);
+    }
   }
 
   return svg;
@@ -448,24 +492,14 @@ function buildEdgesSvg(
 // ---------- node cards ----------
 
 /**
- * Maps each broken revision's id to the (first) missing parent id it revises — derived from
- * `state.problems`'s `broken-down-revision` entries (`revisionIds: [childId, missingId]`, see
- * core/types.ts) rather than re-deriving it from `layout.nodes`, since a ghost's layout node could
- * in principle be absent from a collapsed view while the problem list always reflects the full,
- * uncollapsed graph. Used to give a broken NON-head revision card its own repoint-drag handle
- * (Task 15) — the ghost id it should repoint when dragged is whatever this map says, NOT its own
- * node id.
+ * Freeform-topology task: the broken-parent map that used to live here (child id -> the missing
+ * parent id it revises, derived from `state.problems`) is gone along with its one consumer — a
+ * broken NON-head revision card no longer carries `data-repoint-ghost-id`, because dragging ANY
+ * revision card is now a freeform topology drag (see `buildRevisionCard`). Repointing a missing
+ * parent is still reachable exactly where it always was conceptually: drag the ghost card itself,
+ * which keeps its own `data-repoint-ghost-id` (see `buildGhostCard`) — or drag the broken child onto
+ * the parent it should revise, which the freeform `move-*` path expresses directly.
  */
-function brokenParentByChildMap(state: AppState): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const problem of state.problems) {
-    if (problem.kind !== "broken-down-revision") continue;
-    const [childId, missingId] = problem.revisionIds;
-    if (!map.has(childId)) map.set(childId, missingId);
-  }
-  return map;
-}
-
 function buildNodeElement(
   node: LayoutNode,
   state: AppState,
@@ -473,7 +507,6 @@ function buildNodeElement(
   handlers: Handlers,
   pos: Pos,
   density: Density,
-  brokenParentByChild: Map<string, string>,
 ): HTMLElement {
   const wrapper = document.createElement("div");
   wrapper.className = "alx-node";
@@ -509,14 +542,27 @@ function buildNodeElement(
     return wrapper;
   }
 
-  const card = buildRevisionCard(node, view, density, state.laneColors, brokenParentByChild);
+  const card = buildRevisionCard(node, view, density, state.laneColors);
   card.addEventListener("click", () => handlers.onSelect(node.id));
   wrapper.append(card);
 
   if (node.isBroken) {
     const hint = document.createElement("div");
     hint.className = "alx-broken-hint";
-    hint.textContent = "⚠ down_revision missing — drag onto a parent to re-point";
+    // Names the two PRECISE repairs, because dragging this card is no longer one of them: since the
+    // freeform-topology task a card drag is a plain topology move that replaces ALL of this
+    // revision's parents (which on a broken merge child would drop its healthy link too). The
+    // repair is the ghost card's own repoint drag (or the dashed edge's remove-link menu); dragging
+    // this card just moves it. Same two-line budget as the merge banner — the hint is 226px wide
+    // (the card) and a third line would eat the ~36px of inter-lane clearance at compact density.
+    //
+    // Edit-mode lock: while locked, neither of those repairs is available (both are gestures), so
+    // naming them would be instructions the reader cannot follow — the locked variant names the one
+    // action that DOES work instead. It is deliberately shorter than the unlocked string, so it
+    // stays inside the same two-line budget without re-measuring.
+    hint.textContent = state.ui.editLocked
+      ? "⚠ down_revision missing — click Edit in the toolbar to repair"
+      : "⚠ down_revision missing — drag the ghost to repair, or this card to move it";
     wrapper.append(hint);
   }
 
@@ -603,36 +649,31 @@ function buildRevisionCard(
   view: ViewState,
   density: Density,
   laneColors: string[],
-  brokenParentByChild: Map<string, string>,
 ): HTMLElement {
   const selected = node.id === view.selectedId;
   const laneColor = laneColors[node.lane] ?? laneColors[0] ?? "#4aa3ff";
-
-  // Task 15: a BROKEN, NON-head card is also a repoint-drag source (dragging it re-points its own
-  // missing parent — same outcome as dragging that ghost directly). A head wins over broken —
-  // dragging a broken HEAD card is still a merge (Task 14), never a repoint — so this is
-  // deliberately gated on `!node.isHead` and only set when the missing-parent lookup actually
-  // resolves (defensive: it always should for a node with isBroken true, see brokenParentByChildMap).
-  const repointGhostId = !node.isHead && node.isBroken ? (brokenParentByChild.get(node.id) ?? null) : null;
 
   const card = document.createElement("div");
   card.className = [
     "alx-card",
     density === "compact" ? "alx-card--compact" : null,
     selected ? "alx-card--selected" : null,
-    // Task 14/15: HEAD cards drag-to-merge; broken non-head cards drag-to-repoint. touch-action:
-    // none lives on this class too (see graph.css) so it's only applied where a drag can start.
-    node.isHead || repointGhostId !== null ? "alx-card--draggable" : null,
+    // Freeform-topology task: EVERY revision card is now a drag source (dnd.ts's `"freeform"`
+    // kind) — dragging one re-parents it onto whatever card/link it's dropped on, so the grab
+    // cursor + `touch-action: none` this class carries (see graph.css) belong on all of them, not
+    // just the heads/broken subset that could drag before. Ghost cards keep their own equivalent
+    // styling (`.alx-ghost`) and collapse cards stay undraggable.
+    "alx-card--draggable",
   ]
     .filter((c): c is string => c !== null)
     .join(" ");
-  // dnd.ts event-delegates off these — data-node-id on every revision card (also set on
-  // ghost/collapse cards above, for hit-testing reuse), data-head only on the subset that's a
-  // legal drag source/drop target for merge (Task 14), data-repoint-ghost-id only on the subset
-  // that's a legal repoint-drag source (Task 15 — see buildGhostCard for the ghost-card side).
+  // dnd.ts event-delegates off `data-node-id` (set on every revision card here, and on ghost/
+  // collapse cards above for hit-testing reuse) — that attribute alone now identifies a freeform
+  // drag source. `data-head` marks the head subset for the rest of the UI (and keeps the DOM
+  // self-describing); the drag machine reads head-ness from `AppState.heads` instead, and
+  // `data-repoint-ghost-id` is now set ONLY on ghost cards (see buildGhostCard).
   card.dataset.nodeId = node.id;
   if (node.isHead) card.dataset.head = "true";
-  if (repointGhostId !== null) card.dataset.repointGhostId = repointGhostId;
 
   // Task 19: keyboard navigation (keyboardNav.ts) — only revision cards are focusable (ghost/
   // collapse cards keep their plain click-only affordance; see the brief's "Cards" scoping).
@@ -742,10 +783,10 @@ const MERGE_HINT_MULTI_WIDTH = 300;
 const MERGE_HINT_GAP = 16;
 
 /**
- * The green drag-to-merge banner. With exactly 2 current heads this is UNCHANGED from before the
- * N-way task (same text, same class, same position math) — a separate code path below, rather
- * than a single generalized one, specifically so that 2-head case stays byte-identical rather than
- * risking drift through shared aggregate math. With 3+ heads it instead reads "drag one head onto
+ * The green drag-to-merge banner. With exactly 2 current heads it keeps its own class and position
+ * math (a separate code path below, rather than a single generalized one, specifically so that case
+ * can't drift through shared aggregate math) and, since the freeform-topology task, spells out both
+ * gestures a head-onto-head drop now offers. With 3+ heads it instead reads "drag one head onto
  * another to merge · " followed by an inline "Merge all N heads" button (N-way task) that posts a
  * single octopus-merge request for every current head at once — see `Handlers.onMergeAllHeads`.
  */
@@ -772,7 +813,20 @@ function buildMergeHint(
 
     const hint = document.createElement("div");
     hint.className = "alx-merge-hint";
-    hint.textContent = "drag one head onto the other to merge  ⇄";
+    // Freeform-topology task: dropping a head on a head is no longer merge-or-nothing — it opens
+    // the merge/move choice popover (main.ts's `onFreeformDrop`), and ⌥/Alt switches any drag to a
+    // single-revision splice. The wording names both so the gestures are discoverable from the one
+    // banner that was already teaching drag-and-drop, but it is kept SHORT on purpose: the box is a
+    // fixed 250px (border-box, so 234px of text), and a third line would overhang the 34px of
+    // clearance the placement math below leaves and clip behind the head cards. Two lines is the
+    // budget — re-measure at 234px before lengthening this string.
+    //
+    // Edit-mode lock: locked, BOTH gestures the unlocked wording teaches are inert, and with only
+    // 2 heads this banner carries no button either — so the whole banner reduces to the one thing
+    // that works. Same two-line/234px budget; the locked string is shorter, so it fits a fortiori.
+    hint.textContent = state.ui.editLocked
+      ? "editing locked — click Edit in the toolbar to merge or move"
+      : "drag a head onto the other to merge or move — ⌥/Alt moves 1 revision";
 
     if (axis === "horizontal") {
       // Heads cluster toward the newest end of the chain — the min-x edge under "newest-top", the
@@ -806,7 +860,14 @@ function buildMergeHint(
   hint.className = "alx-merge-hint alx-merge-hint--multi";
 
   const text = document.createElement("span");
-  text.textContent = "drag one head onto another to merge · ";
+  // Edit-mode lock: the "Merge all N heads" button beside this text STAYS live while locked (it is
+  // a labeled button — it cannot fire by accident, which is the only thing the lock guards against),
+  // so the locked wording names DRAGS specifically rather than "editing is off". Saying the latter
+  // next to a working button would read as a contradiction. Same two-line budget as the 2-head
+  // banner, in the wider 300px `--multi` box; the trailing space is the separator before the button.
+  text.textContent = state.ui.editLocked
+    ? "editing locked — click Edit to drag · "
+    : "drag one head onto another to merge · ";
   hint.append(text);
 
   const headIds = state.heads.map((h) => h.id);

@@ -11,6 +11,7 @@ import { buildWebviewHtml } from "./html";
 import {
   mergeHeadsAction,
   repointAction,
+  topologyEditAction,
   upgradeAction,
   previewSqlAction,
   downgradeToAction,
@@ -236,6 +237,13 @@ export class GraphPanelManager {
       case "setAxis":
         this.service.setAxis(msg.axis);
         break;
+      case "setEditLocked":
+        // Edit-mode lock: a plain pref flip, gating nothing host-side. The lock is a webview
+        // gesture guard (see UiPrefs.editLocked); `topologyEdit`/`merge`/`repoint` stay unguarded
+        // here on purpose, since the palette commands that reach the same actions are labeled
+        // entry points the lock deliberately leaves live.
+        this.service.setEditLocked(msg.editLocked);
+        break;
       case "expandCollapse": {
         const state = this.service.getState();
         if (state) void this.service.setExpandCollapsed(!state.ui.expandCollapsed);
@@ -276,6 +284,23 @@ export class GraphPanelManager {
         // defensive only, per the brief.
         repointAction(ctx, msg.ghostId, msg.targetId, msg.busyToken).catch((err) => {
           this.log(`graph panel: repointAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
+        });
+        break;
+      }
+      case "topologyEdit": {
+        // Freeform topology drop (move/insert/remove-edge — see `TopologyOp`). Same no-CLI context
+        // as repoint above: it's `down_revision` text surgery through vscode's own WorkspaceEdit,
+        // with no `alembic` subprocess involved. The applied-history confirmation lives in
+        // topologyEditAction.
+        const ctx: RepointActionContext = {
+          service: this.service,
+          log: this.log,
+          broadcast: this.broadcast,
+        };
+        // topologyEditAction never throws in practice (see its own doc comment) — the .catch is
+        // defensive only, same pattern as every case here.
+        topologyEditAction(ctx, msg.op, msg.busyToken).catch((err) => {
+          this.log(`graph panel: topologyEditAction threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`);
         });
         break;
       }

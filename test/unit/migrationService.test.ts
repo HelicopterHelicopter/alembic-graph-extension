@@ -20,7 +20,9 @@ function loadBrokenFiles(): { path: string; content: string }[] {
 }
 
 const DEFAULT_CONFIG = { laneColorA: "#4aa3ff", laneColorB: "#c586c0", showSqlPreview: true, collapseThreshold: 20 };
-const DEFAULT_UI: UiPrefs = { order: "newest-bottom", density: "comfortable", expandCollapsed: false, axis: "horizontal" };
+// `editLocked: true` mirrors extension.ts's DEFAULT_UI_PREFS: the graph opens LOCKED, so every
+// suite below that asserts on a freshly-emitted `state.ui` sees the locked default.
+const DEFAULT_UI: UiPrefs = { order: "newest-bottom", density: "comfortable", expandCollapsed: false, axis: "horizontal", editLocked: true };
 // `state.project` only ever carries label/iniPath (see doRefresh's AppState literal) — kept
 // separate from `DEFAULT_VERSIONS_DIR` below so `expect(state!.project).toEqual(DEFAULT_PROJECT)`
 // isn't broken by a field the emitted state never includes.
@@ -433,6 +435,24 @@ describe("MigrationService.setOrder / setDensity", () => {
     expect(newState.layout).toBe(layoutBefore); // same reference: no re-layout
     expect(deps.listVersionFiles).toHaveBeenCalledTimes(1); // no re-read
   });
+
+  it("5d. setEditLocked emits updated ui, persists prefs, and leaves the layout object reference unchanged", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+    const layoutBefore = service.getState()!.layout;
+
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+    service.setEditLocked(false);
+
+    expect(deps.setUiPrefs).toHaveBeenCalledWith(expect.objectContaining({ editLocked: false }));
+    expect(listener).toHaveBeenCalledTimes(1);
+    const newState = listener.mock.calls[0][0];
+    expect(newState.ui.editLocked).toBe(false);
+    expect(newState.layout).toBe(layoutBefore); // same reference: no re-layout
+    expect(deps.listVersionFiles).toHaveBeenCalledTimes(1); // no re-read
+  });
 });
 
 describe("MigrationService.applyUiPrefs", () => {
@@ -496,13 +516,16 @@ describe("MigrationService.applyUiPrefs", () => {
 
     expect(listener).toHaveBeenCalledTimes(1);
     const newState = listener.mock.calls[0][0];
-    expect(newState.ui).toEqual({ order: "newest-top", density: "compact", expandCollapsed: true, axis: "vertical" });
+    // `editLocked` isn't part of the patch — it rides through untouched at its locked default,
+    // which is exactly what these exact-shape assertions are here to pin down.
+    expect(newState.ui).toEqual({ order: "newest-top", density: "compact", expandCollapsed: true, axis: "vertical", editLocked: true });
     expect(deps.setUiPrefs).toHaveBeenCalledTimes(1);
     expect(deps.setUiPrefs).toHaveBeenCalledWith({
       order: "newest-top",
       density: "compact",
       expandCollapsed: true,
       axis: "vertical",
+      editLocked: true,
     });
   });
 
@@ -521,6 +544,29 @@ describe("MigrationService.applyUiPrefs", () => {
     expect(newState.ui.axis).toBe("vertical");
     expect(newState.layout).toBe(layoutBefore); // same reference: no re-layout
     expect(deps.setUiPrefs).toHaveBeenCalledWith(expect.objectContaining({ axis: "vertical" }));
+    expect(deps.listVersionFiles).toHaveBeenCalledTimes(1); // no re-read
+  });
+
+  it("f. editLocked-only restore (unlocked over the locked default): one emit, persisted", async () => {
+    // Edit-mode lock task: the webview persists `editLocked` alongside order/density/axis and
+    // replays it through the `ready.restored` handshake. `editLocked` MUST therefore be part of
+    // this method's `changed` computation — miss it and a restored `editLocked: false` is read as
+    // "nothing differs", so the graph silently re-locks itself on every reopen and the host's
+    // workspaceState never learns the user unlocked it.
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+    const layoutBefore = service.getState()!.layout;
+
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+    await service.applyUiPrefs({ editLocked: false });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    const newState = listener.mock.calls[0][0];
+    expect(newState.ui.editLocked).toBe(false);
+    expect(newState.layout).toBe(layoutBefore); // same reference: no re-layout
+    expect(deps.setUiPrefs).toHaveBeenCalledWith(expect.objectContaining({ editLocked: false }));
     expect(deps.listVersionFiles).toHaveBeenCalledTimes(1); // no re-read
   });
 });
@@ -1196,16 +1242,23 @@ describe("MigrationService.getDetail", () => {
  * used below to build small ad-hoc broken chains the checked-in fixtures don't have (a ghost with
  * >1 broken child, a cycle candidate several revisions deep). */
 function pyFile(id: string, down: string | null, message: string): { path: string; content: string } {
-  const downLine = down === null ? "down_revision = None" : `down_revision = '${down}'`;
+  return pyFileMulti(id, down === null ? [] : [down], message);
+}
+
+/** `pyFile` with an arbitrary parent list: `[]` -> `None`, one id -> scalar, >= 2 -> a tuple —
+ * which is what the getTopologyPlan suite below needs to build merge nodes. */
+function pyFileMulti(id: string, downs: string[], message: string): { path: string; content: string } {
+  const rendered = downs.map((d) => `'${d}'`);
+  const value = downs.length === 0 ? "None" : downs.length === 1 ? rendered[0] : `(${rendered.join(", ")})`;
   const content = `"""${message}
 
 Revision ID: ${id}
-Revises: ${down ?? ""}
+Revises: ${downs.join(", ")}
 Create Date: 2026-01-01 00:00:00.000000
 
 """
 revision = '${id}'
-${downLine}
+down_revision = ${value}
 branch_labels = None
 depends_on = None
 
@@ -1310,5 +1363,502 @@ describe("MigrationService.getRepointPlan", () => {
     const plan = service.getRepointPlan("ghost0000000", "sibling00001");
     expect(plan.ok).toBe(true);
     if (plan.ok) expect(plan.edits.map((e) => e.revisionId)).toEqual(["b2222222222"]);
+  });
+});
+
+describe("MigrationService.getTopologyPlan", () => {
+  // Ids whose first 8 chars (the `short()` display form every reason/summary string uses) are
+  // distinct, so an assertion on "aaaaaaaa" can only have come from A.
+  const A = "aaaaaaaa0001";
+  const B = "bbbbbbbb0002";
+  const C = "cccccccc0003";
+  const D = "dddddddd0004";
+  const E = "eeeeeeee0005";
+  const M = "mmmmmmmm0006";
+  const P = "pppppppp0007";
+  const X = "xxxxxxxx0008";
+  const Y = "yyyyyyyy0009";
+  const Z = "zzzzzzzz0010";
+  const GHOST = "gggggggg0000";
+
+  /** `pyFile`/`pyFileMulti`'s synthetic path for a revision id. */
+  const fileOf = (id: string) => `/tmp/${id}.py`;
+
+  /** A service over ad-hoc synthetic files, with its first scan already complete. */
+  async function serviceFor(
+    files: { path: string; content: string }[],
+    overrides: Partial<MigrationServiceDeps> = {},
+  ): Promise<MigrationService> {
+    const deps = makeDeps({ listVersionFiles: vi.fn(async () => files), ...overrides });
+    const service = new MigrationService(deps);
+    await service.refresh();
+    return service;
+  }
+
+  it("1. no cached graph yet (before any refresh) -> error", () => {
+    const service = new MigrationService(makeDeps());
+    expect(service.getTopologyPlan({ kind: "move-chain", nodeId: B, targetId: D })).toEqual({
+      ok: false,
+      reason: "no migration graph loaded yet",
+    });
+  });
+
+  it("2. move-chain: one edit replacing the node's parents; descendants ride along", async () => {
+    // A <- B <- C, plus an unrelated root D. Moving B's whole chain under D rewrites only B.
+    const service = await serviceFor([
+      pyFile(A, null, "a"),
+      pyFile(B, A, "b"),
+      pyFile(C, B, "c"),
+      pyFile(D, null, "d"),
+    ]);
+
+    expect(service.getTopologyPlan({ kind: "move-chain", nodeId: B, targetId: D })).toEqual({
+      ok: true,
+      fileEdits: [{ revisionId: B, filePath: fileOf(B), newDownRevisions: [D], expectedDownRevisions: [A] }],
+      appliedTouched: [],
+      summary: "move bbbbbbbb (+1 descendant) under dddddddd",
+    });
+  });
+
+  it("3. move-chain of a merge node dissolves its other parent links", async () => {
+    const service = await serviceFor([
+      pyFile(A, null, "a"),
+      pyFile(B, null, "b"),
+      pyFileMulti(M, [A, B], "merge"),
+      pyFile(D, null, "d"),
+    ]);
+
+    expect(service.getTopologyPlan({ kind: "move-chain", nodeId: M, targetId: D })).toEqual({
+      ok: true,
+      fileEdits: [{ revisionId: M, filePath: fileOf(M), newDownRevisions: [D], expectedDownRevisions: [A, B] }],
+      appliedTouched: [],
+      summary: "move mmmmmmmm under dddddddd",
+    });
+  });
+
+  it("4. move-chain onto one of its own descendants -> cycle error", async () => {
+    const service = await serviceFor([pyFile(A, null, "a"), pyFile(B, A, "b"), pyFile(C, B, "c")]);
+
+    expect(service.getTopologyPlan({ kind: "move-chain", nodeId: B, targetId: C })).toEqual({
+      ok: false,
+      reason: "moving would create a cycle",
+    });
+  });
+
+  it("5. move-chain onto itself -> error; onto the parent it already revises -> already revises", async () => {
+    const service = await serviceFor([pyFile(A, null, "a"), pyFile(B, A, "b")]);
+
+    expect(service.getTopologyPlan({ kind: "move-chain", nodeId: B, targetId: B })).toEqual({
+      ok: false,
+      reason: "cannot attach a revision to itself",
+    });
+    expect(service.getTopologyPlan({ kind: "move-chain", nodeId: B, targetId: A })).toEqual({
+      ok: false,
+      reason: "already revises aaaaaaaa",
+    });
+    expect(service.getTopologyPlan({ kind: "move-chain", nodeId: "not-real", targetId: A })).toEqual({
+      ok: false,
+      reason: "not-real is not a real revision",
+    });
+  });
+
+  it("6. move-single mid-chain splices the node out and re-attaches its child", async () => {
+    // A <- B <- C, D unrelated root. B alone moves under D; C is spliced onto A.
+    const service = await serviceFor([
+      pyFile(A, null, "a"),
+      pyFile(B, A, "b"),
+      pyFile(C, B, "c"),
+      pyFile(D, null, "d"),
+    ]);
+
+    expect(service.getTopologyPlan({ kind: "move-single", nodeId: B, targetId: D })).toEqual({
+      ok: true,
+      fileEdits: [
+        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A], expectedDownRevisions: [B] },
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [D], expectedDownRevisions: [A] },
+      ],
+      appliedTouched: [],
+      summary: "move bbbbbbbb alone under dddddddd, re-attaching 1 child",
+    });
+  });
+
+  it("7. move-single dedupes when the child already revises the node's own parent", async () => {
+    // C revises (A, B) and B revises A: splicing B out would leave (A, A) -> deduped to A.
+    const service = await serviceFor([
+      pyFile(A, null, "a"),
+      pyFile(B, A, "b"),
+      pyFileMulti(C, [A, B], "c"),
+      pyFile(D, null, "d"),
+    ]);
+
+    expect(service.getTopologyPlan({ kind: "move-single", nodeId: B, targetId: D })).toEqual({
+      ok: true,
+      fileEdits: [
+        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A], expectedDownRevisions: [A, B] },
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [D], expectedDownRevisions: [A] },
+      ],
+      appliedTouched: [],
+      summary: "move bbbbbbbb alone under dddddddd, re-attaching 1 child",
+    });
+  });
+
+  it("8. move-single of a root leaves its child parentless (a new base)", async () => {
+    const service = await serviceFor([pyFile(A, null, "a"), pyFile(B, A, "b"), pyFile(D, null, "d")]);
+
+    expect(service.getTopologyPlan({ kind: "move-single", nodeId: A, targetId: D })).toEqual({
+      ok: true,
+      fileEdits: [
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [], expectedDownRevisions: [A] },
+        { revisionId: A, filePath: fileOf(A), newDownRevisions: [D], expectedDownRevisions: [] },
+      ],
+      appliedTouched: [],
+      summary: "move aaaaaaaa alone under dddddddd, re-attaching 1 child",
+    });
+  });
+
+  it("9. move-single onto its own child is a legal reorder (the splice breaks the cycle first)", async () => {
+    const service = await serviceFor([pyFile(A, null, "a"), pyFile(B, A, "b"), pyFile(C, B, "c")]);
+
+    expect(service.getTopologyPlan({ kind: "move-single", nodeId: B, targetId: C })).toEqual({
+      ok: true,
+      fileEdits: [
+        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A], expectedDownRevisions: [B] },
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [C], expectedDownRevisions: [A] },
+      ],
+      appliedTouched: [],
+      summary: "move bbbbbbbb alone under cccccccc, re-attaching 1 child",
+    });
+  });
+
+  it("10. move-single of a merge node makes its child inherit both parents", async () => {
+    const service = await serviceFor([
+      pyFile(A, null, "a"),
+      pyFile(B, null, "b"),
+      pyFileMulti(M, [A, B], "merge"),
+      pyFile(C, M, "c"),
+      pyFile(D, null, "d"),
+    ]);
+
+    expect(service.getTopologyPlan({ kind: "move-single", nodeId: M, targetId: D })).toEqual({
+      ok: true,
+      fileEdits: [
+        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A, B], expectedDownRevisions: [M] },
+        { revisionId: M, filePath: fileOf(M), newDownRevisions: [D], expectedDownRevisions: [A, B] },
+      ],
+      appliedTouched: [],
+      summary: "move mmmmmmmm alone under dddddddd, re-attaching 1 child",
+    });
+  });
+
+  it("11. insert-between chain: the node takes the edge's parent, edgeTo takes the chain's head", async () => {
+    // A <- B is the edge; X <- Y is the dragged chain. Result: A <- X <- Y <- B.
+    const service = await serviceFor([
+      pyFile(A, null, "a"),
+      pyFile(B, A, "b"),
+      pyFile(X, null, "x"),
+      pyFile(Y, X, "y"),
+    ]);
+
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: A, edgeTo: B, mode: "chain" }),
+    ).toEqual({
+      ok: true,
+      fileEdits: [
+        { revisionId: X, filePath: fileOf(X), newDownRevisions: [A], expectedDownRevisions: [] },
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [Y], expectedDownRevisions: [A] },
+      ],
+      appliedTouched: [],
+      summary: "insert xxxxxxxx (+1 descendant) between aaaaaaaa and bbbbbbbb",
+    });
+  });
+
+  it("12. insert-between chain with a forked (multi-head) subtree -> ambiguous", async () => {
+    const service = await serviceFor([
+      pyFile(A, null, "a"),
+      pyFile(B, A, "b"),
+      pyFile(X, null, "x"),
+      pyFile(Y, X, "y"),
+      pyFile(Z, X, "z"),
+    ]);
+
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: A, edgeTo: B, mode: "chain" }),
+    ).toEqual({ ok: false, reason: "dragged chain has 2 heads — ambiguous" });
+  });
+
+  it("13. insert-between chain whose edgeTo is inside the dragged subtree -> error", async () => {
+    // Y revises both X (so it is X's descendant) and A (so A -> Y is a real edge).
+    const service = await serviceFor([pyFile(A, null, "a"), pyFile(X, null, "x"), pyFileMulti(Y, [A, X], "y")]);
+
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: A, edgeTo: Y, mode: "chain" }),
+    ).toEqual({ ok: false, reason: "cannot insert a chain into its own descendants" });
+  });
+
+  it("14. insert-between below a ghost parent -> error (both modes)", async () => {
+    const service = await serviceFor([pyFile(B, GHOST, "b"), pyFile(X, null, "x")]);
+
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: GHOST, edgeTo: B, mode: "chain" }),
+    ).toEqual({ ok: false, reason: "cannot insert below a missing revision" });
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: GHOST, edgeTo: B, mode: "single" }),
+    ).toEqual({ ok: false, reason: "cannot insert below a missing revision" });
+  });
+
+  it("15. insert-between single composes ONE edit for an edgeTo that is also a child of the node", async () => {
+    // C revises (X, A): the splice replaces X with X's own parent P, then the insert replaces A
+    // with X — both landing in a single (P, X) rewrite of C.
+    const service = await serviceFor([
+      pyFile(P, null, "p"),
+      pyFile(X, P, "x"),
+      pyFile(A, null, "a"),
+      pyFileMulti(C, [X, A], "c"),
+    ]);
+
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: A, edgeTo: C, mode: "single" }),
+    ).toEqual({
+      ok: true,
+      fileEdits: [
+        { revisionId: C, filePath: fileOf(C), newDownRevisions: [P, X], expectedDownRevisions: [X, A] },
+        { revisionId: X, filePath: fileOf(X), newDownRevisions: [A], expectedDownRevisions: [P] },
+      ],
+      appliedTouched: [],
+      summary: "insert xxxxxxxx between aaaaaaaa and cccccccc",
+    });
+  });
+
+  it("16. insert-between an edge that does not exist -> error", async () => {
+    const service = await serviceFor([pyFile(A, null, "a"), pyFile(B, null, "b"), pyFile(X, null, "x")]);
+
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: A, edgeTo: B, mode: "chain" }),
+    ).toEqual({ ok: false, reason: "bbbbbbbb does not revise aaaaaaaa" });
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: A, edgeFrom: A, edgeTo: B, mode: "chain" }),
+    ).toEqual({ ok: false, reason: "bbbbbbbb does not revise aaaaaaaa" });
+  });
+
+  it("17. remove-edge on a merge node drops just that parent", async () => {
+    const service = await serviceFor([pyFile(A, null, "a"), pyFile(B, null, "b"), pyFileMulti(M, [A, B], "merge")]);
+
+    expect(service.getTopologyPlan({ kind: "remove-edge", parentId: A, childId: M })).toEqual({
+      ok: true,
+      fileEdits: [{ revisionId: M, filePath: fileOf(M), newDownRevisions: [B], expectedDownRevisions: [A, B] }],
+      appliedTouched: [],
+      summary: "stop mmmmmmmm revising aaaaaaaa",
+    });
+  });
+
+  it("18. remove-edge on the only parent turns the child into a new base", async () => {
+    const service = await serviceFor([pyFile(A, null, "a"), pyFile(B, A, "b")]);
+
+    expect(service.getTopologyPlan({ kind: "remove-edge", parentId: A, childId: B })).toEqual({
+      ok: true,
+      fileEdits: [{ revisionId: B, filePath: fileOf(B), newDownRevisions: [], expectedDownRevisions: [A] }],
+      appliedTouched: [],
+      summary: "stop bbbbbbbb revising aaaaaaaa (becomes a new base)",
+    });
+  });
+
+  it("19. remove-edge deletes a broken link to a ghost parent", async () => {
+    const service = await serviceFor([pyFile(A, null, "a"), pyFileMulti(B, [A, GHOST], "b")]);
+
+    expect(service.getTopologyPlan({ kind: "remove-edge", parentId: GHOST, childId: B })).toEqual({
+      ok: true,
+      fileEdits: [{ revisionId: B, filePath: fileOf(B), newDownRevisions: [A], expectedDownRevisions: [A, GHOST] }],
+      appliedTouched: [],
+      summary: "stop bbbbbbbb revising gggggggg",
+    });
+  });
+
+  it("20. remove-edge of a link that isn't there, or of an unknown child -> error", async () => {
+    const service = await serviceFor([pyFile(A, null, "a"), pyFile(B, null, "b")]);
+
+    expect(service.getTopologyPlan({ kind: "remove-edge", parentId: A, childId: B })).toEqual({
+      ok: false,
+      reason: "bbbbbbbb does not revise aaaaaaaa",
+    });
+    expect(service.getTopologyPlan({ kind: "remove-edge", parentId: A, childId: "no-such-child" })).toEqual({
+      ok: false,
+      reason: "no-such- is not a real revision",
+    });
+  });
+
+  it("21. appliedTouched covers every applied revision on both sides of an edit; empty without a DB", async () => {
+    const files = [pyFile(A, null, "a"), pyFile(B, A, "b"), pyFile(C, B, "c"), pyFile(D, null, "d")];
+
+    const withDb = await serviceFor(files, {
+      fetchCurrent: vi.fn(async () => ({ dbReachable: true, currentIds: [C] })),
+    });
+    await flushMicrotasks(); // let the un-awaited phase-2 enrichment land
+
+    const plan = withDb.getTopologyPlan({ kind: "move-single", nodeId: B, targetId: D });
+    expect(plan.ok).toBe(true);
+    // Edits are C -> [A] and B -> [D]: touched = {C, B} + old parents {B, A} + new {A, D};
+    // intersected with the applied set {A, B, C} (current C plus its ancestry), sorted.
+    if (plan.ok) expect(plan.appliedTouched).toEqual([A, B, C]);
+
+    const withoutDb = await serviceFor(files);
+    const offline = withoutDb.getTopologyPlan({ kind: "move-single", nodeId: B, targetId: D });
+    expect(offline.ok).toBe(true);
+    if (offline.ok) expect(offline.appliedTouched).toEqual([]);
+  });
+
+  it("22. summary pluralization: many descendants (move-chain) and many splices (move-single)", async () => {
+    const chain = await serviceFor([
+      pyFile(A, null, "a"),
+      pyFile(B, A, "b"),
+      pyFile(C, B, "c"),
+      pyFile(E, C, "e"),
+      pyFile(D, null, "d"),
+    ]);
+    const chainPlan = chain.getTopologyPlan({ kind: "move-chain", nodeId: B, targetId: D });
+    expect(chainPlan.ok).toBe(true);
+    if (chainPlan.ok) expect(chainPlan.summary).toBe("move bbbbbbbb (+2 descendants) under dddddddd");
+
+    const forked = await serviceFor([
+      pyFile(A, null, "a"),
+      pyFile(B, A, "b"),
+      pyFile(C, B, "c"),
+      pyFile(E, B, "e"),
+      pyFile(D, null, "d"),
+    ]);
+    const singlePlan = forked.getTopologyPlan({ kind: "move-single", nodeId: B, targetId: D });
+    expect(singlePlan.ok).toBe(true);
+    if (singlePlan.ok) {
+      expect(singlePlan.summary).toBe("move bbbbbbbb alone under dddddddd, re-attaching 2 children");
+      expect(singlePlan.fileEdits).toEqual([
+        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A], expectedDownRevisions: [B] },
+        { revisionId: E, filePath: fileOf(E), newDownRevisions: [A], expectedDownRevisions: [B] },
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [D], expectedDownRevisions: [A] },
+      ]);
+    }
+  });
+
+  // Self-review: guards the required cases above don't reach.
+  it("23. an op whose every edit would be a no-op -> nothing to change", async () => {
+    const service = await serviceFor([pyFile(A, null, "a"), pyFile(B, A, "b")]);
+
+    // Childless B dropped back onto the parent it already revises: no splices, and the one node
+    // edit rewrites its file to exactly what it already says.
+    expect(service.getTopologyPlan({ kind: "move-single", nodeId: B, targetId: A })).toEqual({
+      ok: false,
+      reason: "nothing to change",
+    });
+  });
+
+  it("24. insert-between rejects inserting a chain below its own descendant, or into its own link", async () => {
+    // X <- Y <- B: inserting X into the Y -> B link would make X revise its own descendant.
+    const cyclic = await serviceFor([pyFile(X, null, "x"), pyFile(Y, X, "y"), pyFile(B, Y, "b")]);
+    expect(
+      cyclic.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: Y, edgeTo: B, mode: "chain" }),
+    ).toEqual({ ok: false, reason: "inserting would create a cycle" });
+
+    const service = await serviceFor([pyFile(A, null, "a"), pyFile(B, A, "b")]);
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: A, edgeFrom: A, edgeTo: B, mode: "chain" }),
+    ).toEqual({ ok: false, reason: "cannot insert a revision into its own link" });
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: B, edgeFrom: A, edgeTo: B, mode: "single" }),
+    ).toEqual({ ok: false, reason: "cannot insert a revision into its own link" });
+  });
+
+  it("25. a COMPOSED edit's expectedDownRevisions are the file's original parents, not an intermediate", async () => {
+    // Same shape as 15: C revises (X, A), and insert-between single touches C twice — first the
+    // splice (X -> its own parent P, giving the intermediate [P, A]), then the insert (A -> X,
+    // giving the final [P, X]). The apply-time expectation must be neither of those: it is what
+    // C's FILE says today, [X, A], because that is what the guard in applyDownRevisionEdits
+    // compares the live buffer against.
+    const service = await serviceFor([
+      pyFile(P, null, "p"),
+      pyFile(X, P, "x"),
+      pyFile(A, null, "a"),
+      pyFileMulti(C, [X, A], "c"),
+    ]);
+
+    const plan = service.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: A, edgeTo: C, mode: "single" });
+    expect(plan.ok).toBe(true);
+    if (plan.ok) {
+      const composed = plan.fileEdits.find((e) => e.revisionId === C)!;
+      expect(composed.newDownRevisions).toEqual([P, X]);
+      expect(composed.expectedDownRevisions).toEqual([X, A]);
+    }
+  });
+
+  it("26. cycle backstop: a chain insert whose subtree head keeps an external parent below edgeTo", async () => {
+    // A <- B <- D <- M, plus X <- M. Dragging X's chain into the A -> B link passes every specific
+    // guard: X's descendants are {M}, which contains neither A nor B, and the chain has the single
+    // head M. The plan is X -> [A], B -> [M] — but M still revises D, so the pre-existing
+    // B -> D -> M path closes the loop M -> B -> D -> M. Only a whole-edits-map ancestry walk sees
+    // this, because the offending parent link (M -> D) belongs to no edited file.
+    const service = await serviceFor([
+      pyFile(A, null, "a"),
+      pyFile(B, A, "b"),
+      pyFile(D, B, "d"),
+      pyFileMulti(M, [D, X], "m"),
+      pyFile(X, null, "x"),
+    ]);
+
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: A, edgeTo: B, mode: "chain" }),
+    ).toEqual({ ok: false, reason: "edit would create a cycle" });
+  });
+
+  it("27. no false positive: the same drag is legal when the external parent is outside edgeTo's subtree", async () => {
+    // Same shape as 26 except M's other parent E hangs off A directly, not off B — so nothing
+    // leads from M back down to B and the insert is a legitimate reshaping.
+    const service = await serviceFor([
+      pyFile(A, null, "a"),
+      pyFile(B, A, "b"),
+      pyFile(E, A, "e"),
+      pyFileMulti(M, [E, X], "m"),
+      pyFile(X, null, "x"),
+    ]);
+
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: A, edgeTo: B, mode: "chain" }),
+    ).toEqual({
+      ok: true,
+      fileEdits: [
+        { revisionId: X, filePath: fileOf(X), newDownRevisions: [A], expectedDownRevisions: [] },
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [M], expectedDownRevisions: [A] },
+      ],
+      appliedTouched: [],
+      summary: "insert xxxxxxxx (+1 descendant) between aaaaaaaa and bbbbbbbb",
+    });
+  });
+
+  it("28. a pre-existing cyclic island elsewhere in the graph does not block an unrelated edit", async () => {
+    // P <-> Z is already broken on disk (buildGraph and layoutGraph both tolerate it). The backstop
+    // only walks EDITED nodes' ancestries, so a healthy move in another component is unaffected.
+    const service = await serviceFor([
+      pyFile(P, Z, "p"),
+      pyFile(Z, P, "z"),
+      pyFile(A, null, "a"),
+      pyFile(B, A, "b"),
+      pyFile(D, null, "d"),
+    ]);
+
+    expect(service.getTopologyPlan({ kind: "move-chain", nodeId: B, targetId: D })).toEqual({
+      ok: true,
+      fileEdits: [{ revisionId: B, filePath: fileOf(B), newDownRevisions: [D], expectedDownRevisions: [A] }],
+      appliedTouched: [],
+      summary: "move bbbbbbbb under dddddddd",
+    });
+  });
+
+  it("29. repairing a pre-existing cycle stays possible: remove-edge may leave the graph acyclic", async () => {
+    // Z revises (P, Y) and P revises Z — a real cycle. Dropping Z's P link is exactly the repair,
+    // and the backstop must not reject it just because the edited node sat on a cycle before.
+    const service = await serviceFor([pyFile(Y, null, "y"), pyFileMulti(Z, [P, Y], "z"), pyFile(P, Z, "p")]);
+
+    expect(service.getTopologyPlan({ kind: "remove-edge", parentId: P, childId: Z })).toEqual({
+      ok: true,
+      fileEdits: [{ revisionId: Z, filePath: fileOf(Z), newDownRevisions: [Y], expectedDownRevisions: [P, Y] }],
+      appliedTouched: [],
+      summary: "stop zzzzzzzz revising pppppppp",
+    });
   });
 });
