@@ -781,8 +781,17 @@ export class MigrationService {
    * them, i.e. the state this whole plan was computed against — so the apply layer can refuse a
    * file that has since changed underneath it (see `TopologyFileEdit`). `graph.nodes[..]` is the
    * right source even for a COMPOSED edit: planning only ever writes to `edits`, never to the
-   * graph, so a node touched by two steps still reports the parents its file actually holds. */
+   * graph, so a node touched by two steps still reports the parents its file actually holds.
+   *
+   * Runs the cycle backstop first, on the FULL edit map — the per-op guards above are kept as-is
+   * (they give sharper, op-specific reasons for the cases they do catch), but only a post-edit
+   * ancestry walk sees a cycle closed through a link no edited file mentions. See
+   * `editedNodeOnCycle`. */
   private finalizePlan(graph: MigrationGraph, edits: EditMap, summary: string): TopologyPlan {
+    if (editedNodeOnCycle(graph, edits) !== null) {
+      return { ok: false, reason: "edit would create a cycle" };
+    }
+
     const fileEdits: TopologyFileEdit[] = [];
     for (const [revisionId, newDownRevisions] of edits) {
       const node = graph.nodes[revisionId];
@@ -899,9 +908,45 @@ function descendantsOf(graph: MigrationGraph, id: string): Set<string> {
 }
 
 /** `id`'s parent list as the plan has it so far: a pending edit if one exists, else what the file
- * currently says. Only ever called for real revision ids (edits are only ever made for those). */
+ * currently says. The planners themselves only ever pass real revision ids; the `?.`/`?? []` is for
+ * `editedNodeOnCycle`, whose ancestor walk can reach a GHOST parent — an id no file declares, which
+ * therefore has no parents of its own and simply ends that branch of the walk. */
 function currentParents(graph: MigrationGraph, edits: EditMap, id: string): string[] {
-  return edits.get(id) ?? graph.nodes[id].downRevisions;
+  return edits.get(id) ?? graph.nodes[id]?.downRevisions ?? [];
+}
+
+/**
+ * Cycle BACKSTOP over a complete edit map: returns an edited revision that would end up as its own
+ * ancestor once every edit lands, or null if none would.
+ *
+ * The per-op guards each reason about one op's own shape (is the target a descendant? is the
+ * dragged chain's head inside edgeTo's subtree?), which misses cycles closed by a link NO edited
+ * file even mentions. The verified case: A <- B <- D <- M with M also revising X. Inserting X's
+ * chain into the A -> B link plans X -> [A] and B -> [M], and M's untouched D parent then closes
+ * M -> B -> D -> M. Nothing short of walking the POST-EDIT ancestry can see that, so this runs over
+ * the finished edit map in `finalizePlan` and every op — current and future — inherits it.
+ *
+ * Deliberately scoped to EDITED nodes only, never a whole-graph acyclicity check: a broken repo can
+ * already contain a cyclic island (buildGraph and layoutGraph both tolerate one by design), and
+ * rejecting unrelated edits — or, worse, the remove-edge that REPAIRS such a cycle — because of it
+ * would be a regression. An edited node that sits on a pre-existing cycle the edit does not resolve
+ * is still reported, which is correct: applying it would write that cycle back out.
+ */
+function editedNodeOnCycle(graph: MigrationGraph, edits: EditMap): string | null {
+  for (const id of edits.keys()) {
+    // Fresh per start node: a shared visited set would let one node's exhausted walk hide a later
+    // node's route back to itself.
+    const visited = new Set<string>();
+    const stack = [...currentParents(graph, edits, id)];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      if (current === id) return id;
+      if (visited.has(current)) continue; // a cycle NOT through `id` — bounded, keep walking elsewhere
+      visited.add(current);
+      for (const parentId of currentParents(graph, edits, current)) stack.push(parentId);
+    }
+  }
+  return null;
 }
 
 /** Records the edits that splice `node` out from under its children: each child swaps `node` for

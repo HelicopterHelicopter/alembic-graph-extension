@@ -1786,4 +1786,79 @@ describe("MigrationService.getTopologyPlan", () => {
       expect(composed.expectedDownRevisions).toEqual([X, A]);
     }
   });
+
+  it("26. cycle backstop: a chain insert whose subtree head keeps an external parent below edgeTo", async () => {
+    // A <- B <- D <- M, plus X <- M. Dragging X's chain into the A -> B link passes every specific
+    // guard: X's descendants are {M}, which contains neither A nor B, and the chain has the single
+    // head M. The plan is X -> [A], B -> [M] — but M still revises D, so the pre-existing
+    // B -> D -> M path closes the loop M -> B -> D -> M. Only a whole-edits-map ancestry walk sees
+    // this, because the offending parent link (M -> D) belongs to no edited file.
+    const service = await serviceFor([
+      pyFile(A, null, "a"),
+      pyFile(B, A, "b"),
+      pyFile(D, B, "d"),
+      pyFileMulti(M, [D, X], "m"),
+      pyFile(X, null, "x"),
+    ]);
+
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: A, edgeTo: B, mode: "chain" }),
+    ).toEqual({ ok: false, reason: "edit would create a cycle" });
+  });
+
+  it("27. no false positive: the same drag is legal when the external parent is outside edgeTo's subtree", async () => {
+    // Same shape as 26 except M's other parent E hangs off A directly, not off B — so nothing
+    // leads from M back down to B and the insert is a legitimate reshaping.
+    const service = await serviceFor([
+      pyFile(A, null, "a"),
+      pyFile(B, A, "b"),
+      pyFile(E, A, "e"),
+      pyFileMulti(M, [E, X], "m"),
+      pyFile(X, null, "x"),
+    ]);
+
+    expect(
+      service.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: A, edgeTo: B, mode: "chain" }),
+    ).toEqual({
+      ok: true,
+      fileEdits: [
+        { revisionId: X, filePath: fileOf(X), newDownRevisions: [A], expectedDownRevisions: [] },
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [M], expectedDownRevisions: [A] },
+      ],
+      appliedTouched: [],
+      summary: "insert xxxxxxxx (+1 descendant) between aaaaaaaa and bbbbbbbb",
+    });
+  });
+
+  it("28. a pre-existing cyclic island elsewhere in the graph does not block an unrelated edit", async () => {
+    // P <-> Z is already broken on disk (buildGraph and layoutGraph both tolerate it). The backstop
+    // only walks EDITED nodes' ancestries, so a healthy move in another component is unaffected.
+    const service = await serviceFor([
+      pyFile(P, Z, "p"),
+      pyFile(Z, P, "z"),
+      pyFile(A, null, "a"),
+      pyFile(B, A, "b"),
+      pyFile(D, null, "d"),
+    ]);
+
+    expect(service.getTopologyPlan({ kind: "move-chain", nodeId: B, targetId: D })).toEqual({
+      ok: true,
+      fileEdits: [{ revisionId: B, filePath: fileOf(B), newDownRevisions: [D], expectedDownRevisions: [A] }],
+      appliedTouched: [],
+      summary: "move bbbbbbbb under dddddddd",
+    });
+  });
+
+  it("29. repairing a pre-existing cycle stays possible: remove-edge may leave the graph acyclic", async () => {
+    // Z revises (P, Y) and P revises Z — a real cycle. Dropping Z's P link is exactly the repair,
+    // and the backstop must not reject it just because the edited node sat on a cycle before.
+    const service = await serviceFor([pyFile(Y, null, "y"), pyFileMulti(Z, [P, Y], "z"), pyFile(P, Z, "p")]);
+
+    expect(service.getTopologyPlan({ kind: "remove-edge", parentId: P, childId: Z })).toEqual({
+      ok: true,
+      fileEdits: [{ revisionId: Z, filePath: fileOf(Z), newDownRevisions: [Y], expectedDownRevisions: [P, Y] }],
+      appliedTouched: [],
+      summary: "stop zzzzzzzz revising pppppppp",
+    });
+  });
 });
