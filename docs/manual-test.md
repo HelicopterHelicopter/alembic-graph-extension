@@ -417,8 +417,8 @@ path>/.venv/bin/python -m alembic"`. **Fixture mutations from this section must 
    would work locked too — it is a labeled button, not a gesture — but the banner wording quoted
    in step 2 is the unlocked one.)
 2. Confirm the green banner near the heads reads `drag one head onto another to merge ·` with an
-   underlined `Merge all 3 heads` button (not the plain 2-head `drag one head onto the other to
-   merge ⇄` wording).
+   underlined `Merge all 3 heads` button (not the plain 2-head `drag a head onto the other to
+   merge or move — ⌥/Alt moves 1 revision` wording).
 3. Click **Merge all 3 heads**. An input box appears, pre-filled `merge 3 heads` (not the pairwise
    `<a8> and <b8>` wording — that's 2-heads-only). Accept the default. Expect the same busy
    spinner → green success toast → file-watcher-triggered re-render flow as Task 14's pairwise

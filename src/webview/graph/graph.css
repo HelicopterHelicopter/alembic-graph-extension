@@ -458,6 +458,9 @@ body {
 }
 .alx-canvas-viewport--locked .alx-ghost {
   cursor: default;
+  /* Same reasoning as the card rule above: the ghost's own `touch-action: none` guards a repoint
+     drag that is unreachable while locked, so keep touch panning alive over ghosts too. */
+  touch-action: auto;
 }
 
 /* ---------- ghost-drag repoint (Task 15) ---------- */
