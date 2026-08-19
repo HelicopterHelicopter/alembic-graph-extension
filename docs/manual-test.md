@@ -104,10 +104,12 @@ watch, real host round-trip for the toolbar toggles).
    toggles; dot-grid canvas background; rounded revision cards with a 4px lane-colored left stripe,
    mono hash, bold message, dim `author · date` meta row; dashed red ghost card
    (`⚠ missing revision`); dashed red bezier edge into it plus a pulsing
-   `⚠ down_revision missing — drag the ghost to repair, or this card to move it` hint under the
+   `⚠ down_revision missing — click Edit in the toolbar to repair` hint under the
    broken card (two lines, never a third — a third would reach the lane below); a pulsing
-   green `drag one head onto the other to merge ⇄` box (3 heads on this fixture); badges HEAD
-   (green, ×3), MERGE (purple, ×1), BROKEN (red, ×1) in the card header.
+   green `editing locked — click Edit to drag · ` box with a `Merge all 3 heads` button (3 heads on
+   this fixture); badges HEAD (green, ×3), MERGE (purple, ×1), BROKEN (red, ×1) in the card header.
+   Both quoted strings are the **locked** variants: the graph opens with **Locked** active in the
+   toolbar (edit-mode lock), and this section is a fresh-open pass.
 3. Click a revision card: it gets the blue selected ring/background (`#1c8fd6` / `#093251`); click
    a different card, selection moves; nothing else re-renders/flickers.
 4. Click **Newest ↑** / **Newest ↓**: the whole card stack mirrors vertically (newest at top vs.
@@ -332,7 +334,9 @@ mutations from this section must be reverted** — run `git checkout -- fixtures
 stray `fixtures/*/fixture.db`) once you're done, before committing or handing off.
 
 1. Press F5, select **Run Extension (healthy fixture)** (2 heads: `3aebf1885b7d`/`4bfc02996c8e`),
-   set the override, then **Alembic Graph: Open Migration Graph**.
+   set the override, then **Alembic Graph: Open Migration Graph**. Click **Edit** in the graph
+   toolbar — the graph opens **Locked** (edit-mode lock), and every drag below is fully inert
+   until you do.
 2. Drag the `3aebf1885b7d` **add rate limiting** card by its header (not the message/meta text —
    anywhere on the card works) toward the `4bfc02996c8e` **search index (experimental)** card.
    Confirm, while the pointer is over it: the target card gets a bright green ring/glow, the
@@ -401,7 +405,10 @@ path>/.venv/bin/python -m alembic"`. **Fixture mutations from this section must 
 
 1. Press F5, select **Run Extension (broken fixture)** (3 real heads:
    `3aebf1885b7d`/`4bfc02996c8e`/`5c0d13aa7d9f`), set the override, then **Alembic Graph: Open
-   Migration Graph**.
+   Migration Graph**. Click **Edit** in the graph toolbar — the graph opens **Locked** (edit-mode
+   lock), and every drag below is fully inert until you do. (Step 3's **Merge all 3 heads** button
+   would work locked too — it is a labeled button, not a gesture — but the banner wording quoted
+   in step 2 is the unlocked one.)
 2. Confirm the green banner near the heads reads `drag one head onto another to merge ·` with an
    underlined `Merge all 3 heads` button (not the plain 2-head `drag one head onto the other to
    merge ⇄` wording).
@@ -440,6 +447,8 @@ stray `fixtures/*/fixture.db`) once you're done, before committing or handing of
 
 1. Press F5, select **Run Extension (broken fixture)** (3 heads: `3aebf1885b7d`, `4bfc02996c8e`,
    `5c0d13aa7d9f`; 1 problem), set the override, then **Alembic Graph: Open Migration Graph**.
+   Click **Edit** in the graph toolbar — the graph opens **Locked** (edit-mode lock), and every
+   drag below is fully inert until you do.
 2. Find the dashed red **⚠ missing revision** ghost card (hash `deadbeef0000`) and the
    `5c0d13aa7d9f` **add audit log** card just below it — it shows both `HEAD` and `BROKEN` badges
    and the pulsing hint "⚠ down_revision missing — drag the ghost to repair, or this card to move
@@ -529,13 +538,17 @@ handing off.
    Graph output"; Output shows the attempted command + ENOENT; the sidebar button re-enables (busy
    cleared in the finally). Repeat choosing **Preview SQL**: analogous "alembic upgrade --sql
    failed" path, no editor opens. Restore the override.
-7. Busy gating across webviews: start a **real** Upgrade (step 4) and, while the `⟳ working…`
-   spinner is up, confirm the sidebar button ignores clicks (dim, no pointer cursor, no second
-   modal) and dragging a head card in the graph panel does nothing. Both re-enable when the toast
-   lands. (The run is quick against sqlite — re-run `git checkout` + delete fixture.db between
-   attempts if you need a longer window, or just trust the harness checks above.)
-8. Merge-cancel lockout fix (Task 14 carry-over): in the graph panel drag one head onto the other,
-   then press **Escape** in the merge input box. Immediately drag the same head again: the drag
+7. Busy gating across webviews: first click **Edit** in the graph toolbar — the graph opens
+   **Locked** (edit-mode lock) and a locked drag does nothing for a reason that has nothing to do
+   with busy gating, which would make this step pass vacuously. Then start a **real** Upgrade
+   (step 4) and, while the `⟳ working…` spinner is up, confirm the sidebar button ignores clicks
+   (dim, no pointer cursor, no second modal) and dragging a head card in the graph panel does
+   nothing. Both re-enable when the toast lands. (The run is quick against sqlite — re-run
+   `git checkout` + delete fixture.db between attempts if you need a longer window, or just trust
+   the harness checks above.)
+8. Merge-cancel lockout fix (Task 14 carry-over): with the graph still in **Edit** mode (step 7),
+   in the graph panel drag one head onto the other, then press **Escape** in the merge input box.
+   Immediately drag the same head again: the drag
    starts right away (previously the webview's silent drop guard locked dragging out for up to
    30s after a cancelled input box).
 9. Open webview DevTools for both webviews and confirm no errors/CSP violations while repeating
@@ -1171,10 +1184,50 @@ override as Tasks 13–17: in the Extension Development Host, **Preferences: Ope
 steps say so individually), and at the end also `git clean -f fixtures/` and delete any
 `fixtures/*/fixture.db`, before committing or handing off.
 
+### Edit-mode lock
+
+The graph opens **Locked** and every mutating canvas GESTURE is inert until you click **Edit** —
+card drags (chain and ⌥ splice alike), ghost repoint drags, edge drops, and the edge "Remove link"
+menu. Labeled buttons and commands are deliberately NOT gated ("Merge all N heads", the ghost's
+Restore/Import, "+ New revision", the card context menu, every palette command): a labeled button
+cannot fire by accident, which is the only thing this lock guards against. Verify this subsection
+FIRST — every later subsection assumes you have unlocked.
+
+Nothing here mutates a fixture, so no `git checkout` is needed until the next subsection.
+
+1. Press F5, select **Run Extension (healthy fixture)**, then **Alembic Graph: Open Migration
+   Graph**. The toolbar's new toggle group (right of **Comfortable | Compact**) shows **Locked**
+   active. Drag any revision card: the gesture is FULLY inert — the card does not follow the
+   cursor, takes no drop shadow, no card anywhere gets a blue/green ring, no hint pill appears, and
+   nothing is posted. The cursor over a card is the plain arrow/pointer, never the grab hand.
+2. Confirm the locked wording, verbatim. The green 2-head banner reads
+   `editing locked — click Edit in the toolbar to merge or move`
+   (still two lines, never a third, in its fixed 250px box). Then press F5 on **Run Extension
+   (broken fixture)** and confirm the pulsing hint under the broken `5c0d13aa7d9f` card reads
+   `⚠ down_revision missing — click Edit in the toolbar to repair`
+   and that its 3-head banner reads
+   `editing locked — click Edit to drag · `
+   with the **Merge all 3 heads** button still beside it — the button is live while locked (click
+   it and the merge input box opens; press Escape to cancel), which is why that wording names
+   drags specifically.
+3. Still locked: right-click an EDGE — no menu appears at all (and no browser menu either).
+   Right-click a revision card — the full menu still opens (Upgrade to / Downgrade to / Preview SQL
+   / Copy revision id / Open file). Left-click a card — it still selects and opens the detail panel.
+   Zoom (wheel, −/+/Fit), pan/scroll, search, and keyboard nav all behave exactly as before.
+4. Click **Edit**. Repeat the drag from step 1: it now works — drop-target rings and the
+   cursor-following hint pill are back — and right-clicking an edge opens the **Remove link** item
+   again. Both banners and the broken hint revert to their unlocked wording.
+5. Close the graph tab entirely, then reopen it via **Alembic Graph: Open Migration Graph**: the
+   toolbar still shows **Edit** active, and a drag still works (the mode is persisted per workspace
+   in workspaceState, like Order/Density/Axis).
+6. Click **Locked** again: drags, edge drops, and the edge menu are gated exactly as in steps 1–3.
+
 ### Chain move and ⌥ splice (healthy fixture)
 
 1. Press F5, select **Run Extension (healthy fixture)** (11 revisions, 2 heads `3aebf1885b7d`/
-   `4bfc02996c8e`, merge node `29dae0774a6c`), then **Alembic Graph: Open Migration Graph**.
+   `4bfc02996c8e`, merge node `29dae0774a6c`), then **Alembic Graph: Open Migration Graph**. Click
+   **Edit** in the graph toolbar — the graph opens **Locked** (edit-mode lock), and every drag in
+   this subsection and the ones after it is fully inert until you do.
    Confirm the new affordances before dragging anything: EVERY revision card takes the grab cursor
    and starts a drag (before this task only the two heads and the ghost did); the green 2-head
    banner reads `drag a head onto the other to merge or move — ⌥/Alt moves 1 revision` (it wraps to
@@ -1330,6 +1383,8 @@ steps say so individually), and at the end also `git clean -f fixtures/` and del
 
 14. **Ghost drag still repairs every broken child.** Press F5, select **Run Extension (broken
     fixture)** (12 revisions, 3 heads, 1 problem), then **Alembic Graph: Open Migration Graph**.
+    Click **Edit** in the graph toolbar — this is a fresh window, so the graph is **Locked** again
+    (edit-mode lock) and both drags below are inert until you do.
     Drag the dashed red **⚠ missing revision** ghost card (`deadbeef0000`) onto `4bfc02996c8e`:
     Task 15's behavior is unchanged — EVERY real revision card rings blue (the ghost drag has no
     valid/invalid split and no chain semantics), there is no hint pill and no popover, and on drop
