@@ -775,13 +775,24 @@ export class MigrationService {
 
   /** Turns the accumulated per-revision parent lists into `fileEdits`, dropping any that would
    * rewrite a file to what it already says. An op whose every edit is such a no-op has nothing to
-   * apply, and is rejected rather than returned as an empty success. */
+   * apply, and is rejected rather than returned as an empty success.
+   *
+   * Each edit also carries `expectedDownRevisions` — the node's parents as the last scan read
+   * them, i.e. the state this whole plan was computed against — so the apply layer can refuse a
+   * file that has since changed underneath it (see `TopologyFileEdit`). `graph.nodes[..]` is the
+   * right source even for a COMPOSED edit: planning only ever writes to `edits`, never to the
+   * graph, so a node touched by two steps still reports the parents its file actually holds. */
   private finalizePlan(graph: MigrationGraph, edits: EditMap, summary: string): TopologyPlan {
     const fileEdits: TopologyFileEdit[] = [];
     for (const [revisionId, newDownRevisions] of edits) {
       const node = graph.nodes[revisionId];
       if (sameList(newDownRevisions, node.downRevisions)) continue;
-      fileEdits.push({ revisionId, filePath: node.filePath, newDownRevisions });
+      fileEdits.push({
+        revisionId,
+        filePath: node.filePath,
+        newDownRevisions,
+        expectedDownRevisions: node.downRevisions,
+      });
     }
     if (fileEdits.length === 0) return { ok: false, reason: "nothing to change" };
 

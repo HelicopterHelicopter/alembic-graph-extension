@@ -1414,7 +1414,7 @@ describe("MigrationService.getTopologyPlan", () => {
 
     expect(service.getTopologyPlan({ kind: "move-chain", nodeId: B, targetId: D })).toEqual({
       ok: true,
-      fileEdits: [{ revisionId: B, filePath: fileOf(B), newDownRevisions: [D] }],
+      fileEdits: [{ revisionId: B, filePath: fileOf(B), newDownRevisions: [D], expectedDownRevisions: [A] }],
       appliedTouched: [],
       summary: "move bbbbbbbb (+1 descendant) under dddddddd",
     });
@@ -1430,7 +1430,7 @@ describe("MigrationService.getTopologyPlan", () => {
 
     expect(service.getTopologyPlan({ kind: "move-chain", nodeId: M, targetId: D })).toEqual({
       ok: true,
-      fileEdits: [{ revisionId: M, filePath: fileOf(M), newDownRevisions: [D] }],
+      fileEdits: [{ revisionId: M, filePath: fileOf(M), newDownRevisions: [D], expectedDownRevisions: [A, B] }],
       appliedTouched: [],
       summary: "move mmmmmmmm under dddddddd",
     });
@@ -1474,8 +1474,8 @@ describe("MigrationService.getTopologyPlan", () => {
     expect(service.getTopologyPlan({ kind: "move-single", nodeId: B, targetId: D })).toEqual({
       ok: true,
       fileEdits: [
-        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A] },
-        { revisionId: B, filePath: fileOf(B), newDownRevisions: [D] },
+        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A], expectedDownRevisions: [B] },
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [D], expectedDownRevisions: [A] },
       ],
       appliedTouched: [],
       summary: "move bbbbbbbb alone under dddddddd, re-attaching 1 child",
@@ -1494,8 +1494,8 @@ describe("MigrationService.getTopologyPlan", () => {
     expect(service.getTopologyPlan({ kind: "move-single", nodeId: B, targetId: D })).toEqual({
       ok: true,
       fileEdits: [
-        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A] },
-        { revisionId: B, filePath: fileOf(B), newDownRevisions: [D] },
+        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A], expectedDownRevisions: [A, B] },
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [D], expectedDownRevisions: [A] },
       ],
       appliedTouched: [],
       summary: "move bbbbbbbb alone under dddddddd, re-attaching 1 child",
@@ -1508,8 +1508,8 @@ describe("MigrationService.getTopologyPlan", () => {
     expect(service.getTopologyPlan({ kind: "move-single", nodeId: A, targetId: D })).toEqual({
       ok: true,
       fileEdits: [
-        { revisionId: B, filePath: fileOf(B), newDownRevisions: [] },
-        { revisionId: A, filePath: fileOf(A), newDownRevisions: [D] },
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [], expectedDownRevisions: [A] },
+        { revisionId: A, filePath: fileOf(A), newDownRevisions: [D], expectedDownRevisions: [] },
       ],
       appliedTouched: [],
       summary: "move aaaaaaaa alone under dddddddd, re-attaching 1 child",
@@ -1522,8 +1522,8 @@ describe("MigrationService.getTopologyPlan", () => {
     expect(service.getTopologyPlan({ kind: "move-single", nodeId: B, targetId: C })).toEqual({
       ok: true,
       fileEdits: [
-        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A] },
-        { revisionId: B, filePath: fileOf(B), newDownRevisions: [C] },
+        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A], expectedDownRevisions: [B] },
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [C], expectedDownRevisions: [A] },
       ],
       appliedTouched: [],
       summary: "move bbbbbbbb alone under cccccccc, re-attaching 1 child",
@@ -1542,8 +1542,8 @@ describe("MigrationService.getTopologyPlan", () => {
     expect(service.getTopologyPlan({ kind: "move-single", nodeId: M, targetId: D })).toEqual({
       ok: true,
       fileEdits: [
-        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A, B] },
-        { revisionId: M, filePath: fileOf(M), newDownRevisions: [D] },
+        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A, B], expectedDownRevisions: [M] },
+        { revisionId: M, filePath: fileOf(M), newDownRevisions: [D], expectedDownRevisions: [A, B] },
       ],
       appliedTouched: [],
       summary: "move mmmmmmmm alone under dddddddd, re-attaching 1 child",
@@ -1564,8 +1564,8 @@ describe("MigrationService.getTopologyPlan", () => {
     ).toEqual({
       ok: true,
       fileEdits: [
-        { revisionId: X, filePath: fileOf(X), newDownRevisions: [A] },
-        { revisionId: B, filePath: fileOf(B), newDownRevisions: [Y] },
+        { revisionId: X, filePath: fileOf(X), newDownRevisions: [A], expectedDownRevisions: [] },
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [Y], expectedDownRevisions: [A] },
       ],
       appliedTouched: [],
       summary: "insert xxxxxxxx (+1 descendant) between aaaaaaaa and bbbbbbbb",
@@ -1621,8 +1621,8 @@ describe("MigrationService.getTopologyPlan", () => {
     ).toEqual({
       ok: true,
       fileEdits: [
-        { revisionId: C, filePath: fileOf(C), newDownRevisions: [P, X] },
-        { revisionId: X, filePath: fileOf(X), newDownRevisions: [A] },
+        { revisionId: C, filePath: fileOf(C), newDownRevisions: [P, X], expectedDownRevisions: [X, A] },
+        { revisionId: X, filePath: fileOf(X), newDownRevisions: [A], expectedDownRevisions: [P] },
       ],
       appliedTouched: [],
       summary: "insert xxxxxxxx between aaaaaaaa and cccccccc",
@@ -1645,7 +1645,7 @@ describe("MigrationService.getTopologyPlan", () => {
 
     expect(service.getTopologyPlan({ kind: "remove-edge", parentId: A, childId: M })).toEqual({
       ok: true,
-      fileEdits: [{ revisionId: M, filePath: fileOf(M), newDownRevisions: [B] }],
+      fileEdits: [{ revisionId: M, filePath: fileOf(M), newDownRevisions: [B], expectedDownRevisions: [A, B] }],
       appliedTouched: [],
       summary: "stop mmmmmmmm revising aaaaaaaa",
     });
@@ -1656,7 +1656,7 @@ describe("MigrationService.getTopologyPlan", () => {
 
     expect(service.getTopologyPlan({ kind: "remove-edge", parentId: A, childId: B })).toEqual({
       ok: true,
-      fileEdits: [{ revisionId: B, filePath: fileOf(B), newDownRevisions: [] }],
+      fileEdits: [{ revisionId: B, filePath: fileOf(B), newDownRevisions: [], expectedDownRevisions: [A] }],
       appliedTouched: [],
       summary: "stop bbbbbbbb revising aaaaaaaa (becomes a new base)",
     });
@@ -1667,7 +1667,7 @@ describe("MigrationService.getTopologyPlan", () => {
 
     expect(service.getTopologyPlan({ kind: "remove-edge", parentId: GHOST, childId: B })).toEqual({
       ok: true,
-      fileEdits: [{ revisionId: B, filePath: fileOf(B), newDownRevisions: [A] }],
+      fileEdits: [{ revisionId: B, filePath: fileOf(B), newDownRevisions: [A], expectedDownRevisions: [A, GHOST] }],
       appliedTouched: [],
       summary: "stop bbbbbbbb revising gggggggg",
     });
@@ -1730,9 +1730,9 @@ describe("MigrationService.getTopologyPlan", () => {
     if (singlePlan.ok) {
       expect(singlePlan.summary).toBe("move bbbbbbbb alone under dddddddd, re-attaching 2 children");
       expect(singlePlan.fileEdits).toEqual([
-        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A] },
-        { revisionId: E, filePath: fileOf(E), newDownRevisions: [A] },
-        { revisionId: B, filePath: fileOf(B), newDownRevisions: [D] },
+        { revisionId: C, filePath: fileOf(C), newDownRevisions: [A], expectedDownRevisions: [B] },
+        { revisionId: E, filePath: fileOf(E), newDownRevisions: [A], expectedDownRevisions: [B] },
+        { revisionId: B, filePath: fileOf(B), newDownRevisions: [D], expectedDownRevisions: [A] },
       ]);
     }
   });
@@ -1763,5 +1763,27 @@ describe("MigrationService.getTopologyPlan", () => {
     expect(
       service.getTopologyPlan({ kind: "insert-between", nodeId: B, edgeFrom: A, edgeTo: B, mode: "single" }),
     ).toEqual({ ok: false, reason: "cannot insert a revision into its own link" });
+  });
+
+  it("25. a COMPOSED edit's expectedDownRevisions are the file's original parents, not an intermediate", async () => {
+    // Same shape as 15: C revises (X, A), and insert-between single touches C twice — first the
+    // splice (X -> its own parent P, giving the intermediate [P, A]), then the insert (A -> X,
+    // giving the final [P, X]). The apply-time expectation must be neither of those: it is what
+    // C's FILE says today, [X, A], because that is what the guard in applyDownRevisionEdits
+    // compares the live buffer against.
+    const service = await serviceFor([
+      pyFile(P, null, "p"),
+      pyFile(X, P, "x"),
+      pyFile(A, null, "a"),
+      pyFileMulti(C, [X, A], "c"),
+    ]);
+
+    const plan = service.getTopologyPlan({ kind: "insert-between", nodeId: X, edgeFrom: A, edgeTo: C, mode: "single" });
+    expect(plan.ok).toBe(true);
+    if (plan.ok) {
+      const composed = plan.fileEdits.find((e) => e.revisionId === C)!;
+      expect(composed.newDownRevisions).toEqual([P, X]);
+      expect(composed.expectedDownRevisions).toEqual([X, A]);
+    }
   });
 });

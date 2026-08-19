@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeDownRevisionsRewrite } from "../../src/core/downRevisionEdit";
+import { computeDownRevisionsRewrite, readRevisionHeader } from "../../src/core/downRevisionEdit";
 
 describe("computeDownRevisionsRewrite", () => {
   it("1. scalar -> scalar: single quotes preserved, Revises: patched, byte-identical elsewhere", () => {
@@ -366,5 +366,81 @@ def upgrade() -> None:
     const result = computeDownRevisionsRewrite(src, ["bbb22222222"]);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.newSrc).toBe(expected);
+  });
+});
+
+describe("readRevisionHeader", () => {
+  it("1. down_revision = None -> an empty parent list (a base revision), not null", () => {
+    const src = `"""m"""
+revision = "child1"
+down_revision = None
+`;
+    expect(readRevisionHeader(src)).toEqual({ revisionId: "child1", downRevisions: [] });
+  });
+
+  it("2. scalar down_revision -> one parent", () => {
+    const src = `"""m"""
+revision = "child1"
+down_revision = 'aaa11111111'
+`;
+    expect(readRevisionHeader(src)).toEqual({ revisionId: "child1", downRevisions: ["aaa11111111"] });
+  });
+
+  it("3. tuple down_revision -> parents in source order (order is meaningful to the guard)", () => {
+    const src = `"""m"""
+revision = "merge1"
+down_revision = ("aaa11111111", "bbb22222222")
+`;
+    expect(readRevisionHeader(src)).toEqual({
+      revisionId: "merge1",
+      downRevisions: ["aaa11111111", "bbb22222222"],
+    });
+  });
+
+  it("4. annotated left-hand sides are read like plain ones", () => {
+    const src = `"""m"""
+revision: str = "child1"
+down_revision: Union[str, Sequence[str], None] = "aaa11111111"
+branch_labels: Union[str, Sequence[str], None] = None
+`;
+    expect(readRevisionHeader(src)).toEqual({ revisionId: "child1", downRevisions: ["aaa11111111"] });
+  });
+
+  it("5. CRLF source parses identically to LF", () => {
+    const src = ['"""m"""', 'revision = "child1"', 'down_revision = "aaa11111111"', ""].join("\r\n");
+    expect(readRevisionHeader(src)).toEqual({ revisionId: "child1", downRevisions: ["aaa11111111"] });
+  });
+
+  it("6. a Black-style multi-line tuple is folded into one parent list", () => {
+    const src = `"""m"""
+revision = "merge1"
+down_revision = (
+    "aaa11111111",  # first parent
+    "bbb22222222",
+)
+`;
+    expect(readRevisionHeader(src)).toEqual({
+      revisionId: "merge1",
+      downRevisions: ["aaa11111111", "bbb22222222"],
+    });
+  });
+
+  it("7. no revision assignment (not a migration file) -> null", () => {
+    expect(readRevisionHeader(`"""not a migration"""\nfrom alembic import op\n`)).toBeNull();
+  });
+
+  it("8. missing down_revision assignment -> an empty parent list, not null", () => {
+    const src = `"""m"""
+revision = "child1"
+`;
+    expect(readRevisionHeader(src)).toEqual({ revisionId: "child1", downRevisions: [] });
+  });
+
+  it("9. a leading BOM does not hide the header", () => {
+    const src = "\ufeff" + `"""m"""
+revision = "child1"
+down_revision = "aaa11111111"
+`;
+    expect(readRevisionHeader(src)).toEqual({ revisionId: "child1", downRevisions: ["aaa11111111"] });
   });
 });

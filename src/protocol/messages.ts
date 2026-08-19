@@ -37,6 +37,25 @@ export interface TopologyFileEdit {
   revisionId: string;
   filePath: string;
   newDownRevisions: string[];
+  /**
+   * The parent list this file had AT PLAN TIME, straight from the scanned graph node. The apply
+   * layer re-reads the live buffer and refuses to rewrite a file whose current `down_revision` no
+   * longer matches, which closes two windows the plan cannot see: an UNSAVED hand-edit (the plan
+   * is built from the last saved scan, but `applyDownRevisionEdits` writes the live buffer), and a
+   * SCAN that has gone stale (a git checkout or a formatter writing inside the watcher debounce).
+   * Both matter beyond losing one keystroke: a composed edit's `newDownRevisions` was computed
+   * against parents the file may no longer have, so applying it anyway would write a list derived
+   * from a topology that no longer exists.
+   *
+   * For a composed edit (insert-between single mode, where `edgeTo` carries both a splice and a
+   * swap) this is still the node's ORIGINAL parents — the file's own current text — never the
+   * intermediate value the composition passed through.
+   *
+   * Deliberately NOT a wire concern: `TopologyPlan` never crosses `postMessage` (planning stays
+   * host-side; the webview only ever sends a `TopologyOp`), so this field is compile-checked
+   * end to end rather than versioned.
+   */
+  expectedDownRevisions: string[];
 }
 
 /**

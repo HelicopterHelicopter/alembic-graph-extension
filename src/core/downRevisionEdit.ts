@@ -18,10 +18,39 @@
  * is carried over (re-attached with a two-space separator). This keeps the rendered value canonical
  * — reformatting is the caller's/Black's job, not this module's.
  */
-import { commentStartIndex, locateDownRevisionAssignment, matchModuleAssignment } from "./parser";
+import { commentStartIndex, locateDownRevisionAssignment, matchModuleAssignment, parseRevisionSource } from "./parser";
 import { QUOTED_RE, computeCommentRanges, isInRange, splitEol, splitRawLines } from "./repoint";
 
 export type DownRevisionsRewriteResult = { ok: true; newSrc: string } | { ok: false; reason: string };
+
+/** The identity half of a migration file's header: which revision it declares and which parents it
+ * currently claims. `downRevisions` is order-sensitive — a `down_revision` tuple's order is
+ * meaningful, so a reorder is a real change. */
+export interface RevisionHeader {
+  revisionId: string;
+  downRevisions: string[];
+}
+
+/**
+ * Reads a migration file's `revision` / `down_revision` pair out of full source text, or null when
+ * the text declares no `revision` at all (an env.py, a truncated buffer, a file mid-edit).
+ * A missing `down_revision` and an explicit `None` both read as `[]`, matching how the scanner
+ * treats a base revision.
+ *
+ * A deliberately thin delegation to `parseRevisionSource` rather than a second, narrower scanner:
+ * `MigrationService.doRefresh` builds `cachedGraph` from that exact function, so anything comparing
+ * a live buffer against a planned edit's expectations (services/repoint.ts's `applyDownRevisionEdits`)
+ * has to parse it the same way or the comparison is not apples-to-apples — a second parser that
+ * disagreed on, say, a Black-wrapped tuple would reject valid edits. The wrapper exists only to
+ * drop `parseRevisionSource`'s file-oriented fields (message, dates, line numbers) and its required
+ * `filePath` argument, which a caller holding just a buffer has no use for.
+ */
+export function readRevisionHeader(src: string): RevisionHeader | null {
+  // `filePath` only ever comes back out on the returned object, which is discarded here.
+  const parsed = parseRevisionSource(src, "");
+  if (parsed === null) return null;
+  return { revisionId: parsed.revision, downRevisions: parsed.downRevisions };
+}
 
 const BOM = "\ufeff";
 

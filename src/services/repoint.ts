@@ -15,9 +15,17 @@
  *   1. READ + VALIDATE every file first — each entry point's own loop below, differing only in
  *      which pure transform computes the new source. Opens each document fresh (NOT
  *      `MigrationService`'s cached raw content: the file could have changed on disk since the last
- *      scan) and computes its new source. A read error or a transform rejection aborts there, with
- *      NO file touched — this is where the realistic failures live (a hand-edited file that no
- *      longer contains the expected down_revision, a deleted file, ...).
+ *      scan) and computes its new source. A read error, a transform rejection, or a file that no
+ *      longer matches what the plan was built from aborts there, with NO file touched — this is
+ *      where the realistic failures live (a deleted file, a hand edit, a stale scan, ...).
+ *
+ *      That last case is the one the plans themselves cannot see, because both are computed from
+ *      the last SAVED scan while this layer writes the LIVE buffer. Each entry point guards it
+ *      differently: `applyRepoint` implicitly, since `computeRepointedSource` fails outright when
+ *      the file no longer references `missingId`; `applyDownRevisionEdits` explicitly, by comparing
+ *      the buffer's current header against the plan's `expectedDownRevisions` — a whole-value
+ *      rewrite would otherwise happily replace whatever it found, silently discarding an unsaved
+ *      hand-edit and applying a composition computed against parents the file no longer has.
  *   2. APPLY one combined `WorkspaceEdit` covering every file. VS Code applies it as a single
  *      operation (`applyEdit` returning false rejects the lot).
  *   3. SAVE each document, checking the result. A save failure here CAN still leave earlier files
@@ -33,7 +41,7 @@
  */
 import * as vscode from "vscode";
 import { computeRepointedSource } from "../core/repoint";
-import { computeDownRevisionsRewrite } from "../core/downRevisionEdit";
+import { computeDownRevisionsRewrite, readRevisionHeader } from "../core/downRevisionEdit";
 import type { TopologyFileEdit } from "../protocol/messages";
 
 export interface RepointEdit {
@@ -87,8 +95,8 @@ export async function applyRepoint(
  * edit with `computeDownRevisionsRewrite`, which replaces the file's whole `down_revision` value
  * with `edit.newDownRevisions` (`[]` = `None`), touching nothing until all of them pass. The plan's
  * edits are already deduplicated, cycle-guarded and composed by `getTopologyPlan` — this layer
- * treats them as opaque and only cares whether each file still parses into a rewritable
- * assignment.
+ * treats them as opaque and only cares whether each file still parses into a rewritable assignment
+ * AND still says what the plan expected.
  */
 export async function applyDownRevisionEdits(
   edits: TopologyFileEdit[],
@@ -100,6 +108,18 @@ export async function applyDownRevisionEdits(
       const uri = vscode.Uri.file(edit.filePath);
       const document = await vscode.workspace.openTextDocument(uri);
       const src = document.getText();
+
+      // The staleness guard (see the module comment). Rejecting the WHOLE batch — not just this
+      // file — is the point: a topology op's edits are one atomic reshaping, and applying the
+      // subset that still matches would leave the graph in a shape nobody planned or consented to.
+      const header = readRevisionHeader(src);
+      const matches =
+        header !== null &&
+        header.revisionId === edit.revisionId &&
+        sameIds(header.downRevisions, edit.expectedDownRevisions);
+      if (!matches) {
+        return { ok: false, reason: `${edit.revisionId.slice(0, 8)}: file changed since the last scan — try again` };
+      }
 
       const result = computeDownRevisionsRewrite(src, edit.newDownRevisions);
       if (!result.ok) {
@@ -113,6 +133,16 @@ export async function applyDownRevisionEdits(
   }
 
   return applyPreparedEdits(prepared);
+}
+
+/** Order-SENSITIVE parent-list comparison for the staleness guard: a `down_revision` tuple's order
+ * is part of its meaning (alembic reports the first parent as the primary one, and the graph draws
+ * it that way), so a reordered list is a changed file, not an equivalent one. Same element-wise
+ * comparison `MigrationService`'s own `sameList` makes when it decides an edit is a no-op — kept
+ * local rather than shared because this module must not import the service that produced the
+ * plan. */
+function sameIds(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
 }
 
 /** Phases 2+3 (see the module comment) — the write half both entry points share, unchanged by
