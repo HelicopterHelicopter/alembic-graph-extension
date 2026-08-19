@@ -8,7 +8,7 @@
  * under both the extension-host tsconfig and the webview tsconfig.
  *
  * Byte-identical rule: only the `down_revision` assignment's line range and (best-effort) the FIRST
- * docstring `Revises:` line change; every other byte of the caller's `src` — BOM, CRLF/CR/LF mix,
+ * `Revises:` line ABOVE it change; every other byte of the caller's `src` — BOM, CRLF/CR/LF mix,
  * a missing final newline — survives untouched, because the reconstruction slices the caller's own
  * raw text via `splitRawLines` rather than round-tripping through parser.ts's normalizing split.
  *
@@ -77,15 +77,31 @@ function renderValue(ids: string[], quote: string): string {
 
 /**
  * Best-effort rewrite of the module docstring's `Revises:` line to exactly `newIds`: the FIRST
- * such line wins (later ones are prose, e.g. a hand-written note, and are left alone), its prefix
- * and its own line ending are preserved, and an empty `newIds` leaves a bare `Revises:` with no
- * trailing whitespace. Returns `src` unchanged when the file has no `Revises:` line at all
+ * such line ABOVE `beforeLine` wins (later ones are prose, e.g. a hand-written note, and are left
+ * alone), its prefix and its own line ending are preserved, and an empty `newIds` leaves a bare
+ * `Revises:` with no trailing whitespace. Returns `src` unchanged when no line qualifies
  * (docstring absent or non-standard); per the spec this patch must never fail the operation.
+ *
+ * `beforeLine` is the `down_revision` assignment's own first line, and that bound is what keeps a
+ * cosmetic docstring patch from rewriting executable migration code. In every standard alembic
+ * layout the module docstring precedes the module-level assignments and the `upgrade()` /
+ * `downgrade()` bodies follow them — and those bodies routinely contain triple-quoted SQL, where a
+ * line like `Revises: <id>` (a copied ticket note, a comment) can easily appear. Unbounded, a file
+ * whose docstring has NO `Revises:` line at all would let that SQL line become the first match and
+ * be silently rewritten. Unlike `core/repoint.ts`'s token-swapping counterpart, this rewrite has no
+ * "must mention the id being replaced" precondition to fall back on, so the bound is the only
+ * thing standing between a decoy line and a corrupted migration.
+ *
+ * Accepted limitation: a module-level string constant ABOVE the assignment that happens to contain
+ * such a line is still in bounds and can still be hit. Ruling that out would need real
+ * docstring-span parsing, which isn't warranted for a best-effort cosmetic patch — the layout it
+ * would protect against does not occur in alembic-generated files.
  */
-function patchRevisesLineFull(src: string, newIds: string[]): string {
+function patchRevisesLineFull(src: string, newIds: string[], beforeLine: number): string {
   const rawLines = splitRawLines(src);
+  const limit = Math.min(beforeLine, rawLines.length);
 
-  for (let i = 0; i < rawLines.length; i++) {
+  for (let i = 0; i < limit; i++) {
     const [content, eol] = splitEol(rawLines[i]);
     const m = /^(\s*Revises:\s*)(.*)$/.exec(content);
     if (!m) continue;
@@ -138,5 +154,8 @@ export function computeDownRevisionsRewrite(src: string, newIds: string[]): Down
 
   const newSrc = rawLines.slice(0, startLine).join("") + newLine + rawLines.slice(endLine + 1).join("");
 
-  return { ok: true, newSrc: patchRevisesLineFull(newSrc, newIds) };
+  // `startLine` indexes `newSrc` just as validly as it indexes `src`: the block collapse only ever
+  // rewrites lines at or after `startLine`, leaving every line above it — the docstring — untouched
+  // and at its original index.
+  return { ok: true, newSrc: patchRevisesLineFull(newSrc, newIds, startLine) };
 }

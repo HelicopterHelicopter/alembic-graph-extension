@@ -256,4 +256,31 @@ down_revision = "4bfc02996c8e"
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.newSrc).toBe(expected);
   });
+  it("13. Revises: patching is bounded to lines above the assignment: an upgrade() SQL decoy is untouched", () => {
+    const src = `"""m
+
+Revision ID: child1
+Create Date: 2026-05-12 10:12:00.000000
+
+"""
+from alembic import op
+
+revision = "child1"
+down_revision = "deadbeef0000"
+
+
+def upgrade() -> None:
+    op.execute(
+        """
+        Revises: deadbeef0000
+        """
+    )
+`;
+    // Byte-identical everywhere except the quoted member: the SQL body must survive intact even
+    // though its decoy line names the very id being repointed.
+    const expected = src.replace('down_revision = "deadbeef0000"', 'down_revision = "4bfc02996c8e"');
+    const result = computeRepointedSource(src, "deadbeef0000", "4bfc02996c8e");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.newSrc).toBe(expected);
+  });
 });

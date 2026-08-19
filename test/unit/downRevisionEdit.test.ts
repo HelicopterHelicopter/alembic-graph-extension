@@ -311,4 +311,60 @@ down_revision = "bbb22222222"
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.newSrc).toBe(expected);
   });
+  it("17. no docstring Revises: line: a Revises:-looking line inside an upgrade() SQL body is NOT touched", () => {
+    const src = `"""add audit log
+
+Revision ID: 5c0d13aa7d9f
+Create Date: 2026-05-12 10:12:00.000000
+
+"""
+from alembic import op
+
+revision = "5c0d13aa7d9f"
+down_revision = "aaa11111111"
+
+
+def upgrade() -> None:
+    op.execute(
+        """
+        -- quoted verbatim from the ticket:
+        Revises: zzz11111111
+        """
+    )
+`;
+    // Byte-identical everywhere except the assignment itself: the SQL body must survive intact.
+    const expected = src.replace('down_revision = "aaa11111111"', 'down_revision = "bbb22222222"');
+    const result = computeDownRevisionsRewrite(src, ["bbb22222222"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.newSrc).toBe(expected);
+  });
+
+  it("18. docstring Revises: present: it is patched and the same SQL decoy below stays untouched", () => {
+    const src = `"""add audit log
+
+Revision ID: 5c0d13aa7d9f
+Revises: aaa11111111
+Create Date: 2026-05-12 10:12:00.000000
+
+"""
+from alembic import op
+
+revision = "5c0d13aa7d9f"
+down_revision = "aaa11111111"
+
+
+def upgrade() -> None:
+    op.execute(
+        """
+        Revises: aaa11111111
+        """
+    )
+`;
+    const expected = src
+      .replace("Revises: aaa11111111", "Revises: bbb22222222")
+      .replace('down_revision = "aaa11111111"', 'down_revision = "bbb22222222"');
+    const result = computeDownRevisionsRewrite(src, ["bbb22222222"]);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.newSrc).toBe(expected);
+  });
 });

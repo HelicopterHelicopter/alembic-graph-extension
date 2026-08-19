@@ -97,14 +97,23 @@ export function splitEol(line: string): [string, string] {
  * Best-effort patch of the module docstring's `Revises:` line (comma-separated lists supported):
  * replaces the standalone `missingId` token with `targetId`, preserving every other character on
  * the line (and every other line in the file) exactly. A no-op — returning `src` unchanged — when
- * no `Revises:` line is found at all (docstring absent) or it doesn't happen to mention
+ * no qualifying `Revises:` line is found (docstring absent) or none of them happens to mention
  * `missingId`; per the spec this patch must never fail the overall operation.
+ *
+ * Only lines ABOVE `beforeLine` — the `down_revision` assignment's own first line — are candidates,
+ * for the same reason `core/downRevisionEdit.ts`'s `patchRevisesLineFull` is bounded: the docstring
+ * precedes the module assignments in every standard alembic layout, and the `upgrade()` /
+ * `downgrade()` bodies that follow them routinely hold triple-quoted SQL where a `Revises: <id>`
+ * line can appear as a copied note. Here the extra `missingId`-token requirement already made an
+ * accidental hit near-impossible (the decoy would have to name the exact broken id being repaired);
+ * the bound makes it impossible.
  */
-function patchRevisesLine(src: string, missingId: string, targetId: string): string {
+function patchRevisesLine(src: string, missingId: string, targetId: string, beforeLine: number): string {
   const rawLines = splitRawLines(src);
   const tokenRe = new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(missingId)}(?![A-Za-z0-9_])`);
+  const limit = Math.min(beforeLine, rawLines.length);
 
-  for (let i = 0; i < rawLines.length; i++) {
+  for (let i = 0; i < limit; i++) {
     const [content, eol] = splitEol(rawLines[i]);
     const m = /^(\s*Revises:\s*)(.*)$/.exec(content);
     if (!m) continue;
@@ -114,7 +123,7 @@ function patchRevisesLine(src: string, missingId: string, targetId: string): str
     rawLines[i] = prefix + newRest + eol;
     return rawLines.join("");
   }
-  return src; // no Revises: line mentions missingId — docstring absent (or non-standard); leave untouched
+  return src; // no in-bounds Revises: line mentions missingId — docstring absent (or non-standard)
 }
 
 /**
@@ -159,5 +168,8 @@ export function computeRepointedSource(src: string, missingId: string, targetId:
 
   const newSrc = rawLines.slice(0, startLine).join("") + newBlock + rawLines.slice(endLine + 1).join("");
 
-  return { ok: true, newSrc: patchRevisesLine(newSrc, missingId, targetId) };
+  // `startLine` indexes `newSrc` just as validly as it indexes `src`: the substitution above only
+  // rewrites bytes inside the assignment's own line range, so every line above it — the docstring —
+  // keeps both its content and its index.
+  return { ok: true, newSrc: patchRevisesLine(newSrc, missingId, targetId, startLine) };
 }
