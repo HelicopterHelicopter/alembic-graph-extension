@@ -15,6 +15,12 @@ graph.
   left-to-right layout (root left, heads right — the default, so a wide editor tab isn't wasted) and
   the original top-to-bottom layout; **Order** adapts to match (`Newest →`/`Newest ←` horizontal,
   `Newest ↓`/`Newest ↑` vertical).
+- **Freeform topology editing** — drag any revision card onto another to re-parent it (the whole
+  descendant chain moves; hold ⌥/Alt to splice out a single revision), drop a card onto an edge to
+  insert it between two revisions, or right-click an edge to **Remove link** (break a merge, or
+  detach a revision into a new base). Edits touching already-applied revisions ask for confirmation,
+  and each edit is a single undo step. The graph **opens Locked**: click **Edit** in the toolbar to
+  enable drag gestures (the choice persists per workspace).
 - **Drag to merge** two heads onto each other to run `alembic merge`, or click **Merge all N
   heads** in the banner (shown once there are 3+ heads) to merge every current head at once — an
   N-way "octopus" merge with a single tuple `down_revision`, exactly like `alembic merge rev1 rev2
