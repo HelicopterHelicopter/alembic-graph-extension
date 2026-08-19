@@ -4,6 +4,13 @@ Steps that can only be verified by actually running the extension in the VS Code
 Development Host (F5) — things vitest can't reach. Each task appends its own section as
 functionality lands; run `npm run build` first (or let the `npm: build` preLaunchTask do it).
 
+Applies to every section below: **the graph opens Locked** (edit-mode lock) — click **Edit** in the
+graph toolbar before any step that drags a card, a ghost, or onto an edge, and before any step that
+right-clicks an edge. Locked, those gestures are fully inert by design, so a step that assumes them
+will look broken instead of failing. Steps run against `harness/graph.html` need no unlock (the
+harness seeds its mock state unlocked); sections that additionally mutate `fixtures/` name their own
+`git checkout -- fixtures/` revert.
+
 ## Task 6: discovery + migration scan service
 
 Launch config: **Run Extension (broken fixture)** (`.vscode/launch.json`) — opens
@@ -988,10 +995,12 @@ against the real built webview (`harness/graph.html`).
    Press **↓**/**↑**: selection moves across lanes (down = next lane, up = previous lane) — the
    inverse mapping of vertical's ←/→. At the edge of the graph, the unavailable direction does
    nothing, same as vertical.
-8. With 2+ heads visible (the broken fixture has 3), confirm the green **drag one head onto the
-   other to merge ⇄** hint sits beside the pair of heads (not overlapping either card, not clipped
-   off the edge of the canvas) — to their left under the default `Newest →`, flipping to their right
-   under `Newest ←`.
+8. With 2+ heads visible (the broken fixture has 3, so this is the wider multi-head banner),
+   confirm the green `drag one head onto another to merge · ` hint — with its `Merge all 3 heads`
+   button — sits beside the heads (not overlapping any card, not clipped off the edge of the
+   canvas) — to their left under the default `Newest →`, flipping to their right under `Newest ←`.
+   You unlocked in step 6, so this is the unlocked wording; locked it reads
+   `editing locked — click Edit to drag · ` in the same box, with the same button.
 9. Toggle **Compact** density in horizontal mode: cards shrink, lanes move closer together
    vertically, and — for the broken revision's **⚠ down_revision missing — drag the ghost to repair,
    or this card to move it** hint below its card — confirm the hint text still wraps to exactly two
@@ -1199,7 +1208,8 @@ Nothing here mutates a fixture, so no `git checkout` is needed until the next su
    Graph**. The toolbar's new toggle group (right of **Comfortable | Compact**) shows **Locked**
    active. Drag any revision card: the gesture is FULLY inert — the card does not follow the
    cursor, takes no drop shadow, no card anywhere gets a blue/green ring, no hint pill appears, and
-   nothing is posted. The cursor over a card is the plain arrow/pointer, never the grab hand.
+   nothing is posted. The cursor over a card is the pointing-hand (`pointer`) cursor, never the
+   grab hand.
 2. Confirm the locked wording, verbatim. The green 2-head banner reads
    `editing locked — click Edit in the toolbar to merge or move`
    (still two lines, never a third, in its fixed 250px box). Then press F5 on **Run Extension

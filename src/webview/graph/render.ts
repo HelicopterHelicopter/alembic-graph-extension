@@ -865,7 +865,9 @@ function buildMergeHint(
   // so the locked wording names DRAGS specifically rather than "editing is off". Saying the latter
   // next to a working button would read as a contradiction. Same two-line budget as the 2-head
   // banner, in the wider 300px `--multi` box; the trailing space is the separator before the button.
-  text.textContent = state.ui.editLocked ? "editing locked — click Edit to drag · " : "drag one head onto another to merge · ";
+  text.textContent = state.ui.editLocked
+    ? "editing locked — click Edit to drag · "
+    : "drag one head onto another to merge · ";
   hint.append(text);
 
   const headIds = state.heads.map((h) => h.id);

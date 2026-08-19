@@ -451,6 +451,10 @@ body {
    all: that class is only ever applied by a drag in progress, which is unreachable while locked. */
 .alx-canvas-viewport--locked .alx-card--draggable {
   cursor: pointer;
+  /* `.alx-card--draggable`'s `touch-action: none` exists to stop the browser stealing a drag as a
+     scroll gesture. Locked there is no drag to steal, so keeping it would turn every card into a
+     dead zone for touch/trackpad panning of the canvas — hand those gestures back. */
+  touch-action: auto;
 }
 .alx-canvas-viewport--locked .alx-ghost {
   cursor: default;

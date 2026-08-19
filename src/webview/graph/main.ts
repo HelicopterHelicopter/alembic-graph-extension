@@ -549,12 +549,16 @@ function visibleEdgeTwin(viewport: HTMLElement, hit: SVGElement): SVGPathElement
  * that receives pointer events at all (graph.css).
  *
  * Suppressed while a drag is active: the drag machine owns edge highlighting then, with its own
- * `alx-edge--drop-target` on whichever edge is a legal drop. `pointerout` is deliberately NOT gated
- * the same way — it must stay able to clean up a highlight applied before the drag started.
+ * `alx-edge--drop-target` on whichever edge is a legal drop. Suppressed while the edit-mode lock is
+ * on for a different reason: BOTH things this highlight advertises are gated when locked (the edge
+ * drop can't start, and the right-click "Remove link" menu doesn't open), so lighting the edge up
+ * would be a false affordance — it would promise two actions that then silently do nothing.
+ * `pointerout` is deliberately NOT gated by either condition — it must stay able to clean up a
+ * highlight applied before the drag started, or before the user re-locked from the toolbar.
  */
 function attachEdgeHover(viewport: HTMLElement): void {
   viewport.addEventListener("pointerover", (e: PointerEvent) => {
-    if (dragActive) return;
+    if (dragActive || isEditLocked()) return;
     const hit = (e.target as Element).closest<SVGElement>(".alx-edge-hit");
     if (!hit) return;
     visibleEdgeTwin(viewport, hit)?.classList.add("alx-edge--hover");
