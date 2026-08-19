@@ -440,6 +440,22 @@ body {
   box-shadow: 0 14px 30px rgba(0, 0, 0, 0.6);
 }
 
+/* ---------- edit-mode lock ---------- */
+/* While locked (render.ts puts the modifier on the canvas viewport, from UiPrefs.editLocked), no
+   drag of either kind can start — dnd.ts returns straight out of pointerdown — so the `grab`
+   affordance above would be promising a gesture that does nothing. Revision cards take `pointer`
+   instead: click-to-select is still live and is the one thing a card does while locked. Ghost cards
+   have nothing clickable but their own selection, so they read as plain `default`.
+   Descendant selectors (0,2,0) outrank the base `.alx-card--draggable`/`.alx-ghost` rules (0,1,0),
+   so no !important is needed. `.alx-card--dragging`'s `grabbing` cursor needs no locked override at
+   all: that class is only ever applied by a drag in progress, which is unreachable while locked. */
+.alx-canvas-viewport--locked .alx-card--draggable {
+  cursor: pointer;
+}
+.alx-canvas-viewport--locked .alx-ghost {
+  cursor: default;
+}
+
 /* ---------- ghost-drag repoint (Task 15) ---------- */
 /* `.alx-card--freeform-target` (freeform topology drag) shares this declaration rather than
    duplicating it: dropping a dragged revision onto a card re-points it exactly like a ghost repoint

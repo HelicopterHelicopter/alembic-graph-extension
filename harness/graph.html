@@ -129,6 +129,10 @@
         respondToUiPatch({ density: message.density });
       } else if (message && message.type === "setAxis") {
         respondToUiPatch({ axis: message.axis });
+      } else if (message && message.type === "setEditLocked") {
+        // Edit-mode lock: same client-side ui patch as the toggles above, so the toolbar's
+        // Locked | Edit toggle round-trips standalone here just like it does against the real host.
+        respondToUiPatch({ editLocked: message.editLocked });
       } else if (message && message.type === "expandCollapse") {
         respondToUiPatch({ expandCollapsed: !currentState?.ui.expandCollapsed });
       } else if (message && message.type === "merge") {
@@ -215,9 +219,17 @@
         // (already-correct, all-pending) rest.
         const seeded = seedGhostBlame();
         const ghostBlame = seeded ? { ...(state.ghostBlame ?? {}), ...seeded } : (state.ghostBlame ?? {});
+        // Edit-mode lock: the harness exists to exercise GESTURES, and the real default is LOCKED
+        // (extension.ts's DEFAULT_UI_PREFS), which would make every drag here inert — so seed it
+        // unlocked. Placed before `...restored` on purpose: this is a default, not an override, so
+        // a seeded persisted snapshot replaying `editLocked` through the ready handshake still
+        // wins, exactly as MigrationService.applyUiPrefs would resolve it against the host's prefs.
+        // Written here rather than in state.json because that file is a regenerated dump
+        // (`node scripts/dump-state.mjs`) and would carry the locked default back in.
+        const ui = { ...state.ui, editLocked: false };
         currentState = restored
-          ? { ...state, ui: { ...state.ui, ...restored }, ghostBlame }
-          : { ...state, ghostBlame };
+          ? { ...state, ui: { ...ui, ...restored }, ghostBlame }
+          : { ...state, ui, ghostBlame };
         window.postMessage({ type: "state", state: currentState }, "*");
       })
       .catch((err) => {

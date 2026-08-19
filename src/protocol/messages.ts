@@ -63,6 +63,17 @@ export interface UiPrefs {
    * `newest-top` puts it on the LEFT — see metrics.ts's `nodeXY` for the exact mapping.
    */
   axis: "vertical" | "horizontal";
+  /**
+   * Edit-mode lock for the graph webview. `true` (the default — the graph always OPENS locked)
+   * makes every mutating canvas GESTURE inert: card drags (chain move and ⌥/Alt splice alike),
+   * ghost repoint drags, edge drops, and the edge context menu's "Remove link". Clicks, selection,
+   * zoom, pan, keyboard nav, every labeled button ("Merge all N heads", ghost Restore/Import,
+   * "+ New revision"), the card context menu, and every palette command stay live — a labeled
+   * button cannot fire by accident, so this is an accident guard against a 4px drag rewriting
+   * migration files, not a permissions system. Persisted per-workspace exactly like the prefs
+   * above (workspaceState + the webview's own `setState` snapshot, converged by `applyUiPrefs`).
+   */
+  editLocked: boolean;
 }
 
 export interface AppState {
@@ -158,6 +169,10 @@ export type WebviewToHostMessage =
   | { type: "setOrientation"; order: UiPrefs["order"] }
   | { type: "setDensity"; density: UiPrefs["density"] }
   | { type: "setAxis"; axis: UiPrefs["axis"] }
+  // Edit-mode lock task: the toolbar's Locked | Edit toggle. Posted with no optimistic webview-side
+  // update — the host flips the pref and re-emits state, exactly like setAxis/setDensity above, so
+  // there is only ever one authority for what the lock currently is.
+  | { type: "setEditLocked"; editLocked: boolean }
   | { type: "expandCollapse" }
   | { type: "openFile"; id: string }
   | { type: "openGraph" }   // sidebar only

@@ -20,7 +20,9 @@ function loadBrokenFiles(): { path: string; content: string }[] {
 }
 
 const DEFAULT_CONFIG = { laneColorA: "#4aa3ff", laneColorB: "#c586c0", showSqlPreview: true, collapseThreshold: 20 };
-const DEFAULT_UI: UiPrefs = { order: "newest-bottom", density: "comfortable", expandCollapsed: false, axis: "horizontal" };
+// `editLocked: true` mirrors extension.ts's DEFAULT_UI_PREFS: the graph opens LOCKED, so every
+// suite below that asserts on a freshly-emitted `state.ui` sees the locked default.
+const DEFAULT_UI: UiPrefs = { order: "newest-bottom", density: "comfortable", expandCollapsed: false, axis: "horizontal", editLocked: true };
 // `state.project` only ever carries label/iniPath (see doRefresh's AppState literal) — kept
 // separate from `DEFAULT_VERSIONS_DIR` below so `expect(state!.project).toEqual(DEFAULT_PROJECT)`
 // isn't broken by a field the emitted state never includes.
@@ -433,6 +435,24 @@ describe("MigrationService.setOrder / setDensity", () => {
     expect(newState.layout).toBe(layoutBefore); // same reference: no re-layout
     expect(deps.listVersionFiles).toHaveBeenCalledTimes(1); // no re-read
   });
+
+  it("5d. setEditLocked emits updated ui, persists prefs, and leaves the layout object reference unchanged", async () => {
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+    const layoutBefore = service.getState()!.layout;
+
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+    service.setEditLocked(false);
+
+    expect(deps.setUiPrefs).toHaveBeenCalledWith(expect.objectContaining({ editLocked: false }));
+    expect(listener).toHaveBeenCalledTimes(1);
+    const newState = listener.mock.calls[0][0];
+    expect(newState.ui.editLocked).toBe(false);
+    expect(newState.layout).toBe(layoutBefore); // same reference: no re-layout
+    expect(deps.listVersionFiles).toHaveBeenCalledTimes(1); // no re-read
+  });
 });
 
 describe("MigrationService.applyUiPrefs", () => {
@@ -496,13 +516,16 @@ describe("MigrationService.applyUiPrefs", () => {
 
     expect(listener).toHaveBeenCalledTimes(1);
     const newState = listener.mock.calls[0][0];
-    expect(newState.ui).toEqual({ order: "newest-top", density: "compact", expandCollapsed: true, axis: "vertical" });
+    // `editLocked` isn't part of the patch — it rides through untouched at its locked default,
+    // which is exactly what these exact-shape assertions are here to pin down.
+    expect(newState.ui).toEqual({ order: "newest-top", density: "compact", expandCollapsed: true, axis: "vertical", editLocked: true });
     expect(deps.setUiPrefs).toHaveBeenCalledTimes(1);
     expect(deps.setUiPrefs).toHaveBeenCalledWith({
       order: "newest-top",
       density: "compact",
       expandCollapsed: true,
       axis: "vertical",
+      editLocked: true,
     });
   });
 
@@ -521,6 +544,29 @@ describe("MigrationService.applyUiPrefs", () => {
     expect(newState.ui.axis).toBe("vertical");
     expect(newState.layout).toBe(layoutBefore); // same reference: no re-layout
     expect(deps.setUiPrefs).toHaveBeenCalledWith(expect.objectContaining({ axis: "vertical" }));
+    expect(deps.listVersionFiles).toHaveBeenCalledTimes(1); // no re-read
+  });
+
+  it("f. editLocked-only restore (unlocked over the locked default): one emit, persisted", async () => {
+    // Edit-mode lock task: the webview persists `editLocked` alongside order/density/axis and
+    // replays it through the `ready.restored` handshake. `editLocked` MUST therefore be part of
+    // this method's `changed` computation — miss it and a restored `editLocked: false` is read as
+    // "nothing differs", so the graph silently re-locks itself on every reopen and the host's
+    // workspaceState never learns the user unlocked it.
+    const deps = makeDeps();
+    const service = new MigrationService(deps);
+    await service.refresh();
+    const layoutBefore = service.getState()!.layout;
+
+    const listener = vi.fn();
+    service.onDidChangeState(listener);
+    await service.applyUiPrefs({ editLocked: false });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    const newState = listener.mock.calls[0][0];
+    expect(newState.ui.editLocked).toBe(false);
+    expect(newState.layout).toBe(layoutBefore); // same reference: no re-layout
+    expect(deps.setUiPrefs).toHaveBeenCalledWith(expect.objectContaining({ editLocked: false }));
     expect(deps.listVersionFiles).toHaveBeenCalledTimes(1); // no re-read
   });
 });

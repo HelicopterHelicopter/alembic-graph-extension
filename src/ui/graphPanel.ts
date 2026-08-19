@@ -237,6 +237,13 @@ export class GraphPanelManager {
       case "setAxis":
         this.service.setAxis(msg.axis);
         break;
+      case "setEditLocked":
+        // Edit-mode lock: a plain pref flip, gating nothing host-side. The lock is a webview
+        // gesture guard (see UiPrefs.editLocked); `topologyEdit`/`merge`/`repoint` stay unguarded
+        // here on purpose, since the palette commands that reach the same actions are labeled
+        // entry points the lock deliberately leaves live.
+        this.service.setEditLocked(msg.editLocked);
+        break;
       case "expandCollapse": {
         const state = this.service.getState();
         if (state) void this.service.setExpandCollapsed(!state.ui.expandCollapsed);

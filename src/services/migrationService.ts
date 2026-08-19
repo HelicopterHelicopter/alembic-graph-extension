@@ -420,6 +420,15 @@ export class MigrationService {
     this.updateUi({ axis });
   }
 
+  /** Updates prefs + re-emits state. Client-side flip only (edit-mode lock): the lock is enforced
+   * entirely in the webview's gesture layer (dnd.ts's pointerdown, contextMenu.ts's edge branch),
+   * so nothing host-side — layout, planning, or the `topologyEdit`/`merge`/`repoint` handlers —
+   * changes behavior with this. It exists here purely so the flag rides the same
+   * workspaceState-persisted UiPrefs rail as order/density/axis. */
+  setEditLocked(editLocked: boolean): void {
+    this.updateUi({ editLocked });
+  }
+
   private updateUi(patch: Partial<UiPrefs>): void {
     const base = this.state?.ui ?? this.deps.getUiPrefs();
     const ui: UiPrefs = { ...base, ...patch };
@@ -492,8 +501,17 @@ export class MigrationService {
     const ui: UiPrefs = { ...base, ...prefs };
 
     const expandChanged = ui.expandCollapsed !== base.expandCollapsed;
+    // Every persisted pref the webview can replay through `ready.restored` must be compared here,
+    // `editLocked` included: a field missing from this list reads as "nothing differs", so the
+    // method returns before `setUiPrefs`/`emit` and the restored value is silently dropped — for
+    // the lock that means the graph re-locks itself on every reopen no matter how often the user
+    // unlocks it. Covered by applyUiPrefs test "f".
     const changed =
-      expandChanged || ui.order !== base.order || ui.density !== base.density || ui.axis !== base.axis;
+      expandChanged ||
+      ui.order !== base.order ||
+      ui.density !== base.density ||
+      ui.axis !== base.axis ||
+      ui.editLocked !== base.editLocked;
     if (!changed) return; // true no-op: nothing differs, don't even touch persisted storage
 
     this.deps.setUiPrefs(ui);

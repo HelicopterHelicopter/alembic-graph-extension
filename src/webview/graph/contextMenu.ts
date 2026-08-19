@@ -157,8 +157,20 @@ function openMenu(items: (MenuItemSpec | null)[], clientX: number, clientY: numb
 /** Attaches right-click-to-open-context-menu handling to `viewport` (a fresh `.alx-canvas-viewport`
  * element on every render — call again after every re-render, same as `attachDnd`). `isEnabled` is
  * the webview's existing busy/drop-guard gate (dnd.ts's `DndCallbacks.isEnabled`) — while busy, a
- * right-click on a revision card only suppresses the browser's default menu, nothing else. */
-export function attachContextMenu(viewport: HTMLElement, isEnabled: () => boolean, handlers: MenuHandlers): void {
+ * right-click on a revision card only suppresses the browser's default menu, nothing else.
+ *
+ * `canEditTopology` is the edit-mode lock (UiPrefs.editLocked, inverted), and it gates ONLY the
+ * edge branch: "Remove link" is a mutating topology edit reached from an unlabeled hit target, so
+ * it belongs to the same family of gestures the lock guards. A revision card's menu is untouched
+ * by it — every item there is a labeled command the lock deliberately leaves live, and since
+ * locked is the DEFAULT state, gating the card menu on it would mean the graph normally opens with
+ * no card menu at all. */
+export function attachContextMenu(
+  viewport: HTMLElement,
+  isEnabled: () => boolean,
+  canEditTopology: () => boolean,
+  handlers: MenuHandlers,
+): void {
   activeViewport = viewport;
   // No closeMenu() here — dismissal on re-render is main.ts's job via closeContextMenu(), scoped
   // to the re-renders that actually invalidate a menu (see closeContextMenu's doc comment).
@@ -184,8 +196,10 @@ export function attachContextMenu(viewport: HTMLElement, isEnabled: () => boolea
       const from = edgeHit.dataset.from;
       const to = edgeHit.dataset.to;
       // Same busy/drop-guard gate as a card's menu — while an operation is in flight a right-click
-      // on an edge only suppresses the browser's default menu.
-      if (!isEnabled() || !from || !to) return;
+      // on an edge only suppresses the browser's default menu. The edit-mode lock lands in exactly
+      // the same place and reads the same way: locked, an edge right-click opens no menu at all
+      // (the `closeMenu()` above has already dismissed any menu still standing).
+      if (!isEnabled() || !canEditTopology() || !from || !to) return;
       openMenu(buildEdgeItems(from, to, edgeHit.dataset.edgeKind === "broken", handlers), e.clientX, e.clientY);
       return;
     }

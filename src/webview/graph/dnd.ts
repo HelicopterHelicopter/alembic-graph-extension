@@ -93,6 +93,17 @@ export interface DndCallbacks {
     at: { x: number; y: number },
   ): void;
   isEnabled(): boolean;
+  /**
+   * Edit-mode lock (UiPrefs.editLocked): true while the graph is LOCKED, in which case no drag of
+   * either kind may start (see `onPointerDown`). Deliberately a SEPARATE predicate from
+   * `isEnabled()` rather than folded into it, even though every call site here checks both:
+   * main.ts reuses `isEnabled()` as the busy/drop-guard gate for the ENTIRE context menu, so
+   * folding the lock in would suppress the revision-card menu (Upgrade/Downgrade/Preview SQL/Copy
+   * id/Open file — none of them a drag gesture) the whole time the graph is locked, which is the
+   * default state. `isEnabled()` means "no operation is in flight"; this means "gestures are
+   * locked"; only the intersection may start a drag.
+   */
+  isEditLocked(): boolean;
   /** Called synchronously the instant a drag starts (true) and again once it fully ends —
    * successful drop, revert, or cancel (false, deferred one macrotask so any click the browser
    * synthesizes right after `pointerup` has already been dispatched — see the module doc comment).
@@ -385,7 +396,12 @@ export function attachDnd(viewport: HTMLElement, state: AppState, zoom: number, 
     // One drag at a time: ignore a second pointerdown (multi-touch, or a second mouse button)
     // that arrives while a drag is already tracking a different pointer — starting a new one here
     // would silently orphan the first (its pointer never released, its transform/classes stuck).
-    if (drag || e.button !== 0 || !cb.isEnabled()) return;
+    // `isEditLocked()` gates BOTH drag kinds (freeform card + ghost repoint) at the earliest
+    // possible point, so a locked drag is FULLY inert: no threshold tracking, no pointer capture,
+    // no transform, no target rings, no hint pill — nothing to unwind, and nothing on screen that
+    // suggests a gesture is in progress. Returning here rather than at the drop is the whole point:
+    // the lock exists because a 4px accidental drag was rewriting migration files.
+    if (drag || e.button !== 0 || !cb.isEnabled() || cb.isEditLocked()) return;
     const card = (e.target as HTMLElement).closest<HTMLElement>(
       "[data-repoint-ghost-id], .alx-card[data-node-id]",
     );

@@ -41,6 +41,10 @@ export interface Handlers {
   onToggleDensity(density: UiPrefs["density"]): void;
   /** Task H: toolbar Axis toggle (Horizontal | Vertical), left of Order. */
   onToggleAxis(axis: UiPrefs["axis"]): void;
+  /** Edit-mode lock: toolbar Locked | Edit toggle, right of the density group. Posts
+   * `setEditLocked` and waits for the host's re-emitted state like every other toolbar pref — no
+   * optimistic flip, so the toggle can never disagree with the lock the gestures actually read. */
+  onToggleEditLocked(locked: boolean): void;
   onExpandCollapse(): void;
   onCloseDetail(): void;
   onOpenFile(id: string): void;
@@ -231,7 +235,21 @@ function buildToolbar(state: AppState, view: ViewState, handlers: Handlers): HTM
     makeToggle("Compact", state.ui.density === "compact", () => handlers.onToggleDensity("compact")),
   );
 
-  // Task 17: right of the density toggles, design's plain (never active-colored) toggleBtn style
+  // Edit-mode lock: an unlabeled toggle group (same shape as density's) right after it. Locked is
+  // the default and the safe state — while it is active every mutating canvas GESTURE is inert
+  // (card/ghost drags, edge drops, the edge "Remove link" menu); clicks, selection, zoom, pan and
+  // every labeled button/command stay live either way. Deliberately a two-state toggle rather than
+  // a single "unlock" button so the current mode is always readable at a glance, which is what
+  // makes a dead drag self-explanatory instead of looking broken.
+  const editLockGroup = document.createElement("div");
+  editLockGroup.className = "alx-toggle-group";
+  editLockGroup.append(
+    makeToggle("Locked", state.ui.editLocked, () => handlers.onToggleEditLocked(true)),
+    makeToggle("Edit", !state.ui.editLocked, () => handlers.onToggleEditLocked(false)),
+  );
+
+  // Task 17: right of the toggle groups (the density pair until the edit-mode lock's Locked | Edit
+  // pair landed between them), design's plain (never active-colored) toggleBtn style
   // — disabled (dim, pointer-events:none, same convention as the sidebar's footer button) while
   // any host-side operation is in flight.
   const newRevisionBtn = document.createElement("div");
@@ -259,6 +277,7 @@ function buildToolbar(state: AppState, view: ViewState, handlers: Handlers): HTM
     orderLabel,
     orderGroup,
     densityGroup,
+    editLockGroup,
     newRevisionBtn,
     zoomCluster,
     exportSvgBtn,
@@ -364,7 +383,12 @@ function buildCanvasViewport(
   const zoom = view.zoom;
 
   const viewport = document.createElement("div");
-  viewport.className = "alx-canvas-viewport";
+  // Edit-mode lock: the modifier carries the CSS cursor override for the whole canvas (graph.css)
+  // — cards read as clickable rather than draggable while locked. It lives on the viewport rather
+  // than on each card so exactly one place has to know about the lock, and so ghost cards (whose
+  // `grab` cursor is set on `.alx-ghost` itself, not via a `--draggable` class) are covered by the
+  // same switch.
+  viewport.className = ui.editLocked ? "alx-canvas-viewport alx-canvas-viewport--locked" : "alx-canvas-viewport";
 
   // Task 19 (zoom): `scaleWrapper` is what actually determines the viewport's scrollable extent
   // (its own box is sized to canvasSize * zoom) — `canvas` keeps its UNSCALED size and is visually
@@ -531,7 +555,14 @@ function buildNodeElement(
     // repair is the ghost card's own repoint drag (or the dashed edge's remove-link menu); dragging
     // this card just moves it. Same two-line budget as the merge banner — the hint is 226px wide
     // (the card) and a third line would eat the ~36px of inter-lane clearance at compact density.
-    hint.textContent = "⚠ down_revision missing — drag the ghost to repair, or this card to move it";
+    //
+    // Edit-mode lock: while locked, neither of those repairs is available (both are gestures), so
+    // naming them would be instructions the reader cannot follow — the locked variant names the one
+    // action that DOES work instead. It is deliberately shorter than the unlocked string, so it
+    // stays inside the same two-line budget without re-measuring.
+    hint.textContent = state.ui.editLocked
+      ? "⚠ down_revision missing — click Edit in the toolbar to repair"
+      : "⚠ down_revision missing — drag the ghost to repair, or this card to move it";
     wrapper.append(hint);
   }
 
@@ -789,7 +820,13 @@ function buildMergeHint(
     // fixed 250px (border-box, so 234px of text), and a third line would overhang the 34px of
     // clearance the placement math below leaves and clip behind the head cards. Two lines is the
     // budget — re-measure at 234px before lengthening this string.
-    hint.textContent = "drag a head onto the other to merge or move — ⌥/Alt moves 1 revision";
+    //
+    // Edit-mode lock: locked, BOTH gestures the unlocked wording teaches are inert, and with only
+    // 2 heads this banner carries no button either — so the whole banner reduces to the one thing
+    // that works. Same two-line/234px budget; the locked string is shorter, so it fits a fortiori.
+    hint.textContent = state.ui.editLocked
+      ? "editing locked — click Edit in the toolbar to merge or move"
+      : "drag a head onto the other to merge or move — ⌥/Alt moves 1 revision";
 
     if (axis === "horizontal") {
       // Heads cluster toward the newest end of the chain — the min-x edge under "newest-top", the
@@ -823,7 +860,12 @@ function buildMergeHint(
   hint.className = "alx-merge-hint alx-merge-hint--multi";
 
   const text = document.createElement("span");
-  text.textContent = "drag one head onto another to merge · ";
+  // Edit-mode lock: the "Merge all N heads" button beside this text STAYS live while locked (it is
+  // a labeled button — it cannot fire by accident, which is the only thing the lock guards against),
+  // so the locked wording names DRAGS specifically rather than "editing is off". Saying the latter
+  // next to a working button would read as a contradiction. Same two-line budget as the 2-head
+  // banner, in the wider 300px `--multi` box; the trailing space is the separator before the button.
+  text.textContent = state.ui.editLocked ? "editing locked — click Edit to drag · " : "drag one head onto another to merge · ";
   hint.append(text);
 
   const headIds = state.heads.map((h) => h.id);

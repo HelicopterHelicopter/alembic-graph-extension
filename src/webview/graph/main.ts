@@ -49,6 +49,10 @@ interface PersistedUiState {
   /** Task H: graph axis, persisted exactly like order/density (webview setState + workspaceState
    * via the host's UiPrefs plumbing — see `restoredPrefs`/`applyUiPrefs`). */
   axis?: UiPrefs["axis"];
+  /** Edit-mode lock, persisted exactly like axis above (webview setState + workspaceState via the
+   * host's UiPrefs plumbing). Absent — an old snapshot, or one written before this field existed —
+   * means the host's own default (locked) stands, which is the safe direction to fail. */
+  editLocked?: boolean;
   selectedId?: string | null;
   detailOpen?: boolean;
   scrollTop?: number;
@@ -208,6 +212,12 @@ const handlers: Handlers = {
   },
   onToggleAxis(axis) {
     post({ type: "setAxis", axis });
+  },
+  onToggleEditLocked(locked) {
+    // No optimistic store update, same as the toggles above: the host flips the pref and re-emits
+    // state, so the toolbar's active toggle and the lock the gesture gates actually read can never
+    // drift apart.
+    post({ type: "setEditLocked", editLocked: locked });
   },
   onExpandCollapse() {
     post({ type: "expandCollapse" });
@@ -570,6 +580,15 @@ function layoutNodeById(id: string): LayoutNode | null {
   return store.state?.layout.nodes.find((n) => n.id === id) ?? null;
 }
 
+/** Whether the edit-mode lock is currently ON (UiPrefs.editLocked) — the single place the webview
+ * reads it, so every gesture gate below agrees by construction. Defaults to LOCKED when there is no
+ * state yet (before the first "state" message): the lock exists to stop an accidental drag from
+ * rewriting migration files, so "we don't know yet" must fail closed. Deliberately NOT folded into
+ * `dndCallbacks.isEnabled()` — see that callback's `isEditLocked` doc comment in dnd.ts. */
+function isEditLocked(): boolean {
+  return store.state?.ui.editLocked ?? true;
+}
+
 /** Posts one freeform topology edit (freeform-topology task). Every freeform gesture funnels
  * through here, so the "exactly one `armDropGuard()` per posted message, at post time only"
  * invariant (see dropGuardActive's doc comment) is stated in exactly one place — in particular the
@@ -585,6 +604,7 @@ const dndCallbacks: DndCallbacks = {
   isEnabled() {
     return store.busyOps.size === 0 && !dropGuardActive;
   },
+  isEditLocked,
   onMergeDrop(a, b) {
     // N-way task: the protocol's "merge" message now always carries `ids` (length 2 for a plain
     // drag-drop) — see protocol/messages.ts's doc comment. Freeform-topology task: dnd.ts no longer
@@ -621,15 +641,18 @@ const dndCallbacks: DndCallbacks = {
           label: "Merge heads",
           onPick() {
             // Re-gated at pick time, not just at drop time: a popover can sit open indefinitely,
-            // and an unrelated operation (or another drop) may have started meanwhile.
-            if (!dndCallbacks.isEnabled()) return;
+            // and an unrelated operation (or another drop) may have started meanwhile — or the user
+            // may have re-locked editing from the toolbar, which a popover left standing from
+            // before the flip would otherwise happily ignore (defense in depth: a locked drag can't
+            // start in the first place, so this popover can only exist unlocked).
+            if (!dndCallbacks.isEnabled() || isEditLocked()) return;
             dndCallbacks.onMergeDrop(nodeId, targetId);
           },
         },
         {
           label: "Move here",
           onPick() {
-            if (!dndCallbacks.isEnabled()) return;
+            if (!dndCallbacks.isEnabled() || isEditLocked()) return;
             postTopologyEdit({ kind: "move-chain", nodeId, targetId });
           },
         },
@@ -904,7 +927,13 @@ function renderStore(scrollOverride?: ScrollPoint): void {
     // right-click while a left-button drag is mid-flight must not open a menu — its select side
     // effect re-renders the canvas, which would orphan the card currently holding pointer
     // capture (the very thing the "state"-message deferral protects against).
-    attachContextMenu(nextViewport, () => dndCallbacks.isEnabled() && !dragActive, menuHandlers);
+    // The edit-mode lock is passed as a SEPARATE predicate rather than folded into the
+    // `isEnabled()` gate above, because that gate covers the WHOLE menu: the lock must suppress
+    // only the edge menu ("Remove link" is a mutating gesture-reached edit), never a revision
+    // card's menu, whose items are all labeled commands the lock deliberately leaves live — and
+    // since locked is the default, folding it in would mean the graph normally opens with no card
+    // menu at all.
+    attachContextMenu(nextViewport, () => dndCallbacks.isEnabled() && !dragActive, () => !isEditLocked(), menuHandlers);
     // Task 19: same re-attach-every-render pattern for zoom/hover/keyboard nav — and, since the
     // freeform-topology task, for the edge hover highlight.
     attachZoomWheel(nextViewport);
@@ -1014,6 +1043,7 @@ function persist(): void {
     density: ui?.density,
     expandCollapsed: ui?.expandCollapsed,
     axis: ui?.axis,
+    editLocked: ui?.editLocked,
     selectedId: store.selectedId,
     detailOpen: store.detailOpen,
     scrollTop: lastScroll.scrollTop,
@@ -1033,5 +1063,6 @@ function restoredPrefs(p: PersistedUiState): Partial<UiPrefs> {
   if (p.density !== undefined) out.density = p.density;
   if (p.expandCollapsed !== undefined) out.expandCollapsed = p.expandCollapsed;
   if (p.axis !== undefined) out.axis = p.axis;
+  if (p.editLocked !== undefined) out.editLocked = p.editLocked;
   return out;
 }
