@@ -1,7 +1,7 @@
 {
   "name": "alembic-graph",
   "displayName": "Alembic Graph",
-  "description": "Interactive graph of your Alembic migration history — visualize heads, merges, and broken links; drag to merge heads or repair broken down_revisions.",
+  "description": "Visualize and manage Alembic database migrations in VS Code. Explore revision history, find multiple heads and broken links, and merge branches in an interactive graph.",
   "publisher": "OmniaInc",
   "version": "0.0.2",
   "license": "MIT",
@@ -16,6 +16,17 @@
   "categories": [
     "Visualization",
     "Other"
+  ],
+  "keywords": [
+    "alembic",
+    "alembic migrations",
+    "alembic graph",
+    "migration graph",
+    "database migrations",
+    "python migrations",
+    "sqlalchemy",
+    "migration visualizer",
+    "multiple heads"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [

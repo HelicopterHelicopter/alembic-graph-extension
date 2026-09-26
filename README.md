@@ -1,10 +1,26 @@
 # Alembic Graph
 
-Interactive graph of your [Alembic](https://alembic.sqlalchemy.org/) migration history — see
-heads, merges, and broken links at a glance, and fix most of what goes wrong without leaving the
-graph.
+Alembic Graph is a VS Code extension for visualizing and managing
+[Alembic](https://alembic.sqlalchemy.org/) database migrations. Explore your Python/SQLAlchemy
+migration history as an interactive revision graph, find multiple heads or broken `down_revision`
+links, and merge or repair branches without leaving the editor.
+
+[Install from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=OmniaInc.alembic-graph)
+· [Install from Open VSX](https://open-vsx.org/extension/OmniaInc/alembic-graph)
+· [View the source on GitHub](https://github.com/HelicopterHelicopter/alembic-graph-extension)
 
 ![Alembic Graph screenshot](media/screenshot.png)
+
+## Get started
+
+1. Install **Alembic Graph** from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=OmniaInc.alembic-graph) or [Open VSX](https://open-vsx.org/extension/OmniaInc/alembic-graph).
+2. Open a folder containing an Alembic project with `alembic.ini` and a `versions/` directory.
+3. Open the **Alembic Migrations** activity bar view, then select **Open Migration Graph**. You can
+   also run **Alembic Graph: Open Migration Graph** from the Command Palette.
+
+The graph can display migration files without connecting to a database or installing Python.
+Running upgrades, downgrades, merges, or new revisions requires an environment with Alembic
+installed; see [Requirements](#requirements).
 
 ## Features
 
