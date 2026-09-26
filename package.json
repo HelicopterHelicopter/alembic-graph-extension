@@ -1,6 +1,6 @@
 {
   "name": "alembic-graph",
-  "displayName": "Alembic Graph for VS Code",
+  "displayName": "Alembic Graph",
   "description": "Visualize and manage Alembic database migrations in VS Code. Explore revision history, find multiple heads and broken links, and merge branches in an interactive graph.",
   "publisher": "OmniaInc",
   "version": "0.0.2",
