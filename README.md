@@ -1,3 +1,13 @@
+<p align="center">
+  <a href="https://marketplace.visualstudio.com/items?itemName=OmniaInc.alembic-graph">
+    <img src="media/promo/alembic-graph-intro.webp" width="100%"
+      alt="Alembic Graph in 15 seconds: a broken migration history is repaired by dragging the ghost revision onto its parent, then three heads merge into one">
+  </a>
+</p>
+<!-- With-sound version for GitHub: drag the 15 s intro MP4 into a GitHub README edit (or an issue comment), then
+     paste the resulting https://github.com/user-attachments/assets/... URL on its own line below this comment.
+     GitHub renders it as an inline player; the Marketplace and Open VSX keep showing the silent loop above. -->
+
 # Alembic Graph
 
 Alembic Graph is a VS Code extension for visualizing and managing
