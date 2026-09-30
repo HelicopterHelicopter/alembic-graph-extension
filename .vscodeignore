@@ -19,3 +19,4 @@ commitlint.config.mjs
 release.config.mjs
 **/*.map
 .gitignore
+media/promo/**
